@@ -43,6 +43,7 @@ class Simulator:
         self.disturbance = DisturbanceEngine(
             turbulence=preset["turbulence"], vibration=preset["vibration"],
             sensor_noise=preset["sensor_noise"], jerk_prob=preset["jerk_prob"],
+            beacon_fade=preset.get("beacon_fade", 0),
             seed=seed,
         )
         self.detector = DetectionEngine()

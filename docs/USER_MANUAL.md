@@ -75,13 +75,26 @@ The mission-console GUI opens in an 1600×900 window with a dark aerospace theme
 
 The main camera view shows:
 
-- **Beacon**: Bright white circle with alternating brightness (15 Hz modulation)
+- **Beacon**: Bright white circle with alternating brightness (15 Hz modulation), labelled **SAT-B BEACON**
 - **Distractors**: Dimmer colored circles (steady, 3 Hz, or 8 Hz modulation)
 - **Obstacles**: Dark discs that periodically occlude the beacon
+- **Optical boresight reticle**: Fixed crosshair at the gimbal's commanded boresight
+- **Tracking reticle + ring**: Green ring + crosshair placed on the **locked** SAT-B beacon (candidate boxes stay dim cyan until locked)
+- **Synth-ephemeris prior marker**: Dashed amber diamond showing where the orbital propagator predicts SAT-B should be
 - **Guide box**: White rectangle showing the gimbal's current boresight position
-- **Tracking bracket**: Green (LOCKED) or yellow (TENTATIVE) bracket around the associated candidate
-- **Scope line**: Thin line from guide box to the estimated boresight position
-- **Association badge**: Upper-right corner shows acquisition state and mod correlation
+
+### Headline Status Banner
+
+Across the top of the camera view (the judge-facing "money" readout):
+
+- **SAT-B STATUS**: LIVE / COAST / SEARCH state
+- **POINTING ERROR**: live boresight error in **millidegrees (mdeg)**
+- **COARSE LINK READY**: green when within the fine-acquisition region, amber while tuning
+- **ACQ · REACQ**: initial acquisition time and last recovery time
+
+### Link Scenario Strip
+
+A bottom-of-camera side-view strip showing the full story **SATELLITE A → OPTICAL BORESIGHT → SATELLITE B**: the station icon, the outgoing beam cone, the SAT-B icon, and a color-coded pointing-error readout (green < fine-acq region, amber < 0.30°, red otherwise) plus a **LINK READY / COARSE TUNING** badge.
 
 ### Bottom Telemetry Bar
 
@@ -94,8 +107,8 @@ Displays real-time gimbal state:
 
 - **Status chips**: One-word status for each subsystem (CAM, INERTIAL, TRACKING, LATENCY)
 - **Sky plot**: Radar-style azimuth-elevation display with trajectory history, ephemeris prediction, estimate, truth, and FOV cone
-- **KPI cards**: Key performance indicators (error, acquisition time, FPS)
-- **Sliders**: Live difficulty parameters (reset required for some)
+- **KPI cards**: Key performance indicators (error, acquisition time, **reacquisition count/time**, FPS)
+- **Sliders**: Live difficulty parameters, each with a **physical-unit hint** (turbulence in px-RMS warp, vibration in °/s, sensor noise in sigma-DN, beacon fade in %, jerk probability)
 - **Buttons**: Pause, Reset
 
 ---
@@ -190,17 +203,17 @@ Frames per second of the simulation loop. Higher is better. Affected by:
 
 The five presets escalate all disturbance parameters simultaneously:
 
-| Preset | Turbulence | Vibration | Noise | Jerk | Distractors | Obstacles |
-|--------|-----------|-----------|-------|------|-------------|-----------|
-| EASY | 5 | 2 | 5 | 0% | 0 | 0 |
-| MODERATE | 20 | 8 | 10 | 1% | 1 | 1 |
-| HARD | 40 | 18 | 18 | 3% | 2 | 2 |
-| SEVERE | 65 | 32 | 28 | 6% | 4 | 3 |
-| ADVERSARIAL | 85 | 45 | 38 | 9% | 4 | 4 |
+| Preset | Turbulence | Vibration | Noise | Jerk | Fade | Distractors | Obstacles |
+|--------|-----------|-----------|-------|------|------|-------------|-----------|
+| EASY | 5 | 2 | 5 | 0% | 0% | 0 | 0 |
+| MODERATE | 20 | 8 | 10 | 1% | 10% | 1 | 1 |
+| HARD | 40 | 18 | 18 | 3% | 30% | 2 | 2 |
+| SEVERE | 65 | 32 | 28 | 6% | 45% | 4 | 3 |
+| ADVERSARIAL | 85 | 45 | 38 | 9% | 60% | 4 | 4 |
 
 ### Live Slider Adjustments
 
-Some parameters can be adjusted live using the sliders on the right panel. Changes take effect on the next frame for visual parameters (turbulence, vibration, noise) but require a tracker reset (`R` key) for tracking-related parameters.
+Some parameters can be adjusted live using the sliders on the right panel. Changes take effect on the next frame for visual parameters (turbulence, vibration, sensor noise, beacon fade, jerk) but require a tracker reset (`R` key) for tracking-related thresholds. Each slider is annotated with its **physical unit** under the knob so a judge can interpret what is actually being changed.
 
 ---
 

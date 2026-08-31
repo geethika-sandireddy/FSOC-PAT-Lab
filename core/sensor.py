@@ -141,6 +141,10 @@ class VirtualSensor:
             u, v = pix
             # modulation amplitude
             amp = b.intensity(b.time)
+            # beacon intensity fade (path loss / signal degradation channel)
+            if disturbance is not None and getattr(disturbance, "beacon_fade", 0) > 0:
+                fade = 1.0 - (disturbance.beacon_fade / 100.0) * config.BEACON_FADE_MAX
+                amp *= max(0.12, fade)
             if occ > 0.0:
                 # obstacle partially covers -> dim & occlude proportionally
                 amp *= max(0.0, 1.0 - occ)

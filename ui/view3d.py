@@ -136,7 +136,7 @@ def _cross(surf, pos, color, r):
 
 
 def _legend(surf, rect):
-    items = [("ephem prior", T.C.AMBER), ("est LOS", T.C.GREEN),
+    items = [("synth-ephem prior", T.C.AMBER), ("est LOS", T.C.GREEN),
              ("boresight", T.C.CYAN), ("true (ref)", T.C.TEXT)]
     x = rect.x + 6
     y = rect.bottom - 16

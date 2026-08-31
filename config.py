@@ -1,5 +1,5 @@
 """
-config.py -- Central configuration for the FSOC-PAT-Lab simulator (SIH 2026, PS 169).
+config.py -- Central configuration for the FSOC-PAT-Lab simulator (SIH 2026, PS 26169).
 
 Every tunable parameter of the virtual scene, camera, sensor, disturbances,
 detection pipeline and control loop lives here in one place so that:
@@ -89,13 +89,27 @@ ESTIMATOR_ALPHA = 0.35               # bias-tracking filter gain (lower = smooth
 
 # ---------------------------------------------------------------------------
 # Disturbance engine (each 0-100, independently controllable)
+#
+# Each dial maps LINEARLY to a physically meaningful maximum, so the slider
+# value means something a PAT engineer can reason about (see table below).
 # ---------------------------------------------------------------------------
-TURBULENCE_MAX_PX = 9.0              # max warp displacement at 100%
-TURBULENCE_BLUR_MAX = 1.4            # gaussian blur sigma at 100%
-SENSOR_NOISE_MAX_SIGMA = 22.0        # additive gaussian sigma at 100%
-SENSOR_HOTPIXEL_MAX = 45             # hot pixels per frame at 100%
-VIBRATION_MAX_DEG_S = 0.55           # random-walk drift rate at 100% (deg/s)
-JERK_MAX_MAGNITUDE_DEG = 0.9         # max jerk step magnitude
+TURBULENCE_MAX_PX = 9.0              # 100% -> ~9 px RMS image warp displacement
+TURBULENCE_BLUR_MAX = 1.4            # .. + gaussian blur sigma (px)
+SENSOR_NOISE_MAX_SIGMA = 22.0        # 100% -> additive Gaussian sigma = 22 DN
+SENSOR_HOTPIXEL_MAX = 45             # .. + hot white pixels per frame
+VIBRATION_MAX_DEG_S = 0.55           # 100% -> platform LOS random-walk drift deg/s
+JERK_MAX_MAGNITUDE_DEG = 0.9         # .. -> jerk step magnitude up to 0.9 deg
+JERK_PROB = 9.0                      # 100% -> jerk probability / 1000 frames
+BEACON_FADE_MAX = 0.85               # 100% -> beacon RMS intensity drops to ~15%
+
+# Human-readable units for the GUI sliders (what "5" means for each dial).
+DISTURBANCE_UNITS = {
+    "turbulence":   ("TURBULENCE",   "px RMS warp / blur"),
+    "vibration":    ("VIBRATION",    "deg/s LOS drift"),
+    "sensor_noise": ("SENSOR NOISE", "sigma DN + hot px"),
+    "jerk_prob":    ("JERK PROB",    "jerk % per 1000 fr"),
+    "beacon_fade":  ("BEACON FADE",  "% RMS intensity drop"),
+}
 
 # ---------------------------------------------------------------------------
 # Scene content
@@ -116,27 +130,27 @@ FINE_ACQUISITION_REGION_DEG = 0.100  # coarse stage must park the beacon inside 
 DIFFICULTY_PRESETS = {
     "EASY": dict(
         turbulence=5, vibration=2, sensor_noise=5, jerk_prob=0,
-        distractors=0, obstacles=0,
+        beacon_fade=0, distractors=0, obstacles=0,
         az_amp=1.00, el_amp=0.60, speed=1.0,
     ),
     "MODERATE": dict(
         turbulence=20, vibration=8, sensor_noise=10, jerk_prob=1,
-        distractors=1, obstacles=1,
+        beacon_fade=10, distractors=1, obstacles=1,
         az_amp=1.40, el_amp=0.90, speed=1.15,
     ),
     "HARD": dict(
         turbulence=40, vibration=18, sensor_noise=18, jerk_prob=3,
-        distractors=2, obstacles=2,
+        beacon_fade=30, distractors=2, obstacles=2,
         az_amp=1.80, el_amp=1.10, speed=1.35,
     ),
     "SEVERE": dict(
         turbulence=65, vibration=32, sensor_noise=28, jerk_prob=6,
-        distractors=4, obstacles=3,
+        beacon_fade=45, distractors=4, obstacles=3,
         az_amp=2.20, el_amp=1.30, speed=1.65,
     ),
     "ADVERSARIAL": dict(
         turbulence=85, vibration=45, sensor_noise=38, jerk_prob=9,
-        distractors=4, obstacles=4,
+        beacon_fade=60, distractors=4, obstacles=4,
         az_amp=2.60, el_amp=1.60, speed=2.00,
     ),
 }

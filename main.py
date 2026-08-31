@@ -19,6 +19,7 @@ Headless self-test:   python main.py --frames 200 --preset HARD
 """
 
 import argparse
+import math
 import os
 import statistics
 import sys
@@ -57,17 +58,21 @@ class App:
         self.perf = PerformanceTracker()
         self.paused = False
         self.show_fov_grid = True
+        self.eph_pred_az = None
+        self.eph_pred_el = None
 
         self.error_spark = deque(maxlen=900)
         self.sliders = {
-            "TURBULENCE": W.Slider((1332, 424, 240, 26), "TURBULENCE",
+            "turbulence": W.Slider((1332, 424, 240, 26), "TURBULENCE",
                                    self.sim.preset.get("turbulence", 0), T.C.PURPLE),
-            "VIBRATION": W.Slider((1332, 466, 240, 26), "VIBRATION",
+            "vibration": W.Slider((1332, 452, 240, 26), "VIBRATION",
                                   self.sim.preset.get("vibration", 0), T.C.AMBER),
-            "SENSOR NOISE": W.Slider((1332, 508, 240, 26), "SENSOR NOISE",
+            "sensor_noise": W.Slider((1332, 480, 240, 26), "SENSOR NOISE",
                                      self.sim.preset.get("sensor_noise", 0), T.C.RED),
-            "JERK PROB": W.Slider((1332, 550, 240, 26), "JERK PROB",
+            "jerk_prob": W.Slider((1332, 508, 240, 26), "JERK PROB",
                                   self.sim.preset.get("jerk_prob", 0), T.C.CYAN),
+            "beacon_fade": W.Slider((1332, 536, 240, 26), "BEACON FADE",
+                                    self.sim.preset.get("beacon_fade", 0), T.C.AMBER_DIM),
         }
         self.chips = {}
         xs = 10
@@ -89,17 +94,15 @@ class App:
     # ------------------------------------------------------------------
     def sync_sliders(self):
         for key, s in self.sliders.items():
-            val = self.sim.disturbance.__getattribute__(
-                {"TURBULENCE": "turbulence", "VIBRATION": "vibration",
-                 "SENSOR NOISE": "sensor_noise", "JERK PROB": "jerk_prob"}[key])
-            s.value = val
+            s.value = self.sim.disturbance.__getattribute__(key)
 
     def apply_sliders(self):
         d = self.sim.disturbance
-        d.turbulence = int(self.sliders["TURBULENCE"].value)
-        d.vibration = int(self.sliders["VIBRATION"].value)
-        d.sensor_noise = int(self.sliders["SENSOR NOISE"].value)
-        d.jerk_prob = int(self.sliders["JERK PROB"].value)
+        d.turbulence = int(self.sliders["turbulence"].value)
+        d.vibration = int(self.sliders["vibration"].value)
+        d.sensor_noise = int(self.sliders["sensor_noise"].value)
+        d.jerk_prob = int(self.sliders["jerk_prob"].value)
+        d.beacon_fade = int(self.sliders["beacon_fade"].value)
 
     # ------------------------------------------------------------------
     def run(self):
@@ -124,6 +127,8 @@ class App:
                 self.perf.record_frame(self.sim)
                 if res["state"] == "LOCKED":
                     self.error_spark.append(res["pointing_err_deg"])
+                # synthetic-ephemeris prediction at current time (coarse prior)
+                self.eph_pred_az, self.eph_pred_el = self.sim.eph.predict_az_el(res["t"])
             self.apply_sliders()
             self._draw()
             pygame.display.flip()
@@ -229,7 +234,18 @@ class App:
 
     def _draw_hud(self, cam):
         """Draw overlays in native 800x450 camera space, then the whole
-        surface is scaled up at blit time."""
+        surface is scaled up at blit time.
+
+        The overlays tell the judging story:
+          * the ACTIVE TRACK (what A's tracker is locked onto) is ringed and
+            labelled "SAT-B BEACON";
+          * the SYNTHETIC-EPHEMERIS PREDICTION (the coarse prior A was given)
+            is shown as a dashed marker, so you can SEE the prior vs. the
+            detected truth;
+          * the optical BORESIGHT reticle + crosshair show the LOS the
+            gimbal/beam actually points along, with the live pointing error
+            under it.
+        """
         r = cam.get_rect()
         cx, cy = r.centerx, r.centery
         res = self.sim.last_result
@@ -238,21 +254,57 @@ class App:
             pygame.draw.line(cam, (40, 60, 80), (cx, r.top), (cx, r.bottom), 1)
             pygame.draw.line(cam, (40, 60, 80), (r.left, cy), (r.right, cy), 1)
 
+        # ---- optical boresight reticle (Sat A beam LOS) ----
+        bp = self._est_pixel(self.sim.gimbal.pan, self.sim.gimbal.tilt)
+        if bp is not None:
+            bx, by = bp
+            pygame.draw.circle(cam, (120, 160, 200), (bx, by), 10, 1)
+            pygame.draw.line(cam, (120, 160, 200), (bx - 18, by), (bx - 6, by), 1)
+            pygame.draw.line(cam, (120, 160, 200), (bx + 6, by), (bx + 18, by), 1)
+            pygame.draw.line(cam, (120, 160, 200), (bx, by - 18), (bx, by - 6), 1)
+            pygame.draw.line(cam, (120, 160, 200), (bx, by + 6), (bx, by + 18), 1)
+            T.text(cam, (bx, by - 24), "OPTICAL BORESIGHT", 8, (120, 160, 200), anchor="cc")
+
         # ---- tracked / candidate overlays ----
         for i, c in enumerate(res.get("cand_list", [])):
-            appear = c.ml_score
-            col = T.C.GREEN if appear >= 0.55 else T.C.CYAN_DIM
+            # distractors / un-locked candidates stay in dim cyan boxes
+            col = T.C.CYAN_DIM
             box = pygame.Rect(int(c.u) - 8, int(c.v) - 8, 16, 16)
             pygame.draw.rect(cam, col, box, 1)
-            T.text(cam, (box.x, box.y - 9), f"{i}", 8, col)
         assoc = self.sim.tracker.associated
-        if assoc is not None:
+        if assoc is not None and res["state"] == "LOCKED":
+            apx, apy = int(assoc.u), int(assoc.v)
+            # bright tracking ring + crosshair on the detected beacon
+            pygame.draw.circle(cam, T.C.GREEN, (apx, apy), 14, 2)
+            pygame.draw.circle(cam, T.C.GREEN, (apx, apy), 18, 1)
+            _bracket(cam, (apx, apy), T.C.GREEN, 22, 2)
+            pygame.draw.line(cam, T.C.GREEN, (apx - 24, apy), (apx - 18, apy), 2)
+            pygame.draw.line(cam, T.C.GREEN, (apx + 18, apy), (apx + 24, apy), 2)
+            pygame.draw.line(cam, T.C.GREEN, (apx, apy - 24), (apx, apy - 18), 2)
+            pygame.draw.line(cam, T.C.GREEN, (apx, apy + 18), (apx, apy + 24), 2)
+            T.text(cam, (apx, apy - 28), "SAT-B BEACON", 9, T.C.GREEN, bold=True, anchor="cc")
+        elif assoc is not None:
             _bracket(cam, (int(assoc.u), int(assoc.v)), T.C.GREEN, 13, 2)
         # if coasting (estimate exists but no associated blob), mark est LOS
         elif res.get("est_az") is not None and res["state"] != "LOCKED":
             p = self._est_pixel(res["est_az"], res["est_el"])
             if p is not None:
                 pygame.draw.circle(cam, T.C.CYAN, p, 7, 1)
+
+        # ---- synthetic-ephemeris PRIOR marker (coarse pre-aim reference) ----
+        paz = self.eph_pred_az if hasattr(self, "eph_pred_az") else None
+        if paz is not None:
+            pp = self._est_pixel(paz, self.eph_pred_el)
+            if pp is not None:
+                px, py = pp
+                # dashed diamond = the predicted (not yet detected) position
+                for k in range(0, 360, 30):
+                    a1 = math.radians(k)
+                    a2 = math.radians(k + 12)
+                    pygame.draw.line(cam, T.C.AMBER,
+                                     (px + 9 * math.cos(a1), py + 9 * math.sin(a1)),
+                                     (px + 9 * math.cos(a2), py + 9 * math.sin(a2)), 1)
+                T.text(cam, (px, py - 20), "SYNTH-EPHEMERIS PRED", 8, T.C.AMBER, anchor="cc")
 
         # ---- search acquisition overlay ----
         if res["state"] == "SEARCHING":
@@ -287,6 +339,43 @@ class App:
                10, T.C.TEXT, anchor="tr")
         T.text(cam, (r.right - 10, 34),
                f"bx {res['truth_az']:+.3f}  {res['truth_el']:+.3f}", 9, T.C.TEXT_DIM, anchor="tr")
+
+        # ---- headline SAT-B status banner ----
+        self._headline_banner(cam, r)
+
+    def _headline_banner(self, cam, r):
+        """Judge-facing headline: the coarse-alignment story in one glance."""
+        res = self.sim.last_result
+        st = res["state"]
+        col = T.C.STATE[st]
+        status = {"SEARCHING": "SEARCHING", "COASTING": "PREDICTIVE COAST",
+                  "LOCKED": "TRACKING", "LOST": "LOST"}[st]
+        banner = pygame.Rect(r.x + 140, r.y + 6, r.w - 280, 40)
+        pygame.draw.rect(cam, (8, 12, 20), banner)
+        pygame.draw.rect(cam, T.C.BORDER, banner, 1)
+
+        # left: SAT B status
+        T.text(cam, (banner.x + 10, banner.y + 5), "SAT-B STATUS", 9, T.C.TEXT_FAINT)
+        T.text(cam, (banner.x + 10, banner.y + 17), status, 15, col, bold=True)
+        # mid: pointing error (angle between beam LOS and true LOS)
+        err = res["pointing_err_deg"]
+        T.text(cam, (banner.x + 150, banner.y + 5), "POINTING ERROR", 9, T.C.TEXT_FAINT)
+        T.text(cam, (banner.x + 150, banner.y + 17), f"{err * 1000:6.1f} mdeg", 15, col, bold=True)
+        # mp: link readiness
+        ready = err < config.FINE_ACQUISITION_REGION_DEG
+        T.text(cam, (banner.x + 300, banner.y + 5), "COARSE LINK", 9, T.C.TEXT_FAINT)
+        T.text(cam, (banner.x + 300, banner.y + 17),
+               "READY" if ready else "TUNING", 13,
+               T.C.GREEN if ready else T.C.AMBER, bold=True)
+        # right: acquisition + reacquisition
+        st2 = self.perf.live_stats()
+        acq = st2["acquisition_time_s"]
+        acq_s = f"{acq:.2f}s" if acq else "--"
+        reacq = st2["last_reacq_s"]
+        reacq_s = f"{reacq:.2f}s" if reacq else f"{st2['reacquisition_count']} ev"
+        T.text(cam, (banner.right - 10, banner.y + 5), "ACQ · REACQ", 9, T.C.TEXT_FAINT, anchor="tr")
+        T.text(cam, (banner.right - 10, banner.y + 17),
+               f"{acq_s} · {reacq_s}", 12, T.C.CYAN, bold=True, anchor="tr")
 
     def _est_pixel(self, az, el):
         """Project an az/el LOS into camera pixels using the realized pose."""
@@ -336,6 +425,67 @@ class App:
 
         # modulation scope
         self._draw_scope(surf, (700, 730))
+        # A -> beam -> B link scenario strip (right of the scope)
+        self._draw_link(surf, (1060, 722))
+
+    def _draw_link(self, surf, pos):
+        """Side-view SAT-A -> OPTICAL BORESIGHT -> SAT-B diagram with live
+        pointing error and coarse-alignment (LINK READY) status."""
+        x, y = pos
+        w, h = 520, 162
+        box = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(surf, T.C.PANEL, box)
+        pygame.draw.rect(surf, T.C.BORDER, box, 1)
+        T.text(surf, (x + 10, y + 6), "LINK SCENARIO  ·  SATELLITE A → OPTICAL BORESIGHT → SATELLITE B",
+               9, T.C.TEXT_FAINT)
+
+        # layout
+        ax = x + 70            # SAT A anchor (bottom-left of diagram)
+        ay = y + 96
+        bx = x + w - 70        # SAT B end
+        by = y + 40
+
+        # boresight beam: line from A through the current pointing direction.
+        # draw a subtle cone representing the coarse FOV.
+        err = self.sim.last_result["pointing_err_deg"]
+        beam_col = T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG else \
+                   (T.C.AMBER if err < 0.30 else T.C.RED)
+
+        # cone / beam
+        cone_w = int((config.HFOV_DEG / 2.0) * 8)
+        pygame.draw.polygon(surf, (24, 60, 80),
+                            [(ax, ay), (bx, by - cone_w), (bx, by + cone_w)])
+        pygame.draw.line(surf, beam_col, (ax, ay), (bx, by), 3)
+
+        # SAT A icon
+        pygame.draw.rect(surf, T.C.CYAN, (ax - 14, ay - 7, 28, 14), 1)
+        T.text(surf, (ax, ay + 16), "SAT-A", 10, T.C.CYAN, bold=True, anchor="cc")
+
+        # SAT B beacon icon (at the end of the beam)
+        pygame.draw.circle(surf, T.C.RED, (bx, by), 7)
+        pygame.draw.circle(surf, T.C.RED, (bx, by), 11, 1)
+        T.text(surf, (bx, by - 22), "SAT-B", 10, T.C.RED, bold=True, anchor="cc")
+
+        # pointing error readout under the beam
+        err_label = f"POINTING ERROR   {err * 1000:6.1f} mdeg"
+        T.text(surf, (x + w // 2, y + 108), err_label, 13, beam_col, bold=True, anchor="cc")
+
+        # coarse-alignment status (link-ready threshold)
+        link_ready = err < config.FINE_ACQUISITION_REGION_DEG
+        badge = pygame.Rect(x + w - 150, y + 28, 134, 24)
+        linkcol = T.C.GREEN if link_ready else T.C.AMBER
+        pygame.draw.rect(surf, tuple(c // 4 for c in linkcol), badge)
+        pygame.draw.rect(surf, linkcol, badge, 1)
+        T.text(surf, (badge.centerx, badge.centery),
+               "LINK READY" if link_ready else "COARSE TUNING",
+               12, linkcol, bold=True, anchor="cc")
+        T.text(surf, (x + w - 83, y + 54), f"{err * 1000:6.1f} mdeg", 10,
+               T.C.TEXT, anchor="cc")
+
+        # beam angle annotation
+        bl = x + 60
+        T.text(surf, (bl, y + 56), f"boresight {self.sim.gimbal.pan:+.2f}° "
+                                    f"{self.sim.gimbal.tilt:+.2f}°", 9, T.C.TEXT_DIM)
 
     def _draw_scope(self, surf, pos):
         x, y = pos
@@ -384,21 +534,27 @@ class App:
         st = self.perf.live_stats()
         res = self.sim.last_result
         lock_col = T.C.GREEN if res["state"] == "LOCKED" else T.C.AMBER
+        reacq = st["last_reacq_s"]
         rows = {
             "state": (res["state"], lock_col),
             "confidence": (f"{res['confidence']:.2f}", T.C.TEXT),
             "acquisition": (f"{st['acquisition_time_s']:.2f}s" if st["acquisition_time_s"] else "---", T.C.TEXT),
+            "reacquisition": (f"{reacq:.2f}s" if reacq else f"{st['reacquisition_count']} evts", T.C.TEXT),
             "mean err": (f"{st['mean_err_deg'] * 1000:.0f} mdeg" if st["mean_err_deg"] else "---", T.C.TEXT),
             "rms err": (f"{st['rms_err_deg'] * 1000:.0f} mdeg" if st["rms_err_deg"] else "---", T.C.TEXT),
             "max err": (f"{st['max_err_deg'] * 1000:.0f} mdeg" if st["max_err_deg"] else "---", T.C.TEXT),
             "retention": (f"{st['retention_total_pct']:.1f}%", T.C.TEXT),
             "actual fps": (f"{st['fps']:.0f}", T.C.CYAN),
         }
-        W.kpi_card(surf, pygame.Rect(1288, 262, 304, 150), "PERFORMANCE", rows)
+        W.kpi_card(surf, pygame.Rect(1288, 262, 304, 158), "PERFORMANCE", rows)
 
     def _draw_panel_sliders(self, surf):
-        for s in self.sliders.values():
+        # physical unit hints ("what this dial's % means") under each slider
+        for key, s in self.sliders.items():
             s.draw(surf)
+            unit = config.DISTURBANCE_UNITS.get(key, (None, ""))[1]
+            if unit:
+                T.text(surf, (s.rect.x, s.rect.y + 28), unit, 8, T.C.TEXT_FAINT)
 
     def _draw_panel_spark(self, surf):
         T.text(surf, (1290, 588), "POINTING ERROR (mdeg, scale 0..400)", 9, T.C.TEXT_FAINT)

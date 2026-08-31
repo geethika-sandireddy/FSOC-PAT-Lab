@@ -22,11 +22,12 @@ import config
 
 class DisturbanceEngine:
     def __init__(self, turbulence=0, vibration=0, sensor_noise=0,
-                 jerk_prob=0, seed=None):
+                 jerk_prob=0, beacon_fade=0, seed=None):
         self.turbulence = turbulence
         self.vibration = vibration
         self.sensor_noise = sensor_noise
         self.jerk_prob = jerk_prob
+        self.beacon_fade = beacon_fade      # 0-100: low -> beacon RMS intensity
         self._seed = seed
         self._rng = random.Random(seed)
         self._np = np.random.default_rng(seed)

@@ -95,13 +95,19 @@ class PerformanceTracker:
             if r["est_err_deg"] is not None:
                 self.est_errors_deg.append(r["est_err_deg"])
 
-            # false-lock monitor: locked onto something that is NOT the beacon
+            # false-lock monitor: locked onto something that is NOT the beacon.
+            # A false lock is declared the INSTANT the tracker has sustained a
+            # wall-clock verified wrong-target lock for N consecutive frames
+            # (beacon visible & in FOV, but the estimate is far from it).  The
+            # event is emitted on the leading edge of the wrong-lock run, so a
+            # lock that stays wrong until the end of the test is STILL counted
+            # (the metric must be able to expose a false lock, not hide it).
             if visible and r["in_fov"]:
                 if r["est_err_deg"] is not None and r["est_err_deg"] > 0.35:
                     self._false_lock_frames += 1
-                else:
-                    if self._false_lock_frames >= 5:
+                    if self._false_lock_frames == 5:
                         self.false_lock_events += 1
+                else:
                     self._false_lock_frames = 0
         else:
             if self.was_locked:
