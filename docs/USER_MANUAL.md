@@ -71,45 +71,57 @@ The mission-console GUI opens in an 1600×900 window with a dark aerospace theme
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Camera View
+### Layout — aerospace console
 
-The main camera view shows:
+The interface is organised around the coarse-PAT story, not stacked debug numbers:
+
+```
+┌───────────────────────────────────────────────────────────┬───────────┐
+│ HEADER: FSOC-PAT LAB · PS 26169 · SCENARIO chips          │  MISSION  │
+├───────────────────────────────────────┬───────────────────┤───────────┤
+│                                       │  MISSION GEOMETRY │           │
+│       MAIN CAMERA VIEW  (dominant)    │  (relative-LOS    │  PAT      │
+│       + PAT STATE stepper overlay     │   sky plot)       │  PERF     │
+│       + FOV/beacon story banner       │                   │───────────┤
+│       + POINTING ERROR (hero, bottom) │  EPHEMERIS pred   │  DISTURBS │
+├───────────────────────────────────────┤  vs detected      │           │
+│ LIVE ANGULAR POINTING ERROR graph  +  │                   │───────────┤
+│ CAMERA/ACTUATOR readout + A→B beam    │  CONTROLS         │  CONTROLS │
+└───────────────────────────────────────┴───────────────────┴───────────┘
+```
+
+### Camera View (dominant, left/centre)
+
+The main camera/FOV view fills the majority of the screen and shows:
 
 - **Beacon**: Bright white circle with alternating brightness (15 Hz modulation), labelled **SAT-B BEACON**
 - **Distractors**: Dimmer colored circles (steady, 3 Hz, or 8 Hz modulation)
 - **Obstacles**: Dark discs that periodically occlude the beacon
-- **Optical boresight reticle**: Fixed crosshair at the gimbal's commanded boresight
-- **Tracking reticle + ring**: Green ring + crosshair placed on the **locked** SAT-B beacon (candidate boxes stay dim cyan until locked)
-- **Synth-ephemeris prior marker**: Dashed amber diamond showing where the orbital propagator predicts SAT-B should be
-- **Guide box**: White rectangle showing the gimbal's current boresight position
+- **Optical boresight reticle**: Fixed crosshair at the gimbal's commanded boresight (blue)
+- **Tracking reticle + ring**: Green ring + crosshair placed on the **locked** SAT-B beacon
+- **Synth-ephemeris prior marker**: Dashed amber diamond showing where the propagator predicts SAT-B should be (yellow = predicted)
+- **PAT state stepper** (top overlay): `PREDICT → POINT → SEARCH → TRACK → LOCK` with the active stage highlighted; shows `PREDICTIVE COAST` or `SEARCHING / LOST` on loss
+- **FOV / beacon story banner** (bottom overlay): `OUTSIDE FOV → ACQUISITION WINDOW → BEACON ACQUIRED · LOCKED`
+- **POINTING ERROR** (hero, bottom-right): the live boresight error in **millidegrees (mdeg)** in large type, colour-coded (green < 0.10°, amber < 0.30°, red otherwise)
 
-### Headline Status Banner
+Color semantics are consistent: **green = detected/locked target**, **yellow = predicted/ephemeris**, **blue = boresight/FOV**, **red = warning/lost**.
 
-Across the top of the camera view (the judge-facing "money" readout):
+### Bottom Strip
 
-- **SAT-B STATUS**: LIVE / COAST / SEARCH state
-- **POINTING ERROR**: live boresight error in **millidegrees (mdeg)**
-- **COARSE LINK READY**: green when within the fine-acquisition region, amber while tuning
-- **ACQ · REACQ**: initial acquisition time and last recovery time
+- **ANGULAR POINTING ERROR** — a single live graph (in degrees) with a shaded fine-acquisition band (< 0.10°), so a disturbance and the controller's recovery are clearly visible. Right side shows a **CAMERA / ACTUATOR** readout (Azimuth, Elevation, FOV, MODE) and an **A → beam → B** alignment mini-diagram with the live mdeg error.
 
-### Link Scenario Strip
+### Right Column (stacked cards)
 
-A bottom-of-camera side-view strip showing the full story **SATELLITE A → OPTICAL BORESIGHT → SATELLITE B**: the station icon, the outgoing beam cone, the SAT-B icon, and a color-coded pointing-error readout (green < fine-acq region, amber < 0.30°, red otherwise) plus a **LINK READY / COARSE TUNING** badge.
+- **MISSION**: Observer `SAT-A`, Target `SAT-B (optical beacon)`, Mode `COARSE ALIGNMENT`, live Status
+- **MISSION GEOMETRY**: enlarged relative-LOS sky plot (orbit trajectory, ephemeris prior in amber, estimate in green, boresight, FOV gate, ground-truth)
+- **PAT PERFORMANCE**: large **POINTING ERROR** hero, plus ACQUISITION / RETENTION / REACQUISITION primaries; expandable **DIAGNOSTICS** line (mean/RMS/max error, confidence, FPS) via the Diagnostics button
+- **EPHEMERIS PREDICTION vs DETECTION**: predicted (amber) vs detected (green) with the current ephemeris bias in degrees
+- **DISTURBANCES**: compact sliders (turbulence, vibration, sensor noise, jerk, beacon fade), each with a physical-unit hint
+- **CONTROLS**: Pause, Reset, Screenshot, **GT ON/OFF** (ground-truth evaluation overlay), **DIAGNOSTICS** toggle
 
-### Bottom Telemetry Bar
+### Ground-Truth / Evaluation Separation
 
-Displays real-time gimbal state:
-- **Pan/Tilt**: Current gimbal angles in degrees
-- **Error**: Boresight error (truth − estimated)
-- **Association**: Tracking state and modulation correlation
-
-### Right Panel
-
-- **Status chips**: One-word status for each subsystem (CAM, INERTIAL, TRACKING, LATENCY)
-- **Sky plot**: Radar-style azimuth-elevation display with trajectory history, ephemeris prediction, estimate, truth, and FOV cone
-- **KPI cards**: Key performance indicators (error, acquisition time, **reacquisition count/time**, FPS)
-- **Sliders**: Live difficulty parameters, each with a **physical-unit hint** (turbulence in px-RMS warp, vibration in °/s, sensor noise in sigma-DN, beacon fade in %, jerk probability)
-- **Buttons**: Pause, Reset
+By default the operational view shows **only** what the algorithm sees (ephemeris prediction, camera observation, estimated state, tracking result). Press **GT** (purple button) to overlay the **GROUND TRUTH · EVALUATION ONLY** marker for benchmarking — it is clearly labelled so the demo never looks like it is handed the answer.
 
 ---
 
