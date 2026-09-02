@@ -63,6 +63,7 @@ class App:
         # presentation modes
         self.show_gt = False        # ground-truth / evaluation-only overlays
         self.show_diag = False      # expandable diagnostics section
+        self.compare = self._load_compare()   # baseline-vs-adaptive benchmark
 
         self.error_spark = deque(maxlen=1800)
         self.sliders = {
@@ -570,6 +571,18 @@ class App:
         T.text(surf, (cx, by - 16), "SAT-B", 8, T.C.RED, bold=True, anchor="cc")
         T.text(surf, (cx, box.y + box.h - 14), f"{err * 1000:6.1f} mdeg", 11, col, bold=True, anchor="cc")
 
+    def _load_compare(self):
+        """Load the last measured baseline-vs-adaptive benchmark (if any)."""
+        try:
+            p = os.path.join(config.LOG_DIR, "compare_summary.json")
+            if not os.path.exists(p):
+                return None
+            import json
+            with open(p) as fh:
+                return json.load(fh)
+        except Exception:
+            return None
+
     # ---------------------------------------------------------------- right panel
     def _draw_panel(self, surf):
         pygame.draw.rect(surf, T.C.PANEL, (1280, 48, 320, APP_H - 48))
@@ -577,12 +590,12 @@ class App:
         self._panel_mission(surf)
         self._panel_geometry(surf)
         self._panel_performance(surf)
-        self._panel_ephemeris(surf)
+        self._panel_comparison(surf)
         self._panel_disturbances(surf)
         self._panel_controls(surf)
 
     def _panel_mission(self, surf):
-        x, y, w, h = 1288, 56, 304, 92
+        x, y, w, h = 1288, 56, 304, 78
         T.panel(surf, pygame.Rect(x, y, w, h))
         T.text(surf, (x + 10, y + 6), "MISSION", 10, T.C.TEXT_DIM)
         res = self.sim.last_result
@@ -591,7 +604,6 @@ class App:
         rows = [
             ("Observer", "SAT-A"),
             ("Target", "SAT-B  (optical beacon)"),
-            ("Mode", "COARSE ALIGNMENT"),
             ("Status", "TRACKING" if st == "LOCKED" else
                        ("SEARCH" if st == "SEARCHING" else "COAST")),
         ]
@@ -599,17 +611,17 @@ class App:
         col = T.C.GREEN if lock else T.C.STATE[st]
         for lab, val in rows:
             T.text(surf, (x + 12, yy), lab, 10, T.C.TEXT_FAINT)
-            T.text(surf, (x + 88, yy), val, 10, col if lab == "Status" else T.C.TEXT, bold=(lab == "Status"))
-            yy += 17
+            T.text(surf, (x + 96, yy), val, 11, col if lab == "Status" else T.C.TEXT, bold=(lab == "Status"))
+            yy += 18
 
     def _panel_geometry(self, surf):
-        # enlarged relative-LOS mission-geometry map
-        g = pygame.Rect(1288, 154, 304, 176)
+        # relative-LOS mission-geometry map
+        g = pygame.Rect(1288, 140, 304, 146)
         view3d.render(surf, g, self.sim, self.sim.t)
         T.text(surf, (g.right - 6, g.y - 2), "B approaching A's FOV", 9, T.C.TEXT_FAINT, anchor="tr")
 
     def _panel_performance(self, surf):
-        x, y, w, h = 1288, 338, 304, 158
+        x, y, w, h = 1288, 292, 304, 110
         T.panel(surf, pygame.Rect(x, y, w, h))
         T.text(surf, (x + 10, y + 6), "PAT PERFORMANCE", 10, T.C.TEXT_DIM)
         res = self.sim.last_result
@@ -617,49 +629,71 @@ class App:
         err = res["pointing_err_deg"]
         ec = T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG else \
              (T.C.AMBER if err < 0.30 else T.C.RED)
-        # hero: pointing error (big)
-        T.text(surf, (x + 12, y + 24), "POINTING ERROR", 9, T.C.TEXT_FAINT)
-        T.text(surf, (x + 12, y + 34), f"{err * 1000:6.1f} mdeg", 30, ec, bold=True)
+        T.text(surf, (x + 12, y + 22), "POINTING ERROR", 8, T.C.TEXT_FAINT)
+        T.text(surf, (x + 12, y + 30), f"{err * 1000:6.1f} mdeg", 26, ec, bold=True)
         acq = st["acquisition_time_s"]
         acq_s = f"{acq:.2f}s" if acq else "--"
         reacq = st["last_reacq_s"]
         reacq_s = f"{reacq:.2f}s" if reacq else f"{st['reacquisition_count']}ev"
-        ret = st["retention_total_pct"]
-        # three secondary big numbers
-        cols = [("ACQ", acq_s, T.C.TEXT),
-                ("RET", f"{ret:.1f}%", T.C.TEXT),
-                ("REACQ", reacq_s, T.C.CYAN)]
-        xx = x + 12
-        for lab, val, c2 in cols:
-            T.text(surf, (xx, y + 84), lab, 9, T.C.TEXT_FAINT)
-            T.text(surf, (xx, y + 96), val, 18, c2, bold=True)
-            xx += 98
-        # one-line diagnostics (secondary, small)
+        cols = [("ACQ", acq_s), ("RET", f"{st['retention_total_pct']:.1f}%"), ("REACQ", reacq_s)]
+        xx = x + 150
+        for lab, val in cols:
+            T.text(surf, (xx, y + 24), lab, 8, T.C.TEXT_FAINT)
+            T.text(surf, (xx, y + 36), val, 14, T.C.TEXT, bold=True)
+            xx += 52
         if self.show_diag:
             diag = (f"mean {st['mean_err_deg']*1000:.0f} · rms {st['rms_err_deg']*1000:.0f} "
-                    f"· max {st['max_err_deg']*1000:.0f} mdeg · conf {res['confidence']:.2f} · "
-                    f"fps {st['fps']:.0f}")
-            T.text(surf, (x + 12, y + 124), diag, 8, T.C.TEXT_FAINT)
+                    f"· max {st['max_err_deg']*1000:.0f} mdeg · fps {st['fps']:.0f}")
+            T.text(surf, (x + 12, y + 90), diag, 8, T.C.TEXT_FAINT)
         else:
-            T.text(surf, (x + 12, y + 124), "DIAGNOSTICS › (click)", 8, T.C.TEXT_FAINT)
+            T.text(surf, (x + 12, y + 90), "DIAGNOSTICS › (click)", 8, T.C.TEXT_FAINT)
 
-    def _panel_ephemeris(self, surf):
-        x, y, w, h = 1288, 504, 304, 66
+    def _panel_comparison(self, surf):
+        x, y, w, h = 1288, 408, 304, 158
         T.panel(surf, pygame.Rect(x, y, w, h))
-        T.text(surf, (x + 10, y + 6), "EPHEMERIS PREDICTION vs DETECTION", 9, T.C.TEXT_DIM)
-        # predicted (amber) vs detected (green) dots at fixed positions
-        py = y + 40
-        pygame.draw.circle(surf, T.C.AMBER, (x + 18, py), 6)
-        T.text(surf, (x + 32, py), "predicted", 10, T.C.TEXT_FAINT, anchor="ll")
-        pygame.draw.circle(surf, T.C.GREEN, (x + 110, py), 6)
-        T.text(surf, (x + 124, py), "detected", 10, T.C.TEXT_FAINT, anchor="ll")
-        # prediction error (ephemeris bias) in degrees
-        b_az, b_el = self.sim.eph.bias_deg(self.sim.t)
-        perr = math.hypot(b_az, b_el)
-        T.text(surf, (x + w - 10, py), f"bias {perr:.3f}°", 12, T.C.AMBER, anchor="rc")
+        T.text(surf, (x + 10, y + 6), "TRACKING COMPARISON", 10, T.C.CYAN)
+        T.text(surf, (x + w - 10, y + 6), "measured · A/B", 8, T.C.TEXT_FAINT, anchor="tr")
+        if self.compare is None:
+            T.text(surf, (x + 12, y + 40), "run benchmark to populate:", 9, T.C.TEXT_FAINT)
+            T.text(surf, (x + 12, y + 54), "python -m metrics.compare_trackers", 9, T.C.CYAN)
+            T.text(surf, (x + 12, y + 76), "shows BASELINE (naive) vs ADAPTIVE on", 9, T.C.TEXT_FAINT)
+            T.text(surf, (x + 12, y + 90), "identical scenarios.", 9, T.C.TEXT_FAINT)
+            return
+        res = self.compare.get("results", {})
+        row = res.get(self.preset)
+        if not row:
+            T.text(surf, (x + 12, y + 40), "no data for " + self.preset, 9, T.C.TEXT_FAINT)
+            return
+        # column headers
+        cx = [x + 96, x + 156, x + 214, x + 260]
+        hdr_cols = [(cx[0], "ACQ"), (cx[1], "MEAN°"), (cx[2], "RET%"), (cx[3], "FAL")]
+        T.text(surf, (x + 12, y + 22), "", 9)
+        for xx, lab in hdr_cols:
+            T.text(surf, (xx, y + 22), lab, 8, T.C.TEXT_FAINT)
+        # BASIC row (dim)
+        base = row.get("baseline", {})
+        T.text(surf, (x + 12, y + 40), "BASELINE", 9, T.C.TEXT_DIM)
+        T.text(surf, (cx[0], y + 40), f"{base.get('acq',0):.2f}s", 9, T.C.TEXT_DIM)
+        T.text(surf, (cx[1], y + 40), f"{base.get('mean_deg',0):.3f}", 9, T.C.TEXT_DIM)
+        T.text(surf, (cx[2], y + 40), f"{base.get('ret_pct',0):.0f}", 9, T.C.TEXT_DIM)
+        T.text(surf, (cx[3], y + 40), f"{base.get('false_locks',0)}", 9, T.C.RED)
+        # ADAPTIVE row (highlight)
+        ada = row.get("adaptive", {})
+        T.text(surf, (x + 12, y + 58), "ADAPTIVE", 9, T.C.GREEN, bold=True)
+        T.text(surf, (cx[0], y + 58), f"{ada.get('acq',0):.2f}s", 9, T.C.TEXT)
+        T.text(surf, (cx[1], y + 58), f"{ada.get('mean_deg',0):.3f}", 9, T.C.GREEN, bold=True)
+        T.text(surf, (cx[2], y + 58), f"{ada.get('ret_pct',0):.0f}", 9, T.C.TEXT)
+        T.text(surf, (cx[3], y + 58), f"{ada.get('false_locks',0)}", 9, T.C.GREEN, bold=True)
+        # divider + takeaway
+        pygame.draw.line(surf, T.C.BORDER, (x + 10, y + 76), (x + w - 10, y + 76), 1)
+        T.text(surf, (x + 12, y + 84), "False locks: baseline can't reject distractors;", 8, T.C.TEXT_FAINT)
+        T.text(surf, (x + 12, y + 96), "it locks the brightest blob, whatever it is.", 8, T.C.TEXT_FAINT)
+        T.text(surf, (x + 12, y + 112), "Adaptive verifies 15 Hz modulation + ephemeris", 8, T.C.TEXT_FAINT)
+        T.text(surf, (x + 12, y + 124), "before LOCK - near-zero false locks, lower error.", 8, T.C.TEXT_FAINT)
+        T.text(surf, (x + 12, y + 142), "Re-run: python -m metrics.compare_trackers", 8, T.C.TEXT_FAINT)
 
     def _panel_disturbances(self, surf):
-        x, y, w, h = 1288, 578, 304, 168
+        x, y, w, h = 1288, 572, 304, 172
         T.panel(surf, pygame.Rect(x, y, w, h))
         T.text(surf, (x + 10, y + 6), "DISTURBANCES  (active scenario)", 9, T.C.TEXT_DIM)
         for key, s in self.sliders.items():
@@ -669,7 +703,7 @@ class App:
                 T.text(surf, (s.rect.x + 2, s.rect.y + 25), unit, 8, T.C.TEXT_FAINT)
 
     def _panel_controls(self, surf):
-        x, y, w, h = 1288, 752, 304, 142
+        x, y, w, h = 1288, 756, 304, 138
         T.panel(surf, pygame.Rect(x, y, w, h))
         T.text(surf, (x + 10, y + 6), "CONTROLS", 9, T.C.TEXT_DIM)
         for b in self.buttons.values():

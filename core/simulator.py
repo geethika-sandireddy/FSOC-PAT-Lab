@@ -26,7 +26,8 @@ from core.orbital import EphemerisModel
 
 
 class Simulator:
-    def __init__(self, preset_name="EASY", seed=None, dt=1.0 / config.FPS):
+    def __init__(self, preset_name="EASY", seed=None, dt=1.0 / config.FPS,
+                 tracker_factory=None):
         preset = config.DIFFICULTY_PRESETS.get(preset_name, config.DIFFICULTY_PRESETS["EASY"])
         self.preset_name = preset_name
         self.preset = preset
@@ -47,7 +48,10 @@ class Simulator:
             seed=seed,
         )
         self.detector = DetectionEngine()
-        self.tracker = Tracker(self.eph, seed=seed)
+        if tracker_factory is None:
+            self.tracker = Tracker(self.eph, seed=seed)
+        else:
+            self.tracker = tracker_factory(self.eph, seed=seed)
         self.controller = PointingController(self.gimbal, self.tracker)
         self.dt = dt
         self.t = 0.0
