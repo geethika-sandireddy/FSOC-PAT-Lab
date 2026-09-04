@@ -48,6 +48,8 @@ class PerformanceTracker:
         self.false_lock_events = 0
         self._false_lock_frames = 0
         self.tracking_available_frames = 0
+        self.expected_frames = 0     # frames where beacon is visible AND in FOV
+        self.success_frames = 0      # of those, frames the tracker held LOCKED
         self.state_time = {}
 
     # ------------------------------------------------------------------
@@ -109,6 +111,15 @@ class PerformanceTracker:
                         self.false_lock_events += 1
                 else:
                     self._false_lock_frames = 0
+
+            # tracking success rate: of the frames where the beacon was actually
+            # visible and in the FOV (so tracking was expected to succeed), what
+            # fraction was the system genuinely LOCKED?  This is the honest PAT
+            # "did it hold when it should" figure for the judicial panel.
+            if visible and r["in_fov"]:
+                self.expected_frames += 1
+                if r.get("state") == "LOCKED" or (is_locked and r["est_err_deg"] is not None and r["est_err_deg"] < 0.4):
+                    self.success_frames += 1
         else:
             if self.was_locked:
                 self.lock_lost_at = now
@@ -121,17 +132,23 @@ class PerformanceTracker:
         mean_err = sum(self.errors_deg) / n if n else None
         max_err = max(self.errors_deg) if n else None
         rms = math.sqrt(sum(e * e for e in self.errors_deg) / n) if n else None
+        p95 = sorted(self.errors_deg)[int(n * 0.95) - 1] if n else None
+        success_rate = (self.success_frames / self.expected_frames * 100) if self.expected_frames else 0.0
         retention_total = (self.locked_frames / self.frame_count * 100) if self.frame_count else 0.0
         retention_vis = (self.locked_visible_frames / self.visible_frames * 100) if self.visible_frames else 0.0
+        mean_reacq = (sum(self.reacquisition_times) / len(self.reacquisition_times)) if self.reacquisition_times else None
         return dict(
             fps=self.last_tick,
             mean_err_deg=mean_err,
             max_err_deg=max_err,
             rms_err_deg=rms,
+            p95_err_deg=p95,
             acquisition_time_s=self.acquisition_time_s,
             retention_total_pct=retention_total,
             retention_visible_pct=retention_vis,
+            success_rate_pct=success_rate,
             reacquisition_count=len(self.reacquisition_times),
+            mean_reacq_s=mean_reacq,
             last_reacq_s=self.reacquisition_times[-1] if self.reacquisition_times else None,
             false_lock_events=self.false_lock_events,
             lock_events=self.lock_events,
@@ -164,10 +181,15 @@ class PerformanceTracker:
                         if stats["rms_err_deg"] is not None else "n/a"])
             w.writerow(["max_pointing_error_deg", round(stats["max_err_deg"], 4)
                         if stats["max_err_deg"] is not None else "n/a"])
+            w.writerow(["p95_pointing_error_deg", round(stats["p95_err_deg"], 4)
+                        if stats["p95_err_deg"] is not None else "n/a"])
+            w.writerow(["tracking_success_rate_pct", round(stats["success_rate_pct"], 2)])
             w.writerow(["lock_retention_total_pct", round(stats["retention_total_pct"], 2)])
             w.writerow(["lock_retention_visible_pct", round(stats["retention_visible_pct"], 2)])
             w.writerow(["lock_events", self.lock_events])
             w.writerow(["reacquisition_events", stats["reacquisition_count"]])
+            w.writerow(["mean_reacquisition_time_s", round(stats["mean_reacq_s"], 3)
+                        if stats["mean_reacq_s"] is not None else "n/a"])
             w.writerow(["false_lock_events", self.false_lock_events])
             w.writerow(["states", {k: round(v / max(1, self.frame_count) * 100, 1)
                                    for k, v in self.state_time.items()}])

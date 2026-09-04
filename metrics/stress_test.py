@@ -67,18 +67,18 @@ def main():
     os.makedirs(config.LOG_DIR, exist_ok=True)
     summary_path = os.path.join(config.LOG_DIR, "stress_test_summary.csv")
 
-    print(f"{'preset':<12}{'acq(s)':>8}{'ret%':>7}{'vis%':>7}{'mean_deg':>9}"
-          f"{'rms_deg':>9}{'max_deg':>9}{'false':>6}{'fps':>6}")
+    print(f"{'preset':<12}{'acq(s)':>8}{'ret%':>7}{'succ%':>7}{'mean_deg':>9}"
+          f"{'p95_deg':>9}{'max_deg':>9}{'false':>6}{'fps':>6}")
     rows = []
     for preset in presets:
-        acqs, rets, viss, means, rmses, maxes, false_locks, fpss = [], [], [], [], [], [], [], []
+        acqs, rets, succs, means, p95s, maxes, false_locks, fpss = [], [], [], [], [], [], [], []
         for seed in range(args.trials):
             stats, acq, fl, retv, mean_err, fps = run_trial(preset, seed, args.seconds)
             acqs.append(acq if acq is not None else 999.0)
             rets.append(stats["retention_total_pct"])
-            viss.append(stats["retention_visible_pct"])
+            succs.append(stats["success_rate_pct"])
             means.append(stats["mean_err_deg"] if stats["mean_err_deg"] is not None else 99.0)
-            rmses.append(stats["rms_err_deg"] if stats["rms_err_deg"] is not None else 99.0)
+            p95s.append(stats["p95_err_deg"] if stats["p95_err_deg"] is not None else 99.0)
             maxes.append(stats["max_err_deg"] if stats["max_err_deg"] is not None else 99.0)
             false_locks.append(stats["false_lock_events"])
             fpss.append(stats["fps"])
@@ -86,15 +86,15 @@ def main():
             preset=preset,
             acq_mean=statistics.mean(acqs), acq_min=min(acqs),
             ret_total_mean=statistics.mean(rets), ret_total_min=min(rets),
-            ret_vis_mean=statistics.mean(viss), ret_vis_min=min(viss),
-            err_mean_mean=statistics.mean(means), err_rms_mean=statistics.mean(rmses),
+            success_rate_mean=statistics.mean(succs),
+            err_mean_mean=statistics.mean(means), err_p95_mean=statistics.mean(p95s),
             err_max_mean=statistics.mean(maxes), err_max_max=max(maxes),
             false_lock_total=sum(false_locks),
             fps_mean=statistics.mean(fpss),
         )
         rows.append(s)
         print(f"{preset:<12}{s['acq_mean']:>8.2f}{s['ret_total_mean']:>7.1f}"
-              f"{s['ret_vis_mean']:>7.1f}{s['err_mean_mean']:>9.4f}{s['err_rms_mean']:>9.4f}"
+              f"{s['success_rate_mean']:>7.1f}{s['err_mean_mean']:>9.4f}{s['err_p95_mean']:>9.4f}"
               f"{s['err_max_mean']:>9.4f}{s['false_lock_total']:>6}{s['fps_mean']:>6.1f}")
 
     with open(summary_path, "w", newline="") as f:
