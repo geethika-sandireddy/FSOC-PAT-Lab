@@ -22,7 +22,31 @@ WINDOW_DEFAULT_H = 900
 FPS = 60
 
 # ---------------------------------------------------------------------------
-# Virtual camera sensor (the "eye" of Satellite A)
+# PS 26169 - Virtual Environment Parameters (user-configurable)
+# ---------------------------------------------------------------------------
+SCREEN_SIZE_W = 2000                   # PS: min 2000x2000, user-defined
+SCREEN_SIZE_H = 2000
+CAMERA_RESOLUTION_W = 640              # PS default: 640x480
+CAMERA_RESOLUTION_H = 480
+CAMERA_FOV_H_DEG = 4.0                 # PS default: 4° x 3°
+CAMERA_FOV_V_DEG = 3.0
+CAMERA_UPDATE_HZ = 60                  # PS min: 30 Hz
+CAMERA_TYPE = "MONOCHROME"             # PS: Monochrome (optional: Colour)
+
+# Target parameters (PS 26169)
+TARGET_SHAPE = "SQUARE"                # PS default: Square (optional: Circle, Spot)
+TARGET_SIZE_PX = 10                    # PS default: 10x10 pixels
+TARGET_SIZE_PY = 10
+TARGET_INITIAL = "RANDOM"              # PS default: Random (optional: Center)
+NUM_TARGETS = 1                        # PS: 1 mandatory, multiple optional
+MAX_TARGETS = 5                        # optional: up to 5
+
+# Camera motion constraints (PS 26169)
+CAMERA_MAX_PAN_DEG_S = 5.0            # PS default: 5 °/s (range 5-10)
+CAMERA_MAX_TILT_DEG_S = 5.0           # PS default: 5 °/s (range 5-10)
+
+# ---------------------------------------------------------------------------
+# Virtual camera sensor (the "eye" of the terminal)
 # ---------------------------------------------------------------------------
 CAM_VIEW_W = 800                     # sensor pixels (horizontal)
 CAM_VIEW_H = 450                     # sensor pixels (vertical)

@@ -192,7 +192,7 @@ def run_bypass(input_path, output_path=None, verbose=True):
         print(f"  Video: {width}x{height} @ {fps_vid:.1f} fps, "
               f"{total_frames} frames ({total_frames/fps_vid:.1f}s)")
         print(f"  Processing: {wall:.2f}s wall, {stats['fps']:.0f} fps")
-        print(f"{'─'*56}")
+        print(f"  {'-'*56}")
         print(f"  Acquisition time:    {acquisition_time:.3f}s" if acquisition_time
               else "  Acquisition time:    NEVER LOCKED")
         print(f"  Retention:           {ret_pct:.1f}%")

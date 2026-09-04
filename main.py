@@ -45,7 +45,8 @@ DISPLAY_CAP = 60
 
 
 class App:
-    def __init__(self, preset="EASY", seed=None, fullscreen=False):
+    def __init__(self, preset="EASY", seed=None, fullscreen=False,
+                 platform_mode=None, atmosphere=None):
         pygame.init()
         flags = pygame.FULLSCREEN | pygame.SCALED if fullscreen else 0
         self.screen = pygame.display.set_mode((APP_W, APP_H),
@@ -54,7 +55,10 @@ class App:
         self.clock = pygame.time.Clock()
 
         self.preset = preset
-        self.sim = Simulator(preset_name=preset, seed=seed)
+        self.platform_mode = platform_mode
+        self.atmosphere = atmosphere
+        self.sim = Simulator(preset_name=preset, seed=seed,
+                             platform_mode=platform_mode, atmosphere=atmosphere)
         self.perf = PerformanceTracker()
         self.paused = False
         self.show_fov_grid = True
@@ -199,7 +203,9 @@ class App:
                 s.drag_to(pos[0])
 
     def _reset(self, name=None):
-        self.sim = Simulator(preset_name=name or self.preset, seed=None)
+        self.sim = Simulator(preset_name=name or self.preset, seed=None,
+                             platform_mode=self.platform_mode,
+                             atmosphere=self.atmosphere)
         self.perf = PerformanceTracker()
         self.error_spark.clear()
         self.sync_sliders()
@@ -756,9 +762,10 @@ def _bracket(surf, center, color, r, th):
         pygame.draw.line(surf, color, (x + dx * r, y + dy * L), (x + dx * (r - L // 2), y + dy * L), th)
 
 
-def headless_selftest(frames, preset):
+def headless_selftest(frames, preset, platform=None, atmosphere=None):
     print(f"headless self-test: preset={preset} frames={frames}")
-    sim = Simulator(preset_name=preset, seed=1)
+    sim = Simulator(preset_name=preset, seed=1,
+                    platform_mode=platform, atmosphere=atmosphere)
     perf = PerformanceTracker()
     t0 = time.time()
     for _ in range(frames):
@@ -777,13 +784,21 @@ def main():
     ap.add_argument("--preset", default="EASY")
     ap.add_argument("--frames", type=int, default=0, help="headless self-test frame count")
     ap.add_argument("--fullscreen", action="store_true")
+    ap.add_argument("--platform", default=None,
+                    choices=["SATELLITE_SATELLITE", "UAV_SATELLITE", "UAV_UAV"],
+                    help="FSOC platform mode (PS 26169)")
+    ap.add_argument("--atmosphere", default=None,
+                    choices=["CLEAR", "HAZE", "FOG", "RAIN", "LOW_LIGHT"],
+                    help="atmospheric condition (PS 26169)")
     args = ap.parse_args()
 
     if args.frames > 0:
-        headless_selftest(args.frames, args.preset.upper())
+        headless_selftest(args.frames, args.preset.upper(),
+                          args.platform, args.atmosphere)
         return
 
-    app = App(preset=args.preset.upper(), fullscreen=args.fullscreen)
+    app = App(preset=args.preset.upper(), fullscreen=args.fullscreen,
+              platform_mode=args.platform, atmosphere=args.atmosphere)
     app.run()
 
 

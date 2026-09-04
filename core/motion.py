@@ -2,12 +2,13 @@
 core/motion.py
 --------------
 Selectable target motion types required by the PS 26169:
-  1. Straight Line    (default / mandatory)
+   1. Straight Line    (default / mandatory)
   2. Circular         (mandatory)
   3. Figure of 8      (mandatory)
   4. Random           (mandatory)
-
-Each returns (az_deg, el_deg) at time t.
+  5. Spiral           (optional, PS-listed)
+  6. Sinusoidal       (optional, PS-listed)
+  7. Lissajous        (default orbital drift)
 """
 
 import math
@@ -52,6 +53,22 @@ def figure_eight(t, speed=1.15, amp_az=1.2, amp_el=0.8):
     return az, el
 
 
+def spiral(t, speed=1.15, amp_az=1.4, amp_el=1.4):
+    """Archemedian spiral winding outward (optional PS type)."""
+    ang = speed * 0.18 * t
+    rad = (0.15 + 0.03 * t) % (amp_az * 1.4)
+    az = rad * math.cos(ang)
+    el = rad * math.sin(ang)
+    return az, el
+
+
+def sinusoidal(t, speed=1.15, amp_az=1.4, amp_el=0.9):
+    """Pure sinusoidal drift (optional PS type)."""
+    az = amp_az * math.sin(speed * 0.12 * t)
+    el = amp_el * math.sin(speed * 0.08 * t)
+    return az, el
+
+
 class RandomWalk:
     """Stateful seeded random walk (efficient, deterministic)."""
 
@@ -80,4 +97,6 @@ MOTION_TYPES = {
     "circular": circular,
     "figure_eight": figure_eight,
     "random": _make_random,
+    "spiral": spiral,
+    "sinusoidal": sinusoidal,
 }

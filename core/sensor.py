@@ -151,7 +151,17 @@ class VirtualSensor:
                 if occ > 0.55:
                     amp = 0.0
             if amp > 8:
-                _draw_sprite(frame, u, v, _BEACON_KERNEL, amp)
+                # PS 26169: target shape configurable (Square default, Circle, Spot)
+                shape = getattr(b, "shape", "SQUARE")
+                spx = getattr(b, "size_px", 10)
+                spy = getattr(b, "size_py", 10)
+                if shape == "CIRCLE":
+                    r = max(2, min(spx, spy) // 2)
+                    _draw_circle_blob(frame, u, v, r, amp)
+                elif shape == "SPOT":
+                    _draw_sprite(frame, u, v, _BEACON_KERNEL, amp)
+                else:  # SQUARE (PS default)
+                    _draw_square_blob(frame, u, v, spx, spy, amp)
                 core_tint = 0.9
                 px0, py0 = int(round(u)), int(round(v))
                 if 0 <= px0 < self.w and 0 <= py0 < self.h:
@@ -198,6 +208,35 @@ def _hue_to_bgr(hue_deg):
         r, g, b = c, 0, x
     m = v - c
     return (int((b + m) * 120), int((g + m) * 120), int((r + m) * 120))
+
+
+def _draw_square_blob(frame, cx, cy, w_px, h_px, intensity):
+    """Draw an intensity-filled square target (PS 26169 default shape)."""
+    h, w = frame.shape[:2]
+    x0 = max(0, int(round(cx)) - w_px // 2)
+    y0 = max(0, int(round(cy)) - h_px // 2)
+    x1 = min(w, int(round(cx)) + w_px // 2 + 1)
+    y1 = min(h, int(round(cy)) + h_px // 2 + 1)
+    if x1 > x0 and y1 > y0:
+        frame[y0:y1, x0:x1] += intensity
+
+
+def _draw_circle_blob(frame, cx, cy, radius, intensity):
+    """Draw an intensity-filled circular target (optional PS shape)."""
+    r = max(1, int(radius))
+    h, w = frame.shape[:2]
+    yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+    inside = (xx ** 2 + yy ** 2) <= r * r
+    x0 = max(0, int(round(cx)) - r)
+    y0 = max(0, int(round(cy)) - r)
+    x1 = min(w, int(round(cx)) + r + 1)
+    y1 = min(h, int(round(cy)) + r + 1)
+    gh = y1 - y0
+    gw = x1 - x0
+    if gh <= 0 or gw <= 0:
+        return
+    sub = inside[:gh, :gw].copy()
+    frame[y0:y1, x0:x1][sub] += intensity
 
 
 def _draw_dark_disc(frame, cx, cy, radius):

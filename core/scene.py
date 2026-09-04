@@ -35,9 +35,9 @@ class Starfield:
 
 
 class Beacon:
-    """Satellite B's optical beacon."""
+    """Satellite B's optical beacon (PS 26169: target shape/size configurable)."""
 
-    def __init__(self, orbit_model, seed=None):
+    def __init__(self, orbit_model, seed=None, shape="SQUARE", size_px=10, size_py=10):
         self.orbit = orbit_model
         self.az_deg = 0.0
         self.el_deg = 0.0
@@ -45,6 +45,9 @@ class Beacon:
         self.pos = (0.0, 0.0, 1000.0)
         self._time = 0.0
         self.visible = True
+        self.shape = shape          # PS: Square (default), Circle, Spot
+        self.size_px = size_px      # PS: 5-20 pixels, default 10
+        self.size_py = size_py
 
     def advance(self, dt):
         self._time += dt
@@ -136,13 +139,17 @@ class Scene3D:
     """Aggregates the world and owns the random-authority for reproducibility."""
 
     def __init__(self, az_amp=1.4, el_amp=0.9, speed=1.15, distractors=0,
-                 obstacles=0, seed=None, motion_type=None):
+                 obstacles=0, seed=None, motion_type=None,
+                 target_shape=None, target_size=None, num_targets=1):
         self.rng = random.Random(seed)
         from core.orbital import RelativeOrbitModel
         self.orbit = RelativeOrbitModel(az_amp=az_amp, el_amp=el_amp,
                                         speed=speed, seed=seed,
                                         motion_type=motion_type)
-        self.beacon = Beacon(self.orbit, seed=seed)
+        shape = target_shape or getattr(config, "TARGET_SHAPE", "SQUARE")
+        tsize = target_size or getattr(config, "TARGET_SIZE_PX", 10)
+        self.beacon = Beacon(self.orbit, seed=seed,
+                             shape=shape, size_px=tsize, size_py=tsize)
         self.stars = Starfield(config.NUM_STARS, seed=seed)
         self.distractors = []
         self.obstacles = []

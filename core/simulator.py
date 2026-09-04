@@ -27,29 +27,51 @@ from core.orbital import EphemerisModel
 
 class Simulator:
     def __init__(self, preset_name="EASY", seed=None, dt=1.0 / config.FPS,
-                 tracker_factory=None):
+                 tracker_factory=None, platform_mode=None, atmosphere=None):
         preset = config.DIFFICULTY_PRESETS.get(preset_name, config.DIFFICULTY_PRESETS["EASY"])
         self.preset_name = preset_name
         self.preset = preset
+        self.platform_mode = platform_mode
+        self.atmosphere_name = atmosphere
+
+        # Merge platform mode defaults with preset (preset overrides)
+        pm = None
+        if platform_mode:
+            from core.platforms import PLATFORM_MODES
+            pm = PLATFORM_MODES.get(platform_mode)
+        if pm:
+            dist = {**pm.get("disturbances", {}), **{k: v for k, v in preset.items()
+                    if k in ("turbulence", "vibration", "sensor_noise", "jerk_prob", "beacon_fade")}}
+        else:
+            dist = preset
 
         self.scene = Scene3D(
             az_amp=preset["az_amp"], el_amp=preset["el_amp"],
             speed=preset["speed"],
             distractors=preset["distractors"],
             obstacles=preset["obstacles"], seed=seed,
-            motion_type=preset.get("motion_type"),
+            motion_type=preset.get("motion_type",
+                                   pm.get("motion_default") if pm else None),
         )
         self.eph = EphemerisModel(self.scene.orbit, seed=seed)
         self.gimbal = Gimbal()
         self.sensor = VirtualSensor()
         self.disturbance = DisturbanceEngine(
-            turbulence=preset["turbulence"], vibration=preset["vibration"],
-            sensor_noise=preset["sensor_noise"], jerk_prob=preset["jerk_prob"],
-            beacon_fade=preset.get("beacon_fade", 0),
+            turbulence=dist.get("turbulence", 0),
+            vibration=dist.get("vibration", 0),
+            sensor_noise=dist.get("sensor_noise", 0),
+            jerk_prob=dist.get("jerk_prob", 0),
+            beacon_fade=dist.get("beacon_fade", 0),
             seed=seed,
         )
         self.disturbance.noise_types = preset.get("noise_types",
-                                                    ["gaussian", "salt_pepper", "poisson"])
+                                                   pm.get("noise_types", ["gaussian"]) if pm
+                                                   else ["gaussian"])
+        # Atmospheric condition engine
+        from core.atmosphere import AtmosphereEngine
+        atm = atmosphere or (pm.get("atmosphere", "CLEAR") if pm else "CLEAR")
+        self.atmosphere = AtmosphereEngine(condition=atm, seed=seed)
+        self.atmosphere_name = atm
         self.detector = DetectionEngine()
         if tracker_factory is None:
             self.tracker = Tracker(self.eph, seed=seed)
@@ -92,6 +114,9 @@ class Simulator:
         basis = self.gimbal.basis()
         frame = self.sensor.render(self.scene, self.gimbal, config.FOCAL_PX,
                                    disturbance=self.disturbance, dt=dt)
+        # Apply atmospheric condition effects (haze, fog, rain, low light)
+        if self.atmosphere_name != "CLEAR":
+            frame = self.atmosphere.apply(frame)
 
         candidates = self.detector.detect(frame, basis, config.FOCAL_PX)
 
