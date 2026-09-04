@@ -67,15 +67,15 @@ class App:
 
         self.error_spark = deque(maxlen=1800)
         self.sliders = {
-            "turbulence": W.Slider((1296, 578, 282, 22), "TURBULENCE",
+            "turbulence": W.Slider((1296, 600, 282, 22), "TURBULENCE",
                                    self.sim.preset.get("turbulence", 0), T.C.PURPLE),
-            "vibration": W.Slider((1296, 612, 282, 22), "VIBRATION",
+            "vibration": W.Slider((1296, 628, 282, 22), "VIBRATION",
                                   self.sim.preset.get("vibration", 0), T.C.AMBER),
-            "sensor_noise": W.Slider((1296, 646, 282, 22), "SENSOR NOISE",
+            "sensor_noise": W.Slider((1296, 656, 282, 22), "SENSOR NOISE",
                                      self.sim.preset.get("sensor_noise", 0), T.C.RED),
-            "jerk_prob": W.Slider((1296, 680, 282, 22), "JERK PROB",
+            "jerk_prob": W.Slider((1296, 684, 282, 22), "JERK PROB",
                                   self.sim.preset.get("jerk_prob", 0), T.C.CYAN),
-            "beacon_fade": W.Slider((1296, 714, 282, 22), "BEACON FADE",
+            "beacon_fade": W.Slider((1296, 712, 282, 22), "BEACON FADE",
                                     self.sim.preset.get("beacon_fade", 0), T.C.AMBER_DIM),
         }
         self.chips = {}
@@ -254,12 +254,13 @@ class App:
         T.text(surf, (10, 26), "Coarse Alignment · Mobile FSOC Terminal", 10, T.C.TEXT_DIM)
         T.text(surf, (APP_W - 12, 10), "PS 26169", 12, T.C.TEXT_FAINT, anchor="tr")
         T.text(surf, (APP_W - 12, 26), "AI-Based Virtual Camera Tracking", 10, T.C.TEXT_FAINT, anchor="tr")
-        # scenario chips (drawn by _draw_panel_header-free caller)
+        # scenario chips - label sits on its own line above the chip row so
+        # it never collides with the first chip's border/text
+        first_chip_x = min(c.rect.x for c in self.chips.values())
+        T.text(surf, (first_chip_x, 2), "SCENARIO", 8, T.C.TEXT_FAINT)
         for name, c in self.chips.items():
             c.draw(surf, selected=(name == self.preset))
         # global mission status badge on the camera right edge is drawn in camera
-        # CONTROLS: scenario chips live in header
-        T.text(surf, (410, 14), "SCENARIO", 9, T.C.TEXT_FAINT)
 
     def _draw_footer(self, surf):
         T.text(surf, (8, APP_H - 16), "SPACE pause · R reset · S shot · 1-5 scenario · F fullscreen · V FOV grid",
@@ -320,10 +321,17 @@ class App:
             self._stepper_badge(surf, box, "SEARCHING / LOST", T.C.AMBER)
 
     def _stepper_badge(self, surf, box, label, col):
-        r = pygame.Rect(box.right + 8, box.y, 170, box.h)
+        # keep the badge clear of the right sidebar (starts at x=1280) -
+        # a fixed 170px width ran text like "SEARCHING / LOST" straight
+        # into the sidebar and got clipped by it.
+        max_right = 1272
+        avail = max_right - (box.right + 8)
+        w = max(60, min(170, avail))
+        r = pygame.Rect(box.right + 8, box.y, w, box.h)
         pygame.draw.rect(surf, tuple(c // 5 for c in col), r)
         pygame.draw.rect(surf, col, r, 1)
-        T.text(surf, (r.centerx, r.centery), label, 11, col, bold=True, anchor="cc")
+        font_size = 11 if w >= 150 else 9
+        T.text(surf, (r.centerx, r.centery), label, font_size, col, bold=True, anchor="cc")
 
     def _draw_camera_story(self, surf, dest):
         """Right-edge FOV/beacon story: OUTSIDE FOV → ACQUISITION WINDOW →
@@ -369,6 +377,24 @@ class App:
         cx, cy = r.centerx, r.centery
         res = self.sim.last_result
 
+        # figure out the primary "locked beacon" anchor point (if any) up
+        # front, so other HUD labels can steer clear of it instead of
+        # printing text on top of each other when the boresight and the
+        # tracked beacon are close together (e.g. right after acquisition).
+        assoc = self.sim.tracker.associated
+        beacon_anchor = None
+        if assoc is not None and res["state"] == "LOCKED":
+            beacon_anchor = (int(assoc.u), int(assoc.v))
+
+        def _label_clear(pt, min_dist=34, *others):
+            """True if pt is far enough from beacon_anchor and any other
+            already-placed anchors that a text label here won't collide."""
+            for o in (beacon_anchor,) + others:
+                if o is not None:
+                    if (pt[0] - o[0]) ** 2 + (pt[1] - o[1]) ** 2 < min_dist ** 2:
+                        return False
+            return True
+
         if self.show_fov_grid:
             pygame.draw.line(cam, (40, 60, 80), (cx, r.top), (cx, r.bottom), 1)
             pygame.draw.line(cam, (40, 60, 80), (r.left, cy), (r.right, cy), 1)
@@ -382,7 +408,10 @@ class App:
             pygame.draw.line(cam, (120, 160, 200), (bx + 6, by), (bx + 18, by), 1)
             pygame.draw.line(cam, (120, 160, 200), (bx, by - 18), (bx, by - 6), 1)
             pygame.draw.line(cam, (120, 160, 200), (bx, by + 6), (bx, by + 18), 1)
-            T.text(cam, (bx, by - 24), "OPTICAL BORESIGHT", 8, (120, 160, 200), anchor="cc")
+            # when locked-on, the beacon label already sits right above this
+            # point - skip the boresight caption so the two don't overlap.
+            if _label_clear((bx, by)):
+                T.text(cam, (bx, by - 24), "OPTICAL BORESIGHT", 8, (120, 160, 200), anchor="cc")
 
         # ---- tracked / candidate overlays ----
         for i, c in enumerate(res.get("cand_list", [])):
@@ -390,7 +419,6 @@ class App:
             col = T.C.CYAN_DIM
             box = pygame.Rect(int(c.u) - 8, int(c.v) - 8, 16, 16)
             pygame.draw.rect(cam, col, box, 1)
-        assoc = self.sim.tracker.associated
         if assoc is not None and res["state"] == "LOCKED":
             apx, apy = int(assoc.u), int(assoc.v)
             # bright tracking ring + crosshair on the detected beacon
@@ -423,7 +451,8 @@ class App:
                     pygame.draw.line(cam, T.C.AMBER,
                                      (px + 9 * math.cos(a1), py + 9 * math.sin(a1)),
                                      (px + 9 * math.cos(a2), py + 9 * math.sin(a2)), 1)
-                T.text(cam, (px, py - 20), "SYNTH-EPHEMERIS PRED", 8, T.C.AMBER, anchor="cc")
+                if _label_clear((px, py), 34, bp):
+                    T.text(cam, (px, py - 20), "SYNTH-EPHEMERIS PRED", 8, T.C.AMBER, anchor="cc")
 
         # ---- search acquisition overlay ----
         if res["state"] == "SEARCHING":
@@ -569,7 +598,10 @@ class App:
         pygame.draw.circle(surf, T.C.RED, (cx, by), 6)
         pygame.draw.circle(surf, T.C.RED, (cx, by), 10, 1)
         T.text(surf, (cx, by - 16), "SAT-B", 8, T.C.RED, bold=True, anchor="cc")
-        T.text(surf, (cx, box.y + box.h - 14), f"{err * 1000:6.1f} mdeg", 11, col, bold=True, anchor="cc")
+        # pointing-error readout sits beside the beam line, at mid-height -
+        # it used to sit right on top of the "SAT-A" label at the bottom.
+        T.text(surf, (box.right - 2, (ay + by) // 2), f"{err * 1000:6.1f} mdeg", 11, col,
+               bold=True, anchor="tr")
 
     def _load_compare(self):
         """Load the last measured baseline-vs-adaptive benchmark (if any)."""
@@ -630,21 +662,24 @@ class App:
         ec = T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG else \
              (T.C.AMBER if err < 0.30 else T.C.RED)
         T.text(surf, (x + 12, y + 22), "POINTING ERROR", 8, T.C.TEXT_FAINT)
+        # the big readout gets the panel's full width to itself now - at
+        # font 26 it can run past 150px (e.g. "756.1 mdeg"), which used to
+        # print straight through the ACQ/RET/REACQ row beside it.
         T.text(surf, (x + 12, y + 30), f"{err * 1000:6.1f} mdeg", 26, ec, bold=True)
         acq = st["acquisition_time_s"]
         acq_s = f"{acq:.2f}s" if acq else "--"
         reacq = st["last_reacq_s"]
         reacq_s = f"{reacq:.2f}s" if reacq else f"{st['reacquisition_count']}ev"
         cols = [("ACQ", acq_s), ("RET", f"{st['retention_total_pct']:.1f}%"), ("REACQ", reacq_s)]
-        xx = x + 150
+        xx = x + 12
         for lab, val in cols:
-            T.text(surf, (xx, y + 24), lab, 8, T.C.TEXT_FAINT)
-            T.text(surf, (xx, y + 36), val, 14, T.C.TEXT, bold=True)
-            xx += 52
+            T.text(surf, (xx, y + 66), lab, 8, T.C.TEXT_FAINT)
+            T.text(surf, (xx, y + 78), val, 14, T.C.TEXT, bold=True)
+            xx += 92
         if self.show_diag:
             diag = (f"mean {st['mean_err_deg']*1000:.0f} · rms {st['rms_err_deg']*1000:.0f} "
                     f"· max {st['max_err_deg']*1000:.0f} mdeg · fps {st['fps']:.0f}")
-            T.text(surf, (x + 12, y + 90), diag, 8, T.C.TEXT_FAINT)
+            T.text(surf, (x + 12, y + 98), diag, 8, T.C.TEXT_FAINT)
         else:
             T.text(surf, (x + 12, y + 90), "DIAGNOSTICS › (click)", 8, T.C.TEXT_FAINT)
 
@@ -700,7 +735,10 @@ class App:
             s.draw(surf)
             unit = config.DISTURBANCE_UNITS.get(key, (None, ""))[1]
             if unit:
-                T.text(surf, (s.rect.x + 2, s.rect.y + 25), unit, 8, T.C.TEXT_FAINT)
+                # drawn on the label's own line, right-aligned - drawing it
+                # underneath the track used to collide with the next
+                # slider's label above it.
+                T.text(surf, (s.rect.right, s.rect.y - 6), unit, 8, T.C.TEXT_FAINT, anchor="tr")
 
     def _panel_controls(self, surf):
         x, y, w, h = 1288, 756, 304, 138

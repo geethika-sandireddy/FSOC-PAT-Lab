@@ -14,9 +14,26 @@ import math
 import random
 
 
+def _triangle(t, period, amp):
+    """Constant-velocity travel between -amp and +amp that reflects at the
+    endpoints - i.e. an actual straight line back and forth, not a curve."""
+    if period <= 0:
+        return 0.0
+    phase = (t % period) / period
+    tri = 1.0 - abs(2.0 * phase - 1.0)   # 0 -> 1 -> 0, linear segments
+    return -amp + 2.0 * amp * tri
+
+
 def straight_line(t, speed=1.15, amp_az=1.4, amp_el=0.9):
-    az = amp_az * math.sin(speed * 0.1 * t)
-    el = amp_el * math.sin(speed * 0.06 * t + 0.3)
+    """Genuine straight-line motion (PS mandatory type #1): constant angular
+    velocity along a line, reflecting off the travel bounds. Previously this
+    used sin(), which is a curve, not a straight line - mislabeled."""
+    v_az = max(speed * 0.055, 1e-6)
+    v_el = max(speed * 0.035, 1e-6)
+    period_az = (2.0 * amp_az) / v_az
+    period_el = (2.0 * amp_el) / v_el
+    az = _triangle(t, period_az, amp_az)
+    el = _triangle(t, period_el, amp_el)
     return az, el
 
 
