@@ -132,26 +132,36 @@ DIFFICULTY_PRESETS = {
         turbulence=5, vibration=2, sensor_noise=5, jerk_prob=0,
         beacon_fade=0, distractors=0, obstacles=0,
         az_amp=1.00, el_amp=0.60, speed=1.0,
+        noise_types=["gaussian"],
+        motion_type="straight_line",
     ),
     "MODERATE": dict(
         turbulence=20, vibration=8, sensor_noise=10, jerk_prob=1,
         beacon_fade=10, distractors=1, obstacles=1,
         az_amp=1.40, el_amp=0.90, speed=1.15,
+        noise_types=["gaussian"],
+        motion_type="figure_eight",
     ),
     "HARD": dict(
         turbulence=40, vibration=18, sensor_noise=18, jerk_prob=3,
         beacon_fade=30, distractors=2, obstacles=2,
         az_amp=1.80, el_amp=1.10, speed=1.35,
+        noise_types=["gaussian"],
+        motion_type="circular",
     ),
     "SEVERE": dict(
         turbulence=65, vibration=32, sensor_noise=28, jerk_prob=6,
         beacon_fade=45, distractors=4, obstacles=3,
         az_amp=2.20, el_amp=1.30, speed=1.65,
+        noise_types=["gaussian"],
+        motion_type="random",
     ),
     "ADVERSARIAL": dict(
         turbulence=85, vibration=45, sensor_noise=38, jerk_prob=9,
         beacon_fade=60, distractors=4, obstacles=4,
         az_amp=2.60, el_amp=1.60, speed=2.00,
+        noise_types=["gaussian"],
+        motion_type="figure_eight",
     ),
 }
 

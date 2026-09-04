@@ -28,6 +28,7 @@ class DisturbanceEngine:
         self.sensor_noise = sensor_noise
         self.jerk_prob = jerk_prob
         self.beacon_fade = beacon_fade      # 0-100: low -> beacon RMS intensity
+        self.noise_types = ["gaussian"]     # PS requires: gaussian, salt_pepper, poisson
         self._seed = seed
         self._rng = random.Random(seed)
         self._np = np.random.default_rng(seed)
@@ -121,18 +122,46 @@ class DisturbanceEngine:
             self._f32 = np.empty(sh, np.float32)
             self._acc = np.empty(sh, np.float32)
             self._out = np.empty(sh, np.uint8)
-        if sigma > 0:
+        self._acc[:] = frame
+
+        # Scale each noise type so the total energy stays bounded when
+        # multiple types are active simultaneously (PS: user-selectable).
+        active = [n for n in self.noise_types if n != "hot_pixels"]
+        n_types = max(1, len(active))
+
+        # 1. Gaussian (sigma-based, original)
+        if "gaussian" in self.noise_types and sigma > 0:
             self._np.standard_normal(sh, dtype=np.float32, out=self._f32)
-            self._f32 *= sigma
-        else:
-            self._f32.fill(0.0)
-        self._acc[:] = frame                       # uint8 -> float32 (reused)
-        np.add(self._acc, self._f32, out=self._acc)
+            self._f32 *= sigma / n_types
+            np.add(self._acc, self._f32, out=self._acc)
+
+        # 2. Salt & Pepper (PS: ~10% of image max; scaled down when combined)
+        if "salt_pepper" in self.noise_types and self.sensor_noise > 0:
+            density = (self.sensor_noise / 100.0) * 0.04 / n_types
+            n_total = int(density * h * w)
+            if n_total > 0:
+                ys = self._np.integers(0, h, n_total)
+                xs = self._np.integers(0, w, n_total)
+                half = n_total // 2
+                self._acc[ys[:half], xs[:half], :] = 0    # pepper
+                self._acc[ys[half:], xs[half:], :] = 255  # salt
+
+        # 3. Poisson shot noise (Gaussian approximation: sigma = sqrt(I))
+        if "poisson" in self.noise_types and self.sensor_noise > 0:
+            scale = (self.sensor_noise / 100.0) * 0.5 / n_types
+            self._np.standard_normal(sh, dtype=np.float32, out=self._f32)
+            sig = np.sqrt(np.clip(self._acc, 1, 255)) * scale
+            self._f32 *= sig
+            np.add(self._acc, self._f32, out=self._acc)
+            np.clip(self._acc, 0, 255, out=self._acc)
+
+        # Hot pixels (original feature, not counted as a noise_type)
         if n_hot > 0:
             ys = self._np.integers(0, h, n_hot)
             xs = self._np.integers(0, w, n_hot)
             val = self._np.integers(0, 2, n_hot) * 255
             self._acc[ys, xs, :] = val[:, None]
+
         np.clip(self._acc, 0, 255, out=self._acc)
-        self._out[:] = self._acc                   # float32 -> uint8 (reused)
+        self._out[:] = self._acc
         return self._out

@@ -136,11 +136,12 @@ class Scene3D:
     """Aggregates the world and owns the random-authority for reproducibility."""
 
     def __init__(self, az_amp=1.4, el_amp=0.9, speed=1.15, distractors=0,
-                 obstacles=0, seed=None):
+                 obstacles=0, seed=None, motion_type=None):
         self.rng = random.Random(seed)
         from core.orbital import RelativeOrbitModel
         self.orbit = RelativeOrbitModel(az_amp=az_amp, el_amp=el_amp,
-                                        speed=speed, seed=seed)
+                                        speed=speed, seed=seed,
+                                        motion_type=motion_type)
         self.beacon = Beacon(self.orbit, seed=seed)
         self.stars = Starfield(config.NUM_STARS, seed=seed)
         self.distractors = []

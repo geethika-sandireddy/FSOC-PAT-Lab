@@ -37,6 +37,7 @@ class Simulator:
             speed=preset["speed"],
             distractors=preset["distractors"],
             obstacles=preset["obstacles"], seed=seed,
+            motion_type=preset.get("motion_type"),
         )
         self.eph = EphemerisModel(self.scene.orbit, seed=seed)
         self.gimbal = Gimbal()
@@ -47,6 +48,8 @@ class Simulator:
             beacon_fade=preset.get("beacon_fade", 0),
             seed=seed,
         )
+        self.disturbance.noise_types = preset.get("noise_types",
+                                                    ["gaussian", "salt_pepper", "poisson"])
         self.detector = DetectionEngine()
         if tracker_factory is None:
             self.tracker = Tracker(self.eph, seed=seed)

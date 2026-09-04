@@ -30,13 +30,29 @@ for a real SGP4 call; nothing else in the pipeline changes.
 import math
 import random
 
+from core.motion import MOTION_TYPES
+
 
 class RelativeOrbitModel:
-    def __init__(self, az_amp=1.4, el_amp=0.9, speed=1.15, seed=None):
+    def __init__(self, az_amp=1.4, el_amp=0.9, speed=1.15, seed=None,
+                 motion_type=None):
         rnd = random.Random(seed)
         self.az_amp = az_amp
         self.el_amp = el_amp
         self.speed = speed
+        # PS-mandated selectable motion type (straight_line, circular, figure_eight, random)
+        self._motion_type = motion_type
+        if motion_type is not None and motion_type in MOTION_TYPES:
+            factory = MOTION_TYPES[motion_type]
+            if motion_type == "random":
+                self._motion_fn = factory(speed=speed, seed=seed,
+                                          amp_az=az_amp, amp_el=el_amp)
+            else:
+                self._motion_fn = None  # use direct call
+            self._is_custom = True
+        else:
+            self._is_custom = False
+            self._motion_fn = None
         # Parameterised relative-motion model (see module docstring).
         self.az_omega = rnd.uniform(0.090, 0.120) * speed      # rad/s
         self.el_omega = rnd.uniform(0.045, 0.070) * speed      # rad/s
@@ -47,6 +63,12 @@ class RelativeOrbitModel:
         self.range_omega = rnd.uniform(0.03, 0.06)
 
     def relative_los_az_el(self, t):
+        if self._is_custom:
+            if self._motion_fn is not None:
+                return self._motion_fn(t)
+            fn = MOTION_TYPES[self._motion_type]
+            return fn(t, speed=self.speed, amp_az=self.az_amp,
+                      amp_el=self.el_amp)
         az = self.az_amp * math.sin(self.az_omega * t + self.az_phase)
         el = self.el_amp * math.sin(self.el_omega * t + self.el_phase)
         return az, el
