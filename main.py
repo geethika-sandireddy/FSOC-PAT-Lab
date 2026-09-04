@@ -55,10 +55,11 @@ class App:
         self.clock = pygame.time.Clock()
 
         self.preset = preset
-        self.platform_mode = platform_mode
-        self.atmosphere = atmosphere
+        self.platform_mode = platform_mode or "SATELLITE_SATELLITE"
+        self.atmosphere = atmosphere or "CLEAR"
         self.sim = Simulator(preset_name=preset, seed=seed,
-                             platform_mode=platform_mode, atmosphere=atmosphere)
+                             platform_mode=self.platform_mode,
+                             atmosphere=self.atmosphere)
         self.perf = PerformanceTracker()
         self.paused = False
         self.show_fov_grid = True
@@ -88,6 +89,20 @@ class App:
         for name in config.PRESET_ORDER:
             self.chips[name] = W.Chip((xs, 12, 60, 26), name, T.C.CYAN)
             xs += 66
+        # platform-mode chips (PS 26169: Sat-Sat, UAV-Sat, UAV-UAV) + atmosphere
+        self.platform_chips = {}
+        pm_x = 800
+        for pm in ["SATELLITE_SATELLITE", "UAV_SATELLITE", "UAV_UAV"]:
+            label = {"SATELLITE_SATELLITE": "SAT-SAT",
+                     "UAV_SATELLITE": "UAV-SAT",
+                     "UAV_UAV": "UAV-UAV"}[pm]
+            self.platform_chips[pm] = W.Chip((pm_x, 12, 72, 26), label, T.C.GREEN)
+            pm_x += 78
+        self.atmos_chips = {}
+        at_x = 1040
+        for atm in ["CLEAR", "HAZE", "FOG", "RAIN", "LOW_LIGHT"]:
+            self.atmos_chips[atm] = W.Chip((at_x, 12, 66, 26), atm, T.C.AMBER)
+            at_x += 72
         self.buttons = {
             "PAUSE": W.Button((1296, 772, 92, 30), "PAUSE", T.C.AMBER),
             "RESET": W.Button((1396, 772, 92, 30), "RESET", T.C.CYAN),
@@ -168,6 +183,16 @@ class App:
             name = config.PRESET_ORDER[key - pygame.K_1]
             self.preset = name
             self._reset(name)
+        elif pygame.K_6 <= key <= pygame.K_8:
+            pm = list(self.platform_chips.keys())[key - pygame.K_6]
+            if pm != self.platform_mode:
+                self.platform_mode = pm
+                self._reset()
+        elif pygame.K_a == key:
+            names = list(self.atmos_chips.keys())
+            idx = (names.index(self.atmosphere) + 1) % len(names)
+            self.atmosphere = names[idx]
+            self._reset()
         return True
 
     def _mouse_down(self, pos, button):
@@ -191,6 +216,16 @@ class App:
             if button == 1 and c.hit(pos):
                 self.preset = name
                 self._reset(name)
+                return
+        for name, c in self.platform_chips.items():
+            if button == 1 and c.hit(pos):
+                self.platform_mode = name
+                self._reset()
+                return
+        for name, c in self.atmos_chips.items():
+            if button == 1 and c.hit(pos):
+                self.atmosphere = name
+                self._reset()
                 return
         for s in self.sliders.values():
             if button == 1 and s.hit(pos):
@@ -266,10 +301,22 @@ class App:
         T.text(surf, (first_chip_x, 2), "SCENARIO", 8, T.C.TEXT_FAINT)
         for name, c in self.chips.items():
             c.draw(surf, selected=(name == self.preset))
+        # platform mode chips
+        pm0 = min(c.rect.x for c in self.platform_chips.values())
+        T.text(surf, (pm0, 2), "PLATFORM", 8, T.C.TEXT_FAINT)
+        for name, c in self.platform_chips.items():
+            sel = (name == self.platform_mode)
+            c.draw(surf, selected=sel)
+        # atmosphere chips
+        at0 = min(c.rect.x for c in self.atmos_chips.values())
+        T.text(surf, (at0, 2), "ATMOSPHERE", 8, T.C.TEXT_FAINT)
+        for name, c in self.atmos_chips.items():
+            c.draw(surf, selected=(name == self.atmosphere))
         # global mission status badge on the camera right edge is drawn in camera
 
     def _draw_footer(self, surf):
-        T.text(surf, (8, APP_H - 16), "SPACE pause · R reset · S shot · 1-5 scenario · F fullscreen · V FOV grid",
+        T.text(surf, (8, APP_H - 16),
+               "SPACE pause · R reset · S shot · 1-5 scenario · 6-8 platform · A atmosphere · F fullscreen · V FOV grid",
                9, T.C.TEXT_FAINT)
 
     def _draw_camera(self, surf):
@@ -639,9 +686,13 @@ class App:
         res = self.sim.last_result
         st = res["state"]
         lock = st == "LOCKED"
+        pm_label = {"SATELLITE_SATELLITE": "SAT-SAT",
+                    "UAV_SATELLITE": "UAV-SAT", "UAV_UAV": "UAV-UAV"}.get(
+                        self.platform_mode, self.platform_mode)
         rows = [
             ("Observer", "SAT-A"),
             ("Target", "SAT-B  (optical beacon)"),
+            ("Link", pm_label + "  ·  " + (self.atmosphere or "CLEAR")),
             ("Status", "TRACKING" if st == "LOCKED" else
                        ("SEARCH" if st == "SEARCHING" else "COAST")),
         ]
@@ -650,7 +701,7 @@ class App:
         for lab, val in rows:
             T.text(surf, (x + 12, yy), lab, 10, T.C.TEXT_FAINT)
             T.text(surf, (x + 96, yy), val, 11, col if lab == "Status" else T.C.TEXT, bold=(lab == "Status"))
-            yy += 18
+            yy += 14
 
     def _panel_geometry(self, surf):
         # relative-LOS mission-geometry map
