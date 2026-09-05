@@ -83,7 +83,9 @@ GIMBAL_ACCEL_DEG_S2 = 14.0            # acceleration limit (inertia)
 GIMBAL_SERVO_KP = 25.0                # position gain  [1/s^2]
 GIMBAL_SERVO_KD = 10.0                # velocity damping [1/s]  (= 2*sqrt(kp))
 GIMBAL_LATENCY_FRAMES = 2            # measurement->command response delay
-GIMBAL_STABIZATION_REJECT = 0.80     # inner-loop disturbance rejection (0-1)
+GIMBAL_STABIZATION_REJECT = 0.97        # reject gimbal corrections while the LOS
+                                        # estimator is still converging after the
+                                        # stabilization response (false-lock guard)0     # inner-loop disturbance rejection (0-1)
 
 # ---------------------------------------------------------------------------
 # Detection (Block D - front end)
@@ -106,9 +108,9 @@ MIN_BEACON_AREA_NORM = 0.10
 TRACK_ASSOC_RADIUS_DEG = 0.10        # two blobs closer than this = same object
 TRACK_MISS_TOL = 3                   # frames an ID survives while unseen
 PERSISTENCE_BOOST = 1.35             # acquisition fusion multiplier for age>=2 tracks
-MOD_ASSOC_K = 3.2                    # how strongly a blob's own 15 Hz amplitude
-                                     # modulation score lifts its association/fusion
-                                     # score (beacon blinks -> wins over decoys)
+MOD_ASSOC_K = 1.6                    # how strongly a blob's own 15 Hz modulation
+                                     # score lifts its association/fusion score
+                                     # (beacon blinks -> wins over static decoys)
 
 # ---------------------------------------------------------------------------
 # Estimation / tracking state machine
@@ -128,7 +130,7 @@ FUSION_WEIGHT_ML = 0.45              # fusion: appearance score weight
 SEARCH_GROWTH_DEG_S = 0.55           # spiral search speed (deg/s)
 SEARCH_MAX_RADIUS_DEG = 3.2
 ESTIMATOR_ALPHA = 0.35               # bias-tracking filter gain (lower = smoother)
-CONTROL_VEL_EMA = 0.30               # set-point velocity feedforward smoothing
+CONTROL_VEL_EMA = 0.6               # set-point velocity feedforward smoothing
 
 # ---------------------------------------------------------------------------
 # Disturbance engine (each 0-100, independently controllable)
