@@ -144,12 +144,17 @@ class DetectionEngine:
         self._track_seq = 0
 
     # ------------------------------------------------------------------
-    def detect(self, frame_bgr, gimbal_basis, focal_px):
+    def detect(self, frame_bgr, gimbal_basis, focal_px,
+               cu=config.PRINCIPAL_U, cv=config.PRINCIPAL_V):
         """Detect bright candidate blobs in the sensor frame.
 
         Returns a list of Candidate objects, sorted by appearance-score.
         Each Candidate carries its measurement in *view-local pixels* AND
         its implied world LOS (az, el) via the encoder pose (gimbal_basis).
+
+        cu / cv default to the virtual-camera principal point; video-mode
+        (Benchmark-2) callers pass the input video's own centre so an
+        arbitrary-resolution MP4 maps to LOS correctly.
         """
         self._frame += 1
         grey = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
@@ -233,7 +238,7 @@ class DetectionEngine:
             )
             cand.los_az, cand.los_el = geometry.ray_to_azel(
                 cx, cy, focal_px, gimbal_basis,
-                cu=config.PRINCIPAL_U, cv=config.PRINCIPAL_V)
+                cu=cu, cv=cv)
             self._associate(cand)
             candidates.append(cand)
 

@@ -85,7 +85,7 @@ class Slider:
     def __init__(self, rect, label, value=0, color=T.C.CYAN, fmt="{:>3d}"):
         self.rect = pygame.Rect(rect)
         self.label = label
-        self.value = clampf(value, 0, 100)
+        self.value = int(round(clampf(value, 0, 100)))
         self.color = color
         self.fmt = fmt
         self.dragging = False
@@ -95,7 +95,7 @@ class Slider:
         return self.value / 100.0
 
     def set_frac(self, f):
-        self.value = clampf(f * 100.0, 0, 100)
+        self.value = int(round(clampf(f * 100.0, 0, 100)))
 
     def hit(self, pos):
         return self.rect.collidepoint(pos)

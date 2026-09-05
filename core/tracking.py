@@ -174,8 +174,16 @@ class ModulationTrack:
 
 
 class Tracker:
-    def __init__(self, ephemeris_model, seed=None):
+    def __init__(self, ephemeris_model, seed=None, video_mode=False,
+                 gate_deg=config.ASSOC_GATE_DEG):
         self.eph = ephemeris_model
+        # video_mode=True (Benchmark-2 MP4 bypass): an external video feeds the
+        # coarse-pointing loop.  Its beacon has no known 15 Hz modulation clock,
+        # so acquisition / lock-hold use appearance + temporal persistence
+        # confidence instead of the modulation correlator.  The strict
+        # modulation gate stays fully active in the synthetic scene mode.
+        self.video_mode = video_mode
+        self.gate_deg = gate_deg
         self.state = SEARCHING
         self.est_az = None
         self.est_el = None
@@ -212,6 +220,8 @@ class Tracker:
 
     # ------------------------------------------------------------------
     def _prior_gate_deg(self, t):
+        if self.video_mode:
+            return self.gate_deg * 1.2
         return min(2.2, 0.55 + 0.28 * math.sqrt(t))
 
     def update(self, candidates, t, dt):
@@ -242,12 +252,24 @@ class Tracker:
             # loop gives a persistent area-modulated blob a strong edge over
             # static beacon-like decoys without ever wrong-restricting (all
             # candidates remain eligible, so no coast-loss when mod dips).
+            # Video mode (Benchmark-2): the DetectionEngine's own persistent
+            # track IDs are the identity - bind to the last associated ID so a
+            # high-scoring noise blob cannot steal a lock once the beacon is
+            # being tracked.
             best = None
-            for c in candidates:
-                d = math.hypot(c.los_az - self.est_az, c.los_el - self.est_el)
-                if d < config.ASSOC_GATE_DEG:
-                    if best is None or c.fusion_score > best.fusion_score:
-                        best = c
+            if self.video_mode and self.associated is not None:
+                held_id = getattr(self.associated, "track_id", None)
+                if held_id is not None:
+                    for c in candidates:
+                        if getattr(c, "track_id", None) == held_id:
+                            best = c
+                            break
+            if best is None:
+                for c in candidates:
+                    d = math.hypot(c.los_az - self.est_az, c.los_el - self.est_el)
+                    if d < self.gate_deg:
+                        if best is None or c.fusion_score > best.fusion_score:
+                            best = c
             if best is not None:
                 self.last_candidate_age = 0.0
                 self.last_candidate_az, self.last_candidate_el = best.los_az, best.los_el
@@ -316,9 +338,14 @@ class Tracker:
         # enough temporally-consistent frames AND enough modulation samples
         need_samples = int(config.MOD_CORREL_WIN * 0.8)
         if self._tent_frames >= config.ACQUIRE_CONFIRM_FRAMES:
-            if len(self.mod.values) < need_samples:
+            if not self.video_mode and len(self.mod.values) < need_samples:
                 # keep gathering evidence (spatial consistency already proven)
                 pass
+            elif self.video_mode:
+                # external-video beacon: appearance + spatial consistency over
+                # ACQUIRE_CONFIRM_FRAMES is enough - no modulation clock to test
+                self._commit(c.los_az, c.los_el, t)
+                return self.state, self.est_az, self.est_el, max(0.5, c.ml_score)
             elif c.mod_score >= config.MOD_LOCK_THRESHOLD:
                 self._commit(c.los_az, c.los_el, t)
                 return self.state, self.est_az, self.est_el, c.mod_score
@@ -336,7 +363,9 @@ class Tracker:
         c.mod_score = self.mod.corr()
         # continuous modulation verification: a locked object that STOPPED
         # matching the beacon signature is a false lock -> drop back to search
-        if c.mod_score < config.MOD_SUSPECT_FLOOR:
+        # (video mode has no modulation clock, so it relies on the persistent,
+        # bright associated blob as the beacon identity).
+        if not self.video_mode and c.mod_score < config.MOD_SUSPECT_FLOOR:
             self._suspect += 1
             if self._suspect >= config.MOD_SUSPECT_DROP_FRAMES:
                 self._suspect = 0
@@ -347,7 +376,7 @@ class Tracker:
                 return SEARCHING, self.est_az, self.est_el, self.confidence
         else:
             self._suspect = 0
-        self.confidence = c.mod_score
+        self.confidence = c.ml_score if self.video_mode else c.mod_score
         self.state = LOCKED
         self.coast_time = 0.0
         self._tent_az = self._tent_el = None

@@ -1,19 +1,20 @@
 """
 metrics/mp4_bypass.py
 ---------------------
-PTZ-camera bypass: takes a pre-recorded .mp4 video file as input instead of
-the virtual scene, detects the beacon centroid in each frame, and computes
-tracking metrics (centroiding error in pixels).
+PTZ-camera bypass (Benchmark-2 of PS 26169): takes a pre-recorded .mp4 video
+file as the camera input instead of the virtual scene, pushes each frame
+through the *real* detection -> tracking -> control pipeline
+(core.simulator.VideoInputSimulator), and produces the mandatory
+centroiding/performance report.
 
-Benchmark 2 (30% of evaluation): judges provide .mp4 files with a moving
-beacon spot and noise.  The software must process the video and output:
-  - centroiding error (pixels from frame center) per frame
-  - acquisition time, re-acquisition time, lock retention, FPS
-  - automatically generated performance log (CSV)
+The graded metrics are computed against the generator's ground-truth sidecar
+(``<video>_truth.csv``,  columns frame,t,bx,by) when present - those are the
+"predefined error values" the judges compare against.  Without ground truth
+the report still logs the system's own centroid + error from frame centre.
 
 Usage:
-    python -m metrics.mp4_bypass --input video.mp4 --output logs/bypass_report.csv
-    python -m metrics.mp4_bypass --input video.mp4   # prints summary to stdout
+    python -m metrics.mp4_bypass --input video.mp4                # summary
+    python -m metrics.mp4_bypass --input video.mp4 --output log.csv
 """
 
 import argparse
@@ -21,192 +22,84 @@ import csv
 import os
 import time
 
-import cv2
 import numpy as np
 
 import config
-
-
-def _detect_beacon_centroid(frame_gray, min_area=4, max_area=5000):
-    """Simple blob centroid detection on a grayscale frame.
-    Returns (cx, cy, area) or None if no beacon found.
-
-    Method: adaptive threshold + contour detection (same family as our
-    DetectionEngine but operating on raw pixels rather than projected coords).
-    """
-    blur = cv2.GaussianBlur(frame_gray, (5, 5), 1.2)
-    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL,
-                                   cv2.CHAIN_APPROX_SIMPLE)
-    best = None
-    best_area = 0
-    h, w = frame_gray.shape[:2]
-    cx_frame, cy_frame = w / 2.0, h / 2.0
-
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < min_area or area > max_area:
-            continue
-        M = cv2.moments(cnt)
-        if M["m00"] == 0:
-            continue
-        cx = M["m10"] / M["m00"]
-        cy = M["m01"] / M["m00"]
-        # prefer bright blobs near centre (heuristic: beacon is bright)
-        intensity = float(frame_gray[int(round(cy)), int(round(cx))]) if \
-            (0 <= int(round(cy)) < h and 0 <= int(round(cx)) < w) else 0
-        if intensity > 80 and area > best_area:
-            best = (cx, cy, area)
-            best_area = area
-
-    return best
-
-
-def _centroid_error_pixels(cx, cy, w, h):
-    """Distance of beacon centroid from frame centre in pixels."""
-    return float(np.hypot(cx - w / 2.0, cy - h / 2.0))
+from core.simulator import VideoInputSimulator
 
 
 def run_bypass(input_path, output_path=None, verbose=True):
-    """Process an MP4 video file and compute tracking metrics.
+    """Process an MP4 through the real coarse-pointing loop."""
+    truth_csv = os.path.splitext(input_path)[0] + "_truth.csv"
+    if not os.path.isfile(truth_csv):
+        truth_csv = None
 
-    Returns a dict of metrics identical in structure to live_stats().
-    """
-    cap = cv2.VideoCapture(input_path)
-    if not cap.isOpened():
-        raise FileNotFoundError(f"Cannot open video: {input_path}")
-
-    fps_vid = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    dt = 1.0 / fps_vid
-    errors_px = []
-    locked_frames = 0
-    visible_frames = 0
-    acquisition_time = None
-    reacq_times = []
-    lock_lost_at = None
-    was_locked = False
-    lock_events = 0
-    false_lock_events = 0
-    _false_lock_count = 0
-    frame_idx = 0
+    sim = VideoInputSimulator(input_path, truth_csv=truth_csv)
     t0 = time.time()
-
-    # PS thresholds (convert from config to pixels)
-    lock_threshold_px = config.FINE_ACQUISITION_REGION_DEG * config.PIXELS_PER_DEG
-    false_lock_threshold_px = 0.35 * config.PIXELS_PER_DEG
-
     while True:
-        ret, frame = cap.read()
-        if not ret:
+        res = sim.step()
+        if res is None:
             break
-
-        t_frame = frame_idx * dt
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        det = _detect_beacon_centroid(gray)
-        visible = det is not None
-        visible_frames += 1
-
-        if visible:
-            cx, cy, area = det
-            err_px = _centroid_error_pixels(cx, cy, width, height)
-            errors_px.append(err_px)
-
-            # lock logic: beacon detected and within threshold
-            is_locked = err_px < lock_threshold_px
-            if is_locked:
-                locked_frames += 1
-                if acquisition_time is None:
-                    acquisition_time = t_frame
-                    lock_events += 1
-                elif not was_locked:
-                    # re-acquisition
-                    if lock_lost_at is not None:
-                        reacq_times.append(t_frame - lock_lost_at)
-                        lock_lost_at = None
-                    lock_events += 1
-                # false-lock check (centroid far from centre but "locked")
-                if err_px > false_lock_threshold_px:
-                    _false_lock_count += 1
-                    if _false_lock_count == 5:
-                        false_lock_events += 1
-                else:
-                    _false_lock_count = 0
-            else:
-                _false_lock_count = 0
-                if was_locked:
-                    lock_lost_at = t_frame
-        else:
-            _false_lock_count = 0
-            is_locked = False
-            errors_px.append(float(width))  # worst-case error when lost
-            if was_locked:
-                lock_lost_at = t_frame
-
-        was_locked = is_locked if visible else False
-        frame_idx += 1
-
-    cap.release()
     wall = time.time() - t0
 
-    n = len(errors_px)
-    mean_err_px = float(np.mean(errors_px)) if n else 0.0
-    rms_err_px = float(np.sqrt(np.mean(np.array(errors_px) ** 2))) if n else 0.0
-    max_err_px = float(np.max(errors_px)) if n else 0.0
-    sorted_errs = sorted(errors_px)
-    p95_err_px = sorted_errs[int(n * 0.95) - 1] if n > 0 else 0.0
-    ret_pct = (locked_frames / total_frames * 100) if total_frames else 0.0
-    success_pct = (locked_frames / visible_frames * 100) if visible_frames else 0.0
-    mean_reacq = float(np.mean(reacq_times)) if reacq_times else None
-    mean_err_deg = mean_err_px / config.PIXELS_PER_DEG
-    rms_err_deg = rms_err_px / config.PIXELS_PER_DEG
-    p95_err_deg = p95_err_px / config.PIXELS_PER_DEG
+    total_frames = sim.total_frames
+    locked = [s for (_, s) in sim.lock_history].count("LOCKED")
+
+    errs = np.array([e[1] for e in sim.centroid_err_log])
+    locked_errs = np.array([
+        e[1] for e in sim.centroid_err_log
+        if sim.lock_history[e[0] - 1][1] == "LOCKED"]) if sim.lock_history \
+        else errs
 
     stats = dict(
         fps=total_frames / wall if wall > 0 else 0.0,
-        mean_err_deg=mean_err_deg,
-        max_err_deg=max_err_px / config.PIXELS_PER_DEG,
-        rms_err_deg=rms_err_deg,
-        p95_err_deg=p95_err_deg,
-        mean_err_px=mean_err_px,
-        p95_err_px=p95_err_px,
-        max_err_px=max_err_px,
-        acquisition_time_s=acquisition_time,
-        retention_total_pct=ret_pct,
-        success_rate_pct=success_pct,
-        reacquisition_count=len(reacq_times),
-        mean_reacq_s=mean_reacq,
-        last_reacq_s=reacq_times[-1] if reacq_times else None,
-        false_lock_events=false_lock_events,
-        lock_events=lock_events,
+        video_fps=sim.video_fps,
+        width=sim.video_w,
+        height=sim.video_h,
+        total_frames=total_frames,
+        acquisition_time_s=sim.acquisition_time_s,
+        retention_total_pct=(locked / total_frames * 100) if total_frames else 0.0,
+        centroid_mean_px=float(np.mean(errs)) if errs.size else 0.0,
+        centroid_rms_px=float(np.sqrt(np.mean(errs ** 2))) if errs.size else 0.0,
+        centroid_p95_px=float(np.percentile(errs, 95)) if errs.size else 0.0,
+        centroid_max_px=float(np.max(errs)) if errs.size else 0.0,
+        locked_centroid_mean_px=(
+            float(np.mean(locked_errs)) if locked_errs.size else 0.0),
+        locked_centroid_p95_px=(
+            float(np.percentile(locked_errs, 95)) if locked_errs.size else 0.0),
+        reacquisition_count=len(sim.reacq_times),
+        mean_reacq_s=(float(np.mean(sim.reacq_times))
+                      if sim.reacq_times else None),
+        false_lock_events=sim.false_lock_events,
+        used_ground_truth=truth_csv is not None,
     )
 
     if verbose:
-        print(f"\n{'='*56}")
-        print(f"  MP4 BYPASS RESULTS  ({os.path.basename(input_path)})")
-        print(f"{'='*56}")
-        print(f"  Video: {width}x{height} @ {fps_vid:.1f} fps, "
-              f"{total_frames} frames ({total_frames/fps_vid:.1f}s)")
+        print(f"\n{'='*60}")
+        print(f"  MP4 BYPASS (Benchmark-2)  ::  {os.path.basename(input_path)}")
+        print(f"{'='*60}")
+        print(f"  Video: {sim.video_w}x{sim.video_h} @ {sim.video_fps:.1f} fps, "
+              f"{total_frames} frames ({total_frames/sim.video_fps:.1f}s)")
+        print(f"  Ground truth: {'YES (' + os.path.basename(truth_csv) + ')'
+              if truth_csv else 'not supplied (frame-centre error logged)'}")
         print(f"  Processing: {wall:.2f}s wall, {stats['fps']:.0f} fps")
-        print(f"  {'-'*56}")
-        print(f"  Acquisition time:    {acquisition_time:.3f}s" if acquisition_time
-              else "  Acquisition time:    NEVER LOCKED")
-        print(f"  Retention:           {ret_pct:.1f}%")
-        print(f"  Success rate:        {success_pct:.1f}%")
-        print(f"  Mean centroid error: {mean_err_px:.1f} px  ({mean_err_deg:.4f} deg)")
-        print(f"  P95 centroid error:  {p95_err_px:.1f} px  ({p95_err_deg:.4f} deg)")
-        print(f"  Max centroid error:  {max_err_px:.1f} px")
-        print(f"  Lock events:         {lock_events}")
-        print(f"  Re-acquisitions:     {len(reacq_times)}"
-              + (f"  (mean {mean_reacq:.3f}s)" if mean_reacq else ""))
-        print(f"  False locks:         {false_lock_events}")
-        print(f"{'='*56}")
+        print(f"  {'-'*60}")
+        print(f"  Acquisition time:        "
+              f"{stats['acquisition_time_s']:.3f}s"
+              if stats["acquisition_time_s"]
+              else "  Acquisition time:        NEVER LOCKED")
+        print(f"  Lock retention:          {stats['retention_total_pct']:.1f}%")
+        print(f"  Centroiding err (all):   mean {stats['centroid_mean_px']:.2f} px   "
+              f"RMS {stats['centroid_rms_px']:.2f}   "
+              f"p95 {stats['centroid_p95_px']:.2f}   max {stats['centroid_max_px']:.2f}")
+        print(f"  Centroiding err (locked):mean {stats['locked_centroid_mean_px']:.2f} px   "
+              f"p95 {stats['locked_centroid_p95_px']:.2f}")
+        print(f"  Re-acquisitions:         {stats['reacquisition_count']}"
+              + (f"  (mean {stats['mean_reacq_s']:.3f}s)"
+                 if stats["mean_reacq_s"] else ""))
+        print(f"  False locks:             {stats['false_lock_events']}")
+        print(f"{'='*60}")
 
-    # --- auto-generated performance log (mandatory deliverable) ---
     if output_path is None:
         os.makedirs(config.LOG_DIR, exist_ok=True)
         output_path = os.path.join(config.LOG_DIR,
@@ -215,35 +108,35 @@ def run_bypass(input_path, output_path=None, verbose=True):
         w = csv.writer(f)
         w.writerow(["metric", "value"])
         w.writerow(["input_file", os.path.basename(input_path)])
-        w.writerow(["video_resolution", f"{width}x{height}"])
-        w.writerow(["video_fps", round(fps_vid, 2)])
+        w.writerow(["video_resolution", f"{sim.video_w}x{sim.video_h}"])
+        w.writerow(["video_fps", round(sim.video_fps, 2)])
         w.writerow(["total_frames", total_frames])
         w.writerow(["processing_fps", round(stats["fps"], 2)])
+        w.writerow(["ground_truth_used", "yes" if truth_csv else "no"])
         w.writerow(["acquisition_time_s",
-                     round(acquisition_time, 3) if acquisition_time else "never_locked"])
-        w.writerow(["centroiding_error_mean_px", round(mean_err_px, 2)])
-        w.writerow(["centroiding_error_mean_deg", round(mean_err_deg, 4)])
-        w.writerow(["centroiding_error_p95_px", round(p95_err_px, 2)])
-        w.writerow(["centroiding_error_p95_deg", round(p95_err_deg, 4)])
-        w.writerow(["centroiding_error_max_px", round(max_err_px, 2)])
-        w.writerow(["centroiding_error_rms_px", round(rms_err_px, 2)])
-        w.writerow(["lock_retention_pct", round(ret_pct, 2)])
-        w.writerow(["tracking_success_pct", round(success_pct, 2)])
-        w.writerow(["lock_events", lock_events])
-        w.writerow(["reacquisition_count", len(reacq_times)])
+                    round(stats["acquisition_time_s"], 3)
+                    if stats["acquisition_time_s"] else "never_locked"])
+        w.writerow(["centroiding_error_mean_px", round(stats["centroid_mean_px"], 2)])
+        w.writerow(["centroiding_error_rms_px", round(stats["centroid_rms_px"], 2)])
+        w.writerow(["centroiding_error_p95_px", round(stats["centroid_p95_px"], 2)])
+        w.writerow(["centroiding_error_max_px", round(stats["centroid_max_px"], 2)])
+        w.writerow(["centroiding_error_locked_mean_px",
+                    round(stats["locked_centroid_mean_px"], 2)])
+        w.writerow(["centroiding_error_locked_p95_px",
+                    round(stats["locked_centroid_p95_px"], 2)])
+        w.writerow(["lock_retention_pct", round(stats["retention_total_pct"], 2)])
+        w.writerow(["reacquisition_count", stats["reacquisition_count"]])
         w.writerow(["mean_reacquisition_s",
-                     round(mean_reacq, 3) if mean_reacq else "n/a"])
-        w.writerow(["false_lock_events", false_lock_events])
-
+                    round(stats["mean_reacq_s"], 3) if stats["mean_reacq_s"] else "n/a"])
+        w.writerow(["false_lock_events", stats["false_lock_events"]])
     if verbose:
         print(f"  Performance log -> {output_path}")
-
     return stats
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="PTZ bypass: process MP4 video with beacon tracking")
+        description="Benchmark-2: process MP4 through the real coarse-pointing loop")
     ap.add_argument("--input", "-i", required=True,
                     help="Path to input .mp4 video file")
     ap.add_argument("--output", "-o", default=None,

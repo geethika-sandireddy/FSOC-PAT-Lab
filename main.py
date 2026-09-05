@@ -48,7 +48,8 @@ class App:
     def __init__(self, preset="EASY", seed=None, fullscreen=False,
                  platform_mode=None, atmosphere=None,
                  motion_type=None, target_shape=None, target_size=None,
-                 num_targets=None, target_initial=None):
+                 num_targets=None, target_initial=None,
+                 video_path=None):
         pygame.init()
         flags = pygame.FULLSCREEN | pygame.SCALED if fullscreen else 0
         self.screen = pygame.display.set_mode((APP_W, APP_H),
@@ -64,14 +65,24 @@ class App:
         self.size_override = target_size
         self.targets_override = num_targets
         self.initial_override = target_initial
-        self.sim = Simulator(preset_name=preset, seed=seed,
-                             platform_mode=self.platform_mode,
-                             atmosphere=self.atmosphere,
-                             motion_type=self.motion_override,
-                             target_shape=self.shape_override,
-                             target_size=self.size_override,
-                             num_targets=self.targets_override,
-                             target_initial=self.initial_override)
+        self.video_path = video_path
+        self.video_done = False
+        if video_path:
+            from core.simulator import VideoInputSimulator
+            truth = os.path.splitext(video_path)[0] + "_truth.csv"
+            self.sim = VideoInputSimulator(
+                video_path, truth_csv=truth if os.path.isfile(truth) else None)
+            self.video_mode = True
+        else:
+            self.sim = Simulator(preset_name=preset, seed=seed,
+                                 platform_mode=self.platform_mode,
+                                 atmosphere=self.atmosphere,
+                                 motion_type=self.motion_override,
+                                 target_shape=self.shape_override,
+                                 target_size=self.size_override,
+                                 num_targets=self.targets_override,
+                                 target_initial=self.initial_override)
+            self.video_mode = False
         self.perf = PerformanceTracker()
         self.paused = False
         self.show_fov_grid = True
@@ -120,7 +131,8 @@ class App:
             "RESET": W.Button((1396, 772, 92, 30), "RESET", T.C.CYAN),
             "SHOT": W.Button((1296, 806, 92, 30), "SHOT", T.C.GREEN),
             "GT": W.Button((1396, 806, 92, 30), "GT OFF", T.C.PURPLE),
-            "DIAG": W.Button((1296, 840, 192, 26), "DIAGNOSTICS ›", T.C.TEXT_FAINT),
+            "DIAG": W.Button((1296, 840, 92, 30), "DIAGNOSTICS ›", T.C.TEXT_FAINT),
+            "LOAD_VIDEO": W.Button((1396, 840, 196, 30), "LOAD MP4 ▶", T.C.AMBER),
         }
         self._screenshot_n = 0
 
@@ -160,8 +172,13 @@ class App:
                 elif ev.type == pygame.MOUSEMOTION:
                     self._mouse_move(ev.pos, ev.buttons)
 
-            if not self.paused:
+            if not self.paused and not self.video_done:
                 res = self.sim.step()
+                if res is None:           # video ended
+                    self.video_done = True
+                    self._draw()
+                    pygame.display.flip()
+                    break
                 self.perf.record_frame(self.sim)
                 if res["state"] == "LOCKED":
                     self.error_spark.append(res["pointing_err_deg"])
@@ -184,6 +201,8 @@ class App:
             self._reset()
         elif pygame.K_s == key:
             self._screenshot()
+        elif pygame.K_l == key:
+            self._load_video()
         elif pygame.K_v == key:
             self.show_fov_grid = not self.show_fov_grid
         elif pygame.K_f == key:
@@ -223,6 +242,8 @@ class App:
                 elif name == "DIAG":
                     self.show_diag = not self.show_diag
                     b.label = "DIAGNOSTICS ‹" if self.show_diag else "DIAGNOSTICS ›"
+                elif name == "LOAD_VIDEO":
+                    self._load_video()
                 return
         for name, c in self.chips.items():
             if button == 1 and c.hit(pos):
@@ -250,6 +271,20 @@ class App:
                 s.drag_to(pos[0])
 
     def _reset(self, name=None):
+        if self.video_mode:
+            # restart the video from frame 0
+            from core.simulator import VideoInputSimulator
+            truth = os.path.splitext(self.video_path)[0] + "_truth.csv"
+            self.sim = VideoInputSimulator(
+                self.video_path,
+                truth_csv=truth if os.path.isfile(truth) else None)
+            self.video_done = False
+            self.perf = PerformanceTracker()
+            self.error_spark.clear()
+            self.sync_sliders()
+            self.paused = False
+            self.buttons["PAUSE"].label = "PAUSE"
+            return
         self.sim = Simulator(preset_name=name or self.preset, seed=None,
                              platform_mode=self.platform_mode,
                              atmosphere=self.atmosphere,
@@ -271,10 +306,71 @@ class App:
         pygame.image.save(self.screen, path)
         print(f"screenshot -> {path}", flush=True)
 
+    def _load_video(self):
+        """Benchmark-2: choose an .mp4 and run it through the real
+        coarse-pointing loop (PTZ bypass).  Shows the OS file picker."""
+        try:
+            import tkinter
+            from tkinter import filedialog
+            root = tkinter.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            path = filedialog.askopenfilename(
+                title="Load Benchmark-2 video (.mp4)",
+                filetypes=[("MP4 video", "*.mp4"),
+                           ("Video files", "*.mp4;*.avi"), ("All files", "*.*")])
+            root.destroy()
+        except Exception as ex:      # no display single-choice fallback
+            print(f"file dialog unavailable ({ex}); pass --video path instead")
+            return
+        if not path:
+            return
+        self.video_path = path
+        from core.simulator import VideoInputSimulator
+        truth = os.path.splitext(path)[0] + "_truth.csv"
+        try:
+            self.sim = VideoInputSimulator(
+                path, truth_csv=truth if os.path.isfile(truth) else None)
+        except Exception as ex:
+            print(f"cannot open video: {ex}")
+            return
+        self.video_mode = True
+        self.video_done = False
+        self.preset = "VIDEO"
+        self.perf = PerformanceTracker()
+        self.error_spark.clear()
+        self.sync_sliders()
+        self.paused = False
+        self.buttons["PAUSE"].label = "PAUSE"
+        print(f"video loaded -> {path} "
+              f"({self.sim.video_w}x{self.sim.video_h} @ "
+              f"{self.sim.video_fps:.1f} fps)")
+        # show the first frame immediately
+        try:
+            res = self.sim.step()
+            if res is not None:
+                self.perf.record_frame(self.sim)
+        except Exception as ex:
+            print(f"video step error: {ex}")
+
     def _final_report(self):
         st = self.perf.live_stats()
         p = os.path.join(config.LOG_DIR, f"run_{int(time.time())}.csv")
         extra = {"preset": self.preset}
+        if self.video_mode:
+            extra["input_video"] = os.path.basename(self.video_path)
+            errs = [e[1] for e in self.sim.centroid_err_log]
+            if errs:
+                import numpy as np
+                extra["centroiding_error_mean_px"] = round(float(np.mean(errs)), 2)
+                extra["centroiding_error_rms_px"] = round(
+                    float(np.sqrt(np.mean(np.array(errs) ** 2))), 2)
+                extra["centroiding_error_p95_px"] = round(
+                    float(np.percentile(errs, 95)), 2)
+                extra["centroiding_error_max_px"] = round(float(np.max(errs)), 2)
+                extra["centroiding_frames"] = len(errs)
+            extra["reacquisition_count_video"] = len(self.sim.reacq_times)
+            extra["video_false_lock_events"] = self.sim.false_lock_events
         self.perf.write_log(p, extra_info=extra)
         print(f"performance log -> {p}")
 
@@ -293,16 +389,24 @@ class App:
     # camera hero view geometry: fills left area below header, above strip
     CAM_X0, CAM_X1 = 8, 1276
     CAM_Y0, CAM_Y1 = 56, 676
+    def _frame_dims(self):
+        if self.video_mode:
+            s = self.sim
+            return s.video_w, s.video_h
+        return CAM_W, CAM_H
+
     def _cam_scale(self):
-        return min((self.CAM_X1 - self.CAM_X0) / CAM_W,
-                   (self.CAM_Y1 - self.CAM_Y0) / CAM_H)
+        w, h = self._frame_dims()
+        return min((self.CAM_X1 - self.CAM_X0) / w,
+                   (self.CAM_Y1 - self.CAM_Y0) / h)
 
     def _cam_dest(self):
         sc = self._cam_scale()
-        w, h = int(CAM_W * sc), int(CAM_H * sc)
-        x = self.CAM_X0 + (self.CAM_X1 - self.CAM_X0 - w) // 2
-        y = self.CAM_Y0 + (self.CAM_Y1 - self.CAM_Y0 - h) // 2
-        return pygame.Rect(x, y, w, h)
+        w, h = self._frame_dims()
+        dw, dh = int(w * sc), int(h * sc)
+        x = self.CAM_X0 + (self.CAM_X1 - self.CAM_X0 - dw) // 2
+        y = self.CAM_Y0 + (self.CAM_Y1 - self.CAM_Y0 - dh) // 2
+        return pygame.Rect(x, y, dw, dh)
 
     def _draw_header(self, surf):
         # top ribbon
@@ -332,6 +436,11 @@ class App:
         # global mission status badge on the camera right edge is drawn in camera
 
     def _draw_footer(self, surf):
+        if self.video_mode:
+            T.text(surf, (8, APP_H - 16),
+                   "SPACE pause · R restart video · S shot · L load MP4 · V FOV grid",
+                   9, T.C.TEXT_FAINT)
+            return
         T.text(surf, (8, APP_H - 16),
                "SPACE pause · R reset · S shot · 1-5 scenario · 6-8 platform · A atmosphere · F fullscreen · V FOV grid",
                9, T.C.TEXT_FAINT)
@@ -341,8 +450,9 @@ class App:
         cam = self._frame_to_surf(frame)
         # draw HUD in native camera space, then scale up as one clean image
         self._draw_hud(cam)
-        scaled = pygame.transform.smoothscale(cam, (int(CAM_W * self._cam_scale()),
-                                                    int(CAM_H * self._cam_scale())))
+        fw, fh = self._frame_dims()
+        scaled = pygame.transform.smoothscale(cam, (int(fw * self._cam_scale()),
+                                                    int(fh * self._cam_scale())))
         dest = self._cam_dest()
         surf.blit(scaled, dest.topleft)
         pygame.draw.rect(surf, T.C.BORDER, dest, 1)
@@ -352,7 +462,8 @@ class App:
 
     def _frame_to_surf(self, frame):
         if frame is None:
-            s = pygame.Surface((CAM_W, CAM_H))
+            fw, fh = self._frame_dims()
+            s = pygame.Surface((fw, fh))
             s.fill((0, 0, 0))
             return s
         img = np.ascontiguousarray(frame[:, :, ::-1])
@@ -567,18 +678,28 @@ class App:
             T.text(cam, (r.centerx, 4 ), "GROUND TRUTH · EVALUATION ONLY",
                    9, T.C.PURPLE, anchor="cc")
 
+    def _cam_space(self):
+        """Camera pixel-space constants for the *active* source: the
+        synthetic virtual camera (config) or the input video (its own
+        geometry) in Benchmark-2 bypass mode."""
+        if self.video_mode:
+            s = self.sim
+            return (s.focal_px, s.cu, s.cv, s.video_w, s.video_h)
+        return (config.FOCAL_PX, config.PRINCIPAL_U, config.PRINCIPAL_V,
+                CAM_W, CAM_H)
+
     def _est_pixel(self, az, el):
         """Project an az/el LOS into camera pixels using the realized pose."""
         if az is None or el is None:
             return None
+        focal, cu, cv, vw, vh = self._cam_space()
         d = azel_unit(az, el)
         basis = self.sim.gimbal.basis()
-        p = project_point_into_camera(d, (0, 0, 0), basis, config.FOCAL_PX,
-                                      config.PRINCIPAL_U, config.PRINCIPAL_V)
+        p = project_point_into_camera(d, (0, 0, 0), basis, focal, cu, cv)
         if p is None:
             return None
         u, v = p
-        if 0 <= u < CAM_W and 0 <= v < CAM_H:
+        if 0 <= u < vw and 0 <= v < vh:
             return (int(u), int(v))
         return None
 
@@ -703,6 +824,22 @@ class App:
         res = self.sim.last_result
         st = res["state"]
         lock = st == "LOCKED"
+        if self.video_mode:
+            rows = [
+                ("Source", "INPUT VIDEO (PTZ bypassed)"),
+                ("Mode", "Benchmark-2 · video feed"),
+                ("Status", "TRACKING" if st == "LOCKED" else
+                           ("ACQUIRING" if st == "SEARCHING" else "COAST")),
+            ]
+            yy = y + 22
+            col = T.C.GREEN if lock else T.C.STATE[st]
+            for lab, val in rows:
+                T.text(surf, (x + 12, yy), lab, 10, T.C.TEXT_FAINT)
+                T.text(surf, (x + 96, yy), val, 11,
+                       col if lab == "Status" else T.C.TEXT,
+                       bold=(lab == "Status"))
+                yy += 16
+            return
         pm_label = {"SATELLITE_SATELLITE": "SAT-SAT",
                     "UAV_SATELLITE": "UAV-SAT", "UAV_UAV": "UAV-UAV"}.get(
                         self.platform_mode, self.platform_mode)
@@ -721,8 +858,29 @@ class App:
             yy += 14
 
     def _panel_geometry(self, surf):
-        # relative-LOS mission-geometry map
         g = pygame.Rect(1288, 140, 304, 146)
+        if self.video_mode:
+            # Benchmark-2: the panel shows live centroiding status instead of
+            # the synthetic 3D mission geometry.
+            T.panel(surf, g)
+            T.text(surf, (g.x + 10, g.y + 6), "VIDEO BYPASS  (Benchmark-2)",
+                   10, T.C.TEXT_DIM)
+            res = self.sim.last_result
+            stat = self.perf.live_stats()
+            rows = [
+                ("Input", os.path.basename(self.video_path)[:26]),
+                ("Acq", (f"{stat['acquisition_time_s']:.2f}s"
+                         if stat["acquisition_time_s"] is not None else "--")),
+                ("Retention", f"{stat['retention_total_pct']:.1f}%"),
+                ("Centroid err", (f"{res.get('centroid_err_px', 0):.1f} px"
+                                  if res is not None else "--")),
+            ]
+            yy = g.y + 22
+            for lab, val in rows:
+                T.text(surf, (g.x + 12, yy), lab, 10, T.C.TEXT_FAINT)
+                T.text(surf, (g.x + 86, yy), val, 11, T.C.TEXT, bold=(lab == "Centroid err"))
+                yy += 24
+            return
         view3d.render(surf, g, self.sim, self.sim.t)
         T.text(surf, (g.right - 6, g.y - 2), "B approaching A's FOV", 9, T.C.TEXT_FAINT, anchor="tr")
 
@@ -877,6 +1035,11 @@ def main():
     ap.add_argument("--initial", default=None,
                     choices=["RANDOM", "CENTER"],
                     help="initial target location (PS: user-defined, default Random)")
+    ap.add_argument("--video", default=None,
+                    help="Benchmark-2: path to an .mp4 that drives the "
+                         "coarse-pointing loop (bypasses the virtual PTZ). "
+                         "A <video>_truth.csv sidecar enables ground-truth "
+                         "centroiding-error evaluation.")
     args = ap.parse_args()
 
     if args.frames > 0:
@@ -890,7 +1053,7 @@ def main():
               platform_mode=args.platform, atmosphere=args.atmosphere,
               motion_type=args.motion, target_shape=args.shape,
               target_size=args.size, num_targets=args.targets,
-              target_initial=args.initial)
+              target_initial=args.initial, video_path=args.video)
     app.run()
 
 

@@ -266,6 +266,49 @@ All results are obtained using the headless stress-test harness (`metrics/stress
 
 5. **Real-time processing**: 19–40 fps across presets on commodity hardware (HARD/SEVERE at the 20 fps margin under the headless harness; interactive mode is capped at 30+ fps).
 
+### 9.4 Benchmark-2: MP4 Video Input (PTZ Bypass)
+
+Benchmark-2 supplies `.mp4` videos (complete screen, moving beacon spot, noise)
+as the input to the coarse-pointing system. To meet it the virtual PTZ is
+bypassed: each video frame is fed — unchanged — into the **same**
+`DetectionEngine → Tracker → PointingController` loop used by the synthetic
+mode (`core/simulator.VideoInputSimulator`).
+
+Two adaptations are made for video mode:
+
+1. **Fixed camera basis.** The video *is* the camera feed, so the gimbal is
+   held at boresight and pixel→LOS mapping uses the video's own focal length /
+   principal point (any resolution is handled). The graded quantity is then the
+   **centroiding error** — the pixel distance between the detected beacon
+   centroid and the video's true centroid.
+2. **Identity via persistence, not modulation.** An arbitrary video has no
+   known 15 Hz modulation clock. In video mode the tracker therefore locks on
+   appearance + spatial/persistence consistency and binds the locked ID to the
+   DetectionEngine's persistent blob track, so a high-scoring noise blob cannot
+   steal a lock.
+
+Ground truth for evaluation is supplied by the generator's ground-truth
+sidecar (`<video>_truth.csv`, columns `frame,t,bx,by` — the "predefined error
+values" the evaluators compare against); without a sidecar the error is
+reported from the frame centre.
+
+Representative result — newly generated figure-8 video, 640×480 @ 30 fps,
+10 s, Gaussian noise (via `metrics/mp4_bypass.py`):
+
+| Metric | Value |
+|--------|-------|
+| Acquisition time | 0.10 s (PS spec ≤ 2 s) |
+| Lock retention | 99.3 % (PS spec ≥ 95 %) |
+| Centroiding error, locked p95 | 1.0 px (PS spec ≤ 10 px) |
+| Centroiding error, all frames mean | 4.6 px |
+| Re-acquisitions / false locks | 0 / 0 |
+| Processing speed | 134 fps (PS spec ≥ 20 fps) |
+
+The mean/all-frame figure is dominated by a single 3-frame re-association
+glitch at the widest sweep point; 297 of 300 frames track at sub-2 px
+centroiding error. The GUI exposes the same loop via the **LOAD MP4** button
+(`L`) or `python main.py --video <file>.mp4`.
+
 ---
 
 ## 10. AI/ML Integration

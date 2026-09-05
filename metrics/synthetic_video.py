@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import csv
 import cv2
 import numpy as np
 import os
@@ -74,14 +75,22 @@ def _apply_noise(frame, noise_types, noise_level=20, seed=0):
 def generate(output, width=640, height=480, fps=30, seconds=20,
              motion="figure_eight", noise=("gaussian",), beacon_size=10,
              brightness=200, background=15):
-    """Generate an MP4 with a moving beacon + noise."""
+    """Generate an MP4 with a moving beacon + noise.
+
+    Also writes a ground-truth sidecar CSV (same base name, ``_truth.csv``)
+    with the *exact* beacon pixel centroid per frame -- the "predefined
+    error values" Benchmark-2 evaluators compare against.  Columns:
+    frame, t, bx, by.
+    """
     os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
+    truth_csv = os.path.splitext(output)[0] + "_truth.csv"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(output, fourcc, fps, (width, height))
 
     n_frames = int(seconds * fps)
     rng = np.random.default_rng(0)
 
+    truth_rows = []
     for i in range(n_frames):
         t = i / fps
         # plain background (dark space-like + faint gradient)
@@ -91,6 +100,7 @@ def generate(output, width=640, height=480, fps=30, seconds=20,
 
         # beacon spot at its pixel position
         x, y = _motion_path(motion, t, width, height)
+        truth_rows.append((i, t, x, y))
         xi, yi = int(round(x)), int(round(y))
         bs = beacon_size
         x0, y0 = max(0, xi - bs // 2), max(0, yi - bs // 2)
@@ -116,9 +126,16 @@ def generate(output, width=640, height=480, fps=30, seconds=20,
         writer.write(frame)
 
     writer.release()
+
+    with open(truth_csv, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["frame", "t", "bx", "by"])
+        w.writerows(truth_rows)
+
     print(f"  generated: {output} ({width}x{height} @ {fps}fps, "
           f"{seconds}s, {n_frames} frames, motion={motion}, noise={noise})")
-    return output
+    print(f"  truth CSV : {truth_csv} ({len(truth_rows)} rows)")
+    return output, truth_csv
 
 
 def main():

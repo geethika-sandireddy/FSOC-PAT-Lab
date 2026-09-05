@@ -135,59 +135,74 @@ By default the operational view shows **only** what the algorithm sees (ephemeri
 | `4` | Switch to SEVERE preset | Heavy turbulence, 4 distractors |
 | `5` | Switch to ADVERSARIAL preset | Extreme conditions, 4 distractors |
 | `Space` | Pause / Resume | Freezes the simulation |
-| `R` | Reset tracker | Clears track state, re-acquires |
+| `R` | Reset tracker | Clears track state, re-acquires (video mode: restart video) |
+| `S` | Screenshot | Saves `logs/shot_*.png` of the full window |
+| `L` | Load MP4 | Benchmark-2 file picker (video bypass mode) |
 | `F` | Toggle fullscreen | Switches between windowed and fullscreen |
 | `V` | Toggle FOV grid | Shows/hides field-of-view grid overlay |
 | `Escape` | Quit | Exits the application |
 
 ---
 
-## 4. Running Headless Benchmarks
+## 4. Benchmark-2: Video Input (PTZ Bypass)
 
-### Single Preset
+Benchmark-2 of PS 26169 supplies `.mp4` files with a moving beacon spot and
+noise. The software must **bypass its virtual PTZ camera and take the video as
+the input** to the coarse-pointing system.
 
-```bash
-python main.py --frames 120 --preset MODERATE
-```
+### Load a video in the GUI
 
-Runs 120 frames without a display and prints summary statistics.
+Click the **LOAD MP4** button (bottom-right) or press `L`. Pick any `.mp4`.
+The app switches to *VIDEO BYPASS* mode: each video frame is pushed through the
+real detection → tracking → gimbal pipeline, and the live centroiding error,
+lock state, retention and acquisition time are shown in the right-hand panels.
 
-### Custom Target Parameters
-
-PS 26169 parameters are user-selectable from the command line:
-
-```bash
-# target motion type (PS: at least four selectable)
-python main.py --motion straight_line
-python main.py --motion circular
-python main.py --motion figure_eight
-python main.py --motion random
-
-# target shape / size / count / initial location (PS: user-defined)
-python main.py --shape CIRCLE --size 14
-python main.py --targets 3            # PS: 1 mandatory, multiple optional
-python main.py --initial CENTER       # RANDOM (default) or CENTER
-```
-
-The GUI's on-screen scenario chips (1-5), platform mode (6-8) and atmosphere (`A`) chips switch these live at runtime; the CLI flags above override the default scene for both the GUI and headless runs.
-
-### Multi-Trial Stress Test
+### Load a video from the command line
 
 ```bash
-python -m metrics.stress_test --trials 3 --seconds 15
+python main.py --video path/to/video.mp4
 ```
 
-Runs 3 independent trials of 15 seconds each for all 5 difficulty presets. Results are printed in a formatted table and saved to `logs/stress_test_summary.csv`.
+If a ground-truth sidecar `<video>_truth.csv` exists next to the video (columns
+`frame,t,bx,by` — emitted automatically by the generator below), the GUI and
+the report compute **centroiding error against the predefined truth**, exactly
+as the evaluators compare. Without ground truth, error is measured from the
+frame centre.
 
-### Custom Parameters
+### Generate your own benchmark videos
 
 ```bash
-python -m metrics.stress_test --trials 5 --seconds 30
+python -m metrics.synthetic_video --output logs/bench.mp4 \
+    --width 640 --height 480 --fps 30 --seconds 20 \
+    --motion figure_eight --noise gaussian,salt_pepper
 ```
 
-Available options:
-- `--trials N`: Number of independent trials per preset (default: 3)
-- `--seconds S`: Duration of each trial in seconds (default: 15)
+This writes `logs/bench.mp4` **and** `logs/bench_truth.csv`.
+
+### Headless Benchmark-2 report
+
+```bash
+python -m metrics.mp4_bypass --input logs/bench.mp4 --output logs/bypass.csv
+```
+
+Runs the whole video through the real loop and writes the mandatory
+performance log (centroiding error mean/RMS/p95/max, acquisition time, lock
+retention, re-acquisition, false locks, processing FPS).
+
+### Sample result (figure-8, 10 s, 640×480, Gaussian noise)
+
+```
+Acquisition time:         0.10 s
+Lock retention:           99.3 %
+Centroiding err (all):    mean 4.6 px   RMS 34   p95 1.0   max 350
+Centroiding err (locked): mean 4.7 px   p95 1.0
+Re-acquisitions:          0
+False locks:              0
+Processing:               134 fps
+```
+
+(p95 of the *locked* centroiding error is ≈ 1 px; the mean/max are pulled up by
+a 3-frame re-association glitch around the widest sweep point.)
 
 ---
 
