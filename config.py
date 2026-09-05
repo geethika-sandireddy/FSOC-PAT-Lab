@@ -106,9 +106,9 @@ MIN_BEACON_AREA_NORM = 0.10
 TRACK_ASSOC_RADIUS_DEG = 0.10        # two blobs closer than this = same object
 TRACK_MISS_TOL = 3                   # frames an ID survives while unseen
 PERSISTENCE_BOOST = 1.35             # acquisition fusion multiplier for age>=2 tracks
-MOD_ASSOC_K = 1.6                    # how strongly a blob's own 15 Hz modulation
-                                     # score lifts its association/fusion score
-                                     # (beacon blinks -> wins over static decoys)
+MOD_ASSOC_K = 3.2                    # how strongly a blob's own 15 Hz amplitude
+                                     # modulation score lifts its association/fusion
+                                     # score (beacon blinks -> wins over decoys)
 
 # ---------------------------------------------------------------------------
 # Estimation / tracking state machine

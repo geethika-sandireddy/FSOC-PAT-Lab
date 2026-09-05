@@ -79,23 +79,28 @@ class DetectionEngine:
 
     @staticmethod
     def _track_mod_corr(hist):
-        """Sign-agreement of this track's brightness history against the known
+        """Brightness modulation correlation of a track against the known
         15 Hz beacon square-wave template, best of 0..2 frame lags (phase
-        robust).  A beacon track agrees strongly; a static distractor / noise
-        blob wanders around 0.5.  Returns 0.0 until enough samples exist."""
+        robust).  Uses the *amplitude* (Pearson) form: a static distractor
+        has ~zero AC power against the template regardless of noise, while
+        the blinking beacon correlates strongly.  Returns 0.0 until enough
+        samples exist."""
         n = len(hist)
         if n < 8:
             return 0.0
-        vals = [v for _, v in hist]
+        vals = [float(v) for _, v in hist]
         frames = [f for f, _ in hist]
-        mean_v = sum(vals) / n
+        mv = sum(vals) / n
+        vv = sum((x - mv) ** 2 for x in vals)
+        if vv < 1e-6:
+            return 0.0
         best = 0.0
         for lag in (0, 1, 2):
-            agree = 0.0
-            for v, f in zip(vals, frames):
-                sig = 1.0 if v > mean_v else -1.0
-                agree += sig * _mod_template_sign(f, lag)
-            best = max(best, max(0.0, min(1.0, (agree / n + 1.0) / 2.0)))
+            ts = [_mod_template_sign(f, lag) for f in frames]
+            mt = sum(ts) / n
+            num = sum((x - mv) * (t - mt) for x, t in zip(vals, ts))
+            tt = sum((t - mt) ** 2 for t in ts)
+            best = max(best, num / math.sqrt(vv * tt + 1e-9), 0.0) if tt > 0 else best
         return best
 
     def _prune_tracks(self):

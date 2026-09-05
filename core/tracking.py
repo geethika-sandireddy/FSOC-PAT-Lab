@@ -172,11 +172,14 @@ class Tracker:
             if getattr(c, "track_age", 0) >= 2:
                 c.fusion_score *= config.PERSISTENCE_BOOST
             # a blob that actually blinks at the beacon's 15 Hz modulation is
-            # overwhelmingly likely to BE the beacon: its own-track modulation
-            # score caps association/fusion against static beacon-like decoys.
+            # overwhelmingly likely to BE the beacon: its own-track amplitude
+            # correlation caps association/fusion against static beacon-like
+            # decoys (which carry near-zero AC power at the template).
             tm = getattr(c, "track_mod", 0.0)
-            if tm >= 0.60:
-                c.fusion_score *= 1.0 + config.MOD_ASSOC_K * (tm - 0.55)
+            if 0.24 <= tm <= 0.60:
+                c.fusion_score *= 1.0 + config.MOD_ASSOC_K * (tm - 0.20)
+            elif tm > 0.60:
+                c.fusion_score *= 1.0 + config.MOD_ASSOC_K * 0.45
 
         has_track = self.est_az is not None and self.state in (LOCKED, COASTING)
 
