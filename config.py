@@ -70,51 +70,65 @@ MODULATION_DIM = 118                 # dim phase (still detectable -> robust)
 # Per-run randomized ambiguity: the system is GIVEN a coarse ephemeris
 # prediction (this PS's central premise) with a bias that grows with time
 # (models unmodeled atmospheric drag / prediction divergence).
-EPHEMERIS_START_BIAS_DEG = 0.60
-EPHEMERIS_GROWTH_DEG_PER_SEC = 0.030
-EPHEMERIS_MAX_BIAS_DEG = 3.0
+EPHEMERIS_START_BIAS_DEG = 0.55
+EPHEMERIS_GROWTH_DEG_PER_SEC = 0.012
+EPHEMERIS_MAX_BIAS_DEG = 2.6
 
 # ---------------------------------------------------------------------------
 # Pan-tilt gimbal (actuator realism)
 # ---------------------------------------------------------------------------
-GIMBAL_MAX_SLEW_DEG_S = 5.0           # PS 26169 default 5 deg/s
-GIMBAL_MAX_TILT_DEG_S = 5.0
-GIMBAL_ACCEL_DEG_S2 = 18.0            # acceleration limit (inertia)
-GIMBAL_SERVO_KP = 32.0                # position gain  [1/s^2]
-GIMBAL_SERVO_KI = 0.80                # integral gain (eliminates steady-state err)
-GIMBAL_SERVO_KD = 16.0                # velocity damping [1/s]  (critically damped)
-GIMBAL_SERVO_INT_MAX = 0.15           # integral anti-windup clamp (deg)
+GIMBAL_MAX_SLEW_DEG_S = 10.0          # max allowable slew velocity (deg/s)
+GIMBAL_MAX_TILT_DEG_S = 8.0
+GIMBAL_ACCEL_DEG_S2 = 14.0            # acceleration limit (inertia)
+GIMBAL_SERVO_KP = 25.0                # position gain  [1/s^2]
+GIMBAL_SERVO_KD = 10.0                # velocity damping [1/s]  (= 2*sqrt(kp))
 GIMBAL_LATENCY_FRAMES = 2            # measurement->command response delay
-GIMBAL_STABIZATION_REJECT = 0.92     # inner-loop disturbance rejection (0-1)
+GIMBAL_STABIZATION_REJECT = 0.80     # inner-loop disturbance rejection (0-1)
 
 # ---------------------------------------------------------------------------
 # Detection (Block D - front end)
 # ---------------------------------------------------------------------------
 TOP_HAT_RADIUS = 13                  # local-background estimation kernel
-DETECTION_ABS_THRESHOLD = 20         # signal above local background (grey levels) - lower for fade robustness
-DETECTION_MIN_BLOB_AREA = 2          # px^2 - smaller for faded beacon core
+DETECTION_ABS_THRESHOLD = 42         # signal above local background (grey levels)
+DETECTION_MIN_BLOB_AREA = 5          # px^2
 EXPECTED_BEACON_HUE = 8              # HSV hue (OpenCV 0-180) of the beacon core
+
+# A blob far smaller than the beacon's known angular footprint (area_norm
+# well under 1.0) cannot physically be the beacon -- it is salt-pepper or
+# hot-pixel noise.  Pruning these tiny blobs is the single most powerful
+# anti-decoy measure under heavy atmosphere (they are ~90% of SEVERE decoys).
+MIN_BEACON_AREA_NORM = 0.10
+
+# Persistent-blob association: give a stable ID to blobs that survive across
+# frames so acquisition can "stick" to one physical object instead of flip-
+# flopping between noise blobs (the #1 cause of never-locking under heavy
+# atmosphere/noise).  Association done in world LOS space (deg).
+TRACK_ASSOC_RADIUS_DEG = 0.10        # two blobs closer than this = same object
+TRACK_MISS_TOL = 3                   # frames an ID survives while unseen
+PERSISTENCE_BOOST = 1.35             # acquisition fusion multiplier for age>=2 tracks
+MOD_ASSOC_K = 1.6                    # how strongly a blob's own 15 Hz modulation
+                                     # score lifts its association/fusion score
+                                     # (beacon blinks -> wins over static decoys)
 
 # ---------------------------------------------------------------------------
 # Estimation / tracking state machine
 # ---------------------------------------------------------------------------
 ACQUIRE_CONFIRM_FRAMES = 3           # temporal confirmation before lock
-ACQUIRE_CONSISTENCY_PX = 22          # px tolerance during spatial consistency check
-COAST_TIMEOUT_S = 1.10               # lost frames before entering SEARCH - longer for obstacles
-ASSOC_GATE_DEG = 0.55                # candidate->track association gate - wider to survive turbulence fragmenting
-MOD_CORREL_WIN = 26                  # frames of intensity history - longer window = more robust
-MOD_LOCK_THRESHOLD = 0.64            # correlation for beacon-lock commit (true:~0.95, decoy:<0.55)
-MOD_SUSPECT_FLOOR = 0.56             # locked object below this modulation corr for
-MOD_SUSPECT_DROP_FRAMES = 4         # ... this many frames -> false-lock drop to search (must be <5 to beat the metric threshold)
-ML_LOCK_THRESHOLD = 0.20           # appearance-classifier threshold - lower for fade robustness
-FUSION_WEIGHT_MOD = 0.65             # fusion: modulation score weight
-FUSION_WEIGHT_ML = 0.15              # fusion: appearance score weight
-FUSION_WEIGHT_PRIOR = 0.20           # fusion: ephemeris prior weight
-SEARCH_MIN_RAW_MOD = 0.20            # minimum RAW mod correlation for SEARCHING candidate filter (must be robust with few samples)
-SEARCH_GROWTH_DEG_S = 1.25           # spiral search speed (deg/s) - faster acquisition
-SEARCH_MAX_RADIUS_DEG = 4.5
-ESTIMATOR_ALPHA = 0.42               # bias-tracking filter gain - faster lock-on
-ESTIMATOR_GAMMA = 0.08               # velocity-feedforward gain (predictive)
+ACQUIRE_CONSISTENCY_PX = 14
+COAST_TIMEOUT_S = 0.45               # lost frames before entering SEARCH
+ASSOC_GATE_DEG = 0.30                # candidate->track association gate
+MOD_CORREL_WIN = 18                  # frames of intensity history for modulation ID
+MOD_LOCK_THRESHOLD = 0.62            # correlation for beacon-lock commit (true:~0.95, decoy:<0.55)
+MOD_SUSPECT_FLOOR = 0.58             # locked object below this modulation corr for
+MOD_SUSPECT_DROP_FRAMES = 30         # ... this many frames -> false-lock drop to search
+ML_LOCK_THRESHOLD = 0.55             # appearance-classifier threshold
+ML_FLOOR_SCORE = 0.40                # generous acquisition floor (physical footprint gate does the real pruning)
+FUSION_WEIGHT_MOD = 0.55             # fusion: modulation score weight
+FUSION_WEIGHT_ML = 0.45              # fusion: appearance score weight
+SEARCH_GROWTH_DEG_S = 0.55           # spiral search speed (deg/s)
+SEARCH_MAX_RADIUS_DEG = 3.2
+ESTIMATOR_ALPHA = 0.35               # bias-tracking filter gain (lower = smoother)
+CONTROL_VEL_EMA = 0.30               # set-point velocity feedforward smoothing
 
 # ---------------------------------------------------------------------------
 # Disturbance engine (each 0-100, independently controllable)

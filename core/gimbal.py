@@ -11,9 +11,6 @@ Physics modelled (all of it -- nothing teleports):
     the realized attitude; an inner stabilization loop rejects a fraction
     of it (real gimbal gyro-stabilization), the residual is physical
     boresight error.
-  * PID position servo with INTEGRAL ACTION + anti-windup, eliminating
-    steady-state error that the pure PD loop accumulated under constant
-    disturbance (vibration / platform tilt / bias).
 
 The encoder pose (realized attitude) is what the detector + tracker use to
 convert measurements into world coordinates - exactly what a real gimbal's
@@ -31,16 +28,18 @@ from core import geometry
 
 class Gimbal:
     def __init__(self, start_pan=0.0, start_tilt=0.0):
+        # Commanded attitude (what the controller asks for).
         self.pan_cmd = 0.0
         self.tilt_cmd = 0.0
+        self.vp_ff = 0.0             # commanded velocity feedforward (deg/s)
+        self.vt_ff = 0.0
+        # Realized attitude (what the sensor actually points at).
         self.pan = 0.0
         self.tilt = 0.0
         self.v_pan = 0.0
         self.v_tilt = 0.0
-        self.i_pan = 0.0
-        self.i_tilt = 0.0
-        self._latency = deque()
-        self._n = 0
+        self._latency = deque()      # (frame_index, pan, tilt)
+        self._n = 0                  # frame counter for latency FIFO
 
         self.pan = start_pan
         self.tilt = start_tilt
@@ -53,71 +52,64 @@ class Gimbal:
         self.disturb_rng = rng
 
     # ---------------- Command interface ----------------
-    def command_attitude(self, pan_deg, tilt_deg):
-        self._latency.append((self._n, float(pan_deg), float(tilt_deg)))
+    def command_attitude(self, pan_deg, tilt_deg, vel_ff_pan=0.0, vel_ff_tilt=0.0):
+        """Queue a pointing command at the current frame index.  It takes
+        effect GIMBAL_LATENCY_FRAMES frames later (FIFO, one command per
+        frame - models pipeline + actuator response delay).
+
+        vel_ff_pan/tilt: target angular-velocity feedforward (deg/s).  A PD
+        position servo tracks a constant-velocity target with steady-state
+        lag err = (KD/KP)*v; the feedforward term cancels that lag so the
+        boresight stays on target instead of trailing it.
+        """
+        self._latency.append((self._n, float(pan_deg), float(tilt_deg),
+                              float(vel_ff_pan), float(vel_ff_tilt)))
         self._n += 1
         if self._latency and self._latency[0][0] <= self._n - config.GIMBAL_LATENCY_FRAMES:
-            _, self.pan_cmd, self.tilt_cmd = self._latency.popleft()
+            _, self.pan_cmd, self.tilt_cmd, self.vp_ff, self.vt_ff = self._latency.popleft()
 
     # ---------------- Dynamics ----------------
     def step(self, dt, disturbance):
-        vel_p, pan, i_pan = self._follow(
-            self.pan_cmd, self.pan, self.v_pan, self.i_pan,
-            config.GIMBAL_MAX_SLEW_DEG_S,
-            config.GIMBAL_ACCEL_DEG_S2, dt)
-        self.pan, self.v_pan, self.i_pan = pan, vel_p, i_pan
+        """Advance the realized attitude one frame.
 
-        vel_t, tilt, i_tilt = self._follow(
-            self.tilt_cmd, self.tilt, self.v_tilt, self.i_tilt,
-            config.GIMBAL_MAX_TILT_DEG_S,
-            config.GIMBAL_ACCEL_DEG_S2, dt)
-        self.tilt, self.v_tilt, self.i_tilt = tilt, vel_t, i_tilt
+        The realized attitude is a *second-order follower* of the active
+        setpoint (the most recently applied queued command): acceleration-
+        limited slew velocity.  Platform vibration / jolts from the
+        disturbance engine perturb the realized attitude; the inner
+        stabilization loop rejects a configurable fraction.
+        """
+        # --- realized attitude slews toward the active setpoint ---
+        vel_p, pan = self._follow(self.pan_cmd, self.pan, self.v_pan,
+                                  config.GIMBAL_MAX_SLEW_DEG_S,
+                                  config.GIMBAL_ACCEL_DEG_S2, dt, self.vp_ff)
+        self.pan, self.v_pan = pan, vel_p
+        vel_t, tilt = self._follow(self.tilt_cmd, self.tilt, self.v_tilt,
+                                   config.GIMBAL_MAX_TILT_DEG_S,
+                                   config.GIMBAL_ACCEL_DEG_S2, dt, self.vt_ff)
+        self.tilt, self.v_tilt = tilt, vel_t
 
+        # --- realized attitude: command + platform disturbance, stabilized ---
         d_pan, d_tilt = disturbance.platform_disturbance(dt)
         reject = config.GIMBAL_STABIZATION_REJECT
         self.pan += d_pan * (1.0 - reject)
         self.tilt += d_tilt * (1.0 - reject)
 
     @staticmethod
-    def _follow(cmd, now, vel, integ, velmax, accmax, dt):
-        """Critically-damped PID position servo with slew/accel limits
-        and anti-windup integral clamping.
+    def _follow(cmd, now, vel, velmax, accmax, dt, vel_ff=0.0):
+        """Damped position servo (PD) with slew/accel limits + velocity
+        feedforward.
 
-            a = kp*(cmd-now) + ki*integ - kd*vel    (velocity damping)
-
-        Anti-windup (classic back-calculation): clamp the integrated error
-        to INT_MAX so the integral term never grows unbounded when the
-        actuator saturates (slew / accel caps).  This eliminates the
-        classic integral windup that causes long settling tails after a
-        large step command.
+        a = kp*(cmd-now) - kd*(vel - vel_ff), accel-clamped, velocity-
+        clamped, position integrated.  The feedforward term cancels the
+        steady-state lag a plain PD servo exhibits when tracking a moving
+        target (err ~ (kd/kp)*v), so the boresight rides ON the target
+        instead of trailing it.
         """
-        kp = config.GIMBAL_SERVO_KP
-        ki = config.GIMBAL_SERVO_KI
-        kd = config.GIMBAL_SERVO_KD
-        imax = config.GIMBAL_SERVO_INT_MAX
-
         err = cmd - now
-
-        integ = integ + err * dt
-        if integ > imax:
-            integ = imax
-        elif integ < -imax:
-            integ = -imax
-
-        a = kp * err + ki * integ - kd * vel
+        a = config.GIMBAL_SERVO_KP * err - config.GIMBAL_SERVO_KD * (vel - vel_ff)
         a = max(-accmax, min(accmax, a))
-
-        v = vel + a * dt
-        if v > velmax:
-            v = velmax
-            if integ > 0:
-                integ = max(0.0, integ - 2.0 * err * dt)
-        elif v < -velmax:
-            v = -velmax
-            if integ < 0:
-                integ = min(0.0, integ - 2.0 * err * dt)
-
-        return v, now + v * dt, integ
+        v = min(velmax, max(-velmax, vel + a * dt))
+        return v, now + v * dt
 
     # ---------------- Helpers ----------------
     def basis(self):
