@@ -46,7 +46,9 @@ DISPLAY_CAP = 60
 
 class App:
     def __init__(self, preset="EASY", seed=None, fullscreen=False,
-                 platform_mode=None, atmosphere=None):
+                 platform_mode=None, atmosphere=None,
+                 motion_type=None, target_shape=None, target_size=None,
+                 num_targets=None, target_initial=None):
         pygame.init()
         flags = pygame.FULLSCREEN | pygame.SCALED if fullscreen else 0
         self.screen = pygame.display.set_mode((APP_W, APP_H),
@@ -57,9 +59,19 @@ class App:
         self.preset = preset
         self.platform_mode = platform_mode or "SATELLITE_SATELLITE"
         self.atmosphere = atmosphere or "CLEAR"
+        self.motion_override = motion_type
+        self.shape_override = target_shape
+        self.size_override = target_size
+        self.targets_override = num_targets
+        self.initial_override = target_initial
         self.sim = Simulator(preset_name=preset, seed=seed,
                              platform_mode=self.platform_mode,
-                             atmosphere=self.atmosphere)
+                             atmosphere=self.atmosphere,
+                             motion_type=self.motion_override,
+                             target_shape=self.shape_override,
+                             target_size=self.size_override,
+                             num_targets=self.targets_override,
+                             target_initial=self.initial_override)
         self.perf = PerformanceTracker()
         self.paused = False
         self.show_fov_grid = True
@@ -240,7 +252,12 @@ class App:
     def _reset(self, name=None):
         self.sim = Simulator(preset_name=name or self.preset, seed=None,
                              platform_mode=self.platform_mode,
-                             atmosphere=self.atmosphere)
+                             atmosphere=self.atmosphere,
+                             motion_type=self.motion_override,
+                             target_shape=self.shape_override,
+                             target_size=self.size_override,
+                             num_targets=self.targets_override,
+                             target_initial=self.initial_override)
         self.perf = PerformanceTracker()
         self.error_spark.clear()
         self.sync_sliders()
@@ -813,10 +830,15 @@ def _bracket(surf, center, color, r, th):
         pygame.draw.line(surf, color, (x + dx * r, y + dy * L), (x + dx * (r - L // 2), y + dy * L), th)
 
 
-def headless_selftest(frames, preset, platform=None, atmosphere=None):
+def headless_selftest(frames, preset, platform=None, atmosphere=None,
+                      motion_type=None, target_shape=None, target_size=None,
+                      num_targets=None, target_initial=None):
     print(f"headless self-test: preset={preset} frames={frames}")
     sim = Simulator(preset_name=preset, seed=1,
-                    platform_mode=platform, atmosphere=atmosphere)
+                    platform_mode=platform, atmosphere=atmosphere,
+                    motion_type=motion_type,
+                    target_shape=target_shape, target_size=target_size,
+                    num_targets=num_targets, target_initial=target_initial)
     perf = PerformanceTracker()
     t0 = time.time()
     for _ in range(frames):
@@ -841,15 +863,34 @@ def main():
     ap.add_argument("--atmosphere", default=None,
                     choices=["CLEAR", "HAZE", "FOG", "RAIN", "LOW_LIGHT"],
                     help="atmospheric condition (PS 26169)")
+    ap.add_argument("--motion", default=None,
+                    choices=["straight_line", "circular", "figure_eight",
+                             "random", "spiral", "sinusoidal"],
+                    help="target motion type (PS: selectable, at least four)")
+    ap.add_argument("--shape", default=None,
+                    choices=["SQUARE", "CIRCLE", "SPOT"],
+                    help="target shape (PS: user-defined, default Square)")
+    ap.add_argument("--size", type=int, default=None,
+                    help="target size in pixels (PS: 5-20, default 10)")
+    ap.add_argument("--targets", type=int, default=None,
+                    help="number of targets (PS: 1 mandatory, multiple optional)")
+    ap.add_argument("--initial", default=None,
+                    choices=["RANDOM", "CENTER"],
+                    help="initial target location (PS: user-defined, default Random)")
     args = ap.parse_args()
 
     if args.frames > 0:
         headless_selftest(args.frames, args.preset.upper(),
-                          args.platform, args.atmosphere)
+                          args.platform, args.atmosphere,
+                          args.motion, args.shape, args.size,
+                          args.targets, args.initial)
         return
 
     app = App(preset=args.preset.upper(), fullscreen=args.fullscreen,
-              platform_mode=args.platform, atmosphere=args.atmosphere)
+              platform_mode=args.platform, atmosphere=args.atmosphere,
+              motion_type=args.motion, target_shape=args.shape,
+              target_size=args.size, num_targets=args.targets,
+              target_initial=args.initial)
     app.run()
 
 

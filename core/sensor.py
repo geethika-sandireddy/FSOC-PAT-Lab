@@ -121,35 +121,36 @@ class VirtualSensor:
                     frame[py_, px, 1] += g * scale
                     frame[py_, px, 2] += b * scale
 
-        # --- beacon ---
-        b = scene.beacon
-        pix = geometry.project_point_into_camera(b.pos, cam_pos, basis, focal, cu, cv)
+        # --- beacon(s) ---
+        # designated primary is scene.beacon; extra targets (PS: multiple
+        # optional) render identically so the detector sees every sky object.
         occ = 0.0
-        for o in scene.obstacles:
-            cover = o.crossing(scene.time)
-            if cover > 0:
-                opos = geometry.azel_to_vec(o.az, o.el, 8.0e5)
-                opix = geometry.project_point_into_camera(opos, cam_pos, basis, focal, cu, cv)
-                if opix is not None:
-                    r_ob = o.radius_deg * config.PIXELS_PER_DEG
-                    dist_beacon = math.hypot(opix[0] - (pix[0] if pix else 0.0),
-                                             opix[1] - (pix[1] if pix else 0.0))
-                    if dist_beacon < r_ob * 2.2:
-                        occ = max(occ, cover)
-        b.visible = True
-        if pix is not None:
+        for b in getattr(scene, "beacons", [scene.beacon]):
+            pix = geometry.project_point_into_camera(b.pos, cam_pos, basis, focal, cu, cv)
+            b.visible = pix is not None
+            if pix is None:
+                continue
             u, v = pix
-            # modulation amplitude
             amp = b.intensity(b.time)
-            # beacon intensity fade (path loss / signal degradation channel)
             if disturbance is not None and getattr(disturbance, "beacon_fade", 0) > 0:
                 fade = 1.0 - (disturbance.beacon_fade / 100.0) * config.BEACON_FADE_MAX
                 amp *= max(0.12, fade)
-            if occ > 0.0:
-                # obstacle partially covers -> dim & occlude proportionally
-                amp *= max(0.0, 1.0 - occ)
-                if occ > 0.55:
-                    amp = 0.0
+            if b is scene.beacon:
+                # primary beacon occlusion only (metrics/PAT truth)
+                for o in scene.obstacles:
+                    cover = o.crossing(scene.time)
+                    if cover > 0:
+                        opos = geometry.azel_to_vec(o.az, o.el, 8.0e5)
+                        opix = geometry.project_point_into_camera(opos, cam_pos, basis, focal, cu, cv)
+                        if opix is not None:
+                            r_ob = o.radius_deg * config.PIXELS_PER_DEG
+                            dist_beacon = math.hypot(opix[0] - pix[0], opix[1] - pix[1])
+                            if dist_beacon < r_ob * 2.2:
+                                occ = max(occ, cover)
+                if occ > 0.0:
+                    amp *= max(0.0, 1.0 - occ)
+                    if occ > 0.55:
+                        amp = 0.0
             if amp > 8:
                 # PS 26169: target shape configurable (Square default, Circle, Spot)
                 shape = getattr(b, "shape", "SQUARE")
@@ -162,11 +163,12 @@ class VirtualSensor:
                     _draw_sprite(frame, u, v, _BEACON_KERNEL, amp)
                 else:  # SQUARE (PS default)
                     _draw_square_blob(frame, u, v, spx, spy, amp)
-                core_tint = 0.9
-                px0, py0 = int(round(u)), int(round(v))
-                if 0 <= px0 < self.w and 0 <= py0 < self.h:
-                    frame[py0, px0, 0] += 12 * core_tint
-                    frame[py0, px0, 2] += 30 * core_tint
+                if b is scene.beacon:
+                    core_tint = 0.9
+                    px0, py0 = int(round(u)), int(round(v))
+                    if 0 <= px0 < self.w and 0 <= py0 < self.h:
+                        frame[py0, px0, 0] += 12 * core_tint
+                        frame[py0, px0, 2] += 30 * core_tint
 
         # --- obstacles (dark occluders over the scene, correct depth) ---
         for o in scene.obstacles:

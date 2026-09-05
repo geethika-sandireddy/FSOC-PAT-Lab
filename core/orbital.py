@@ -36,11 +36,14 @@ from core.motion import MOTION_TYPES
 
 class RelativeOrbitModel:
     def __init__(self, az_amp=1.4, el_amp=0.9, speed=1.15, seed=None,
-                 motion_type=None):
+                 motion_type=None, initial="RANDOM"):
+        """initial: "RANDOM" (PS default) -> beacon appears anywhere in the
+        scene; "CENTER" -> beacon starts at the gimbal boresight (0,0)."""
         rnd = random.Random(seed)
         self.az_amp = az_amp
         self.el_amp = el_amp
         self.speed = speed
+        self.initial = initial
         # PS-mandated selectable motion type (straight_line, circular, figure_eight, random)
         self._motion_type = motion_type
         if motion_type is not None and motion_type in MOTION_TYPES:
@@ -55,10 +58,17 @@ class RelativeOrbitModel:
             self._is_custom = False
             self._motion_fn = None
         # Parameterised relative-motion model (see module docstring).
-        self.az_omega = rnd.uniform(0.090, 0.120) * speed      # rad/s
-        self.el_omega = rnd.uniform(0.045, 0.070) * speed      # rad/s
-        self.az_phase = rnd.uniform(-0.4, 0.4)
-        self.el_phase = rnd.uniform(0.0, 6.283)
+        if self.initial == "CENTER":
+            # beacon starts on the gimbal boresight (0,0); motion still evolves
+            self.az_omega = rnd.uniform(0.090, 0.120) * speed      # rad/s
+            self.el_omega = rnd.uniform(0.045, 0.070) * speed      # rad/s
+            self.az_phase = 0.0
+            self.el_phase = 0.0
+        else:
+            self.az_omega = rnd.uniform(0.090, 0.120) * speed      # rad/s
+            self.el_omega = rnd.uniform(0.045, 0.070) * speed      # rad/s
+            self.az_phase = rnd.uniform(-0.4, 0.4)
+            self.el_phase = rnd.uniform(0.0, 6.283)
         self.range_base = 1000.0                                # km
         self.range_var = rnd.uniform(180.0, 320.0)
         self.range_omega = rnd.uniform(0.03, 0.06)

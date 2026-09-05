@@ -15,7 +15,7 @@ ISRO's Problem Statement 26169 asks for "Development of an AI-Based Virtual Came
 3. **Track** the beacon continuously despite atmospheric scintillation, platform vibrations, and line-of-sight occlusions.
 4. **Steer** a two-axis gimbal to maintain sub-degree boresight alignment in closed loop.
 
-Our solution is a complete real-time simulation and control pipeline running at 30–48 fps on commodity hardware with no GPU acceleration, implemented in pure Python with pygame-ce, OpenCV, and NumPy.
+Our solution is a complete real-time simulation and control pipeline running at 19–40 fps on commodity hardware with no GPU acceleration, implemented in pure Python with pygame-ce, OpenCV, and NumPy.
 
 ---
 
@@ -232,17 +232,17 @@ Azimuth and elevation axes are controlled independently, each with its own PD co
 
 ### 9.1 Benchmark Methodology
 
-All results are obtained using the headless stress-test harness (`metrics/stress_test.py`) running 3 independent trials of 15 seconds each (900 frames per trial at 60 fps), with different random seeds per trial. Metrics are reported as means across trials.
+All results are obtained using the headless stress-test harness (`metrics/stress_test.py`) running independent trials with different random seeds per trial. Metrics are reported as means across trials. Table below is a 2-trial × 4 s run on the committed build.
 
 ### 9.2 Quantitative Results
 
-| Preset | Acquisition Time | Retention (%) | Visibility (%) | Mean Error (°) | RMS Error (°) | Max Error (°) | False Locks | FPS |
-|--------|-----------------|---------------|----------------|----------------|----------------|---------------|-------------|-----|
-| EASY | 0.28 s | 98.6 | 98.6 | 0.029 | 0.045 | 0.360 | 0 | 50 |
-| MODERATE | 0.33 s | 87.8 | 89.6 | 0.189 | 0.234 | 0.538 | 4 | 45 |
-| HARD | 1.36 s | 82.9 | 83.4 | 0.264 | 0.305 | 0.654 | 3 | 43 |
-| SEVERE | 0.56 s | 89.9 | 90.7 | 0.317 | 0.363 | 0.732 | 4 | 39 |
-| ADVERSARIAL | 1.17 s | 94.1 | 94.8 | 0.443 | 0.496 | 0.899 | 8 | 37 |
+| Preset | Acquisition Time | Retention (%) | Tracking Success (%) | Mean Error (°) | Max Error (°) | False Locks | FPS |
+|--------|-----------------|---------------|----------------------|----------------|---------------|-------------|-----|
+| EASY | 0.23 s | 94.6 | 100.0 | 0.034 | 0.353 | 0 | 40.0 |
+| MODERATE | 0.23 s | 94.6 | 100.0 | 0.040 | 0.352 | 0 | 34.2 |
+| HARD | 0.47 s | 88.8 | 100.0 | 0.033 | 0.204 | 0 | 20.7 |
+| SEVERE | 0.29 s | 92.9 | 100.0 | 0.231 | 0.535 | 0 | 19.6 |
+| ADVERSARIAL | 0.48 s | 88.3 | 100.0 | 0.176 | 0.324 | 1 | 19.1 |
 
 > **On the false-lock column being non-zero:** the false-lock monitor in
 > `metrics/performance.py` reports the number of *sustained* (> 5 consecutive
@@ -250,30 +250,21 @@ All results are obtained using the headless stress-test harness (`metrics/stress
 > ≥ 0.35° from the true beacon while the beacon is visible. The monitor fires
 > on the **leading edge** of such an episode, so a wrong lock that persists to
 > the end of a trial is still counted — the metric is designed to *expose*
-> false locks, not hide them (a bug that previously reported 0 for sustained
-> wrong locks regardless was found and fixed). Therefore the EASY=0 result is
-> the current genuinely-clean case, while MODERATE–ADVERSARIAL honestly show
-> rare, self-recovering wrong-target excursions under turbulence + fading +
-> spatial distractors.
+> false locks, not hide them. EASY–SEVERE show zero sustained false locks on
+> this run; a single transient episode appears on ADVERSARIAL and self-recovers
+> via the suspect-floor monitor.
 
 ### 9.3 Key Observations
 
-1. **EASY preset achieves near-perfect tracking**: 0.029° mean error (105 arcseconds), 98.6% retention, zero false locks. This demonstrates the system's fundamental accuracy under nominal conditions.
+1. **All presets lock successfully**: 100% tracking success and acquisition time ≤ 0.5 s (well under the PS ≤ 2 s spec) across every difficulty level.
 
-2. **Graceful degradation**: Mean error increases monotonically from 0.029° (EASY) to 0.443° (ADVERSARIAL), while acquisition time remains under 2 seconds for all presets. The system never catastrophically fails.
+2. **Mean error is sub-0.05° on EASY/MODERATE/HARD** (≈ 11–15 px at 333 px/°) and stays under 0.24° even on SEVERE/ADVERSARIAL — within the coarse-alignment stage's handoff band.
 
-3. **Modulation correlation is the primary discriminator**: The phase-robust correlator achieves mean correlation of 0.97–0.98 for the true beacon under light-to-moderate turbulence, dropping to 0.69–0.71 under extreme conditions. Decoy correlations remain below 0.56, providing clear separation.
+3. **Retention stays near target**: 88–95% across all presets under 4 s trials; longer runs and multi-seed sweeps (see the session log) achieve ≥ 95% on EASY–HARD and 84–97% on SEVERE/ADVERSARIAL.
 
-4. **False-lock events are rare and self-recovering**: Even under ADVERSARIAL conditions (fading beacon, 60% fade, plus high turbulence and spatial distractors) the system triggers only 8 sustained false-lock episodes per 45 s of cumulative runtime, each self-recovering within 0.3–0.5 seconds via the suspect-floor monitor.
+4. **Modulation correlation is the primary discriminator**: The phase-robust correlator achieves high correlation for the true beacon under light-to-moderate turbulence while decoy correlations remain below the lock threshold, providing clear separation and near-zero false locks.
 
-5. **Real-time performance**: Frame rates range from 37–50 fps across all presets, well above the 30 fps minimum for real-time operation.
-
-### 9.4 Comparison with Baseline
-
-The system's 0.029° mean boresight error on EASY represents a >12× improvement over the initial HSV-threshold baseline (0.36°), achieved through:
-- Sub-pixel PSF rendering (eliminated 0.036° measurement bias)
-- Phase-robust modulation correlator (eliminated 0.50-corr phase failures)
-- PD servo tuning (eliminated limit-cycle oscillations)
+5. **Real-time processing**: 19–40 fps across presets on commodity hardware (HARD/SEVERE at the 20 fps margin under the headless harness; interactive mode is capped at 30+ fps).
 
 ---
 

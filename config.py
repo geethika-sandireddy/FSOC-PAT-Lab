@@ -23,13 +23,20 @@ FPS = 60
 
 # ---------------------------------------------------------------------------
 # PS 26169 - Virtual Environment Parameters (user-configurable)
+#
+# Resolution / FOV are "Optional: User-defined" in the PS (default 640x480
+# @ 4x3 deg).  This implementation ships a user-defined camera: 800x450
+# sensor px over a 2.4 deg HFOV (PIXELS_PER_DEG = 333.3, so the PS target
+# of 10 px -> ~0.03 deg).  Both dials below are the SINGLE source of truth;
+# CAM_VIEW_* / HFOV_* / FOCAL_PX below derive from them, so switching to the
+# PS default (640x480 @ 4x3) is a two-line change and everything rescales.
 # ---------------------------------------------------------------------------
 SCREEN_SIZE_W = 2000                   # PS: min 2000x2000, user-defined
 SCREEN_SIZE_H = 2000
-CAMERA_RESOLUTION_W = 640              # PS default: 640x480
-CAMERA_RESOLUTION_H = 480
-CAMERA_FOV_H_DEG = 4.0                 # PS default: 4° x 3°
-CAMERA_FOV_V_DEG = 3.0
+CAMERA_RESOLUTION_W = 800              # user-defined (PS default: 640x480)
+CAMERA_RESOLUTION_H = 450              # user-defined (PS default: 480)
+CAMERA_FOV_H_DEG = 2.4                 # user-defined (PS default: 4 deg)
+CAMERA_FOV_V_DEG = CAMERA_RESOLUTION_H / CAMERA_RESOLUTION_W * CAMERA_FOV_H_DEG
 CAMERA_UPDATE_HZ = 60                  # PS min: 30 Hz
 CAMERA_TYPE = "MONOCHROME"             # PS: Monochrome (optional: Colour)
 
@@ -48,9 +55,9 @@ CAMERA_MAX_TILT_DEG_S = 5.0           # PS default: 5 °/s (range 5-10)
 # ---------------------------------------------------------------------------
 # Virtual camera sensor (the "eye" of the terminal)
 # ---------------------------------------------------------------------------
-CAM_VIEW_W = 800                     # sensor pixels (horizontal)
-CAM_VIEW_H = 450                     # sensor pixels (vertical)
-HFOV_DEG = 2.4                       # horizontal field of view in degrees
+CAM_VIEW_W = CAMERA_RESOLUTION_W      # sensor pixels (horizontal)
+CAM_VIEW_H = CAMERA_RESOLUTION_H      # sensor pixels (vertical)
+HFOV_DEG = CAMERA_FOV_H_DEG           # horizontal field of view in degrees
 PIXELS_PER_DEG = CAM_VIEW_W / HFOV_DEG
 VFOV_DEG = CAM_VIEW_H / PIXELS_PER_DEG
 

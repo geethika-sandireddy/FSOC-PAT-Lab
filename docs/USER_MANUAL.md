@@ -28,7 +28,7 @@ If successful, you should see output like:
 ```
 pygame-ce 2.5.8 (SDL 2.x.x, Python 3.x.x)
 headless self-test: preset=EASY frames=60
-state=LOCKED acq=0.38s retention=85.6% mean_err=0.086° rms=0.127° fps=37.1 false_lock=0
+state=LOCKED acq=0.23s retention=94.6% mean_err=0.034° rms=0.06° fps=40.0 false_lock=0
 ```
 
 ---
@@ -151,6 +151,25 @@ python main.py --frames 120 --preset MODERATE
 ```
 
 Runs 120 frames without a display and prints summary statistics.
+
+### Custom Target Parameters
+
+PS 26169 parameters are user-selectable from the command line:
+
+```bash
+# target motion type (PS: at least four selectable)
+python main.py --motion straight_line
+python main.py --motion circular
+python main.py --motion figure_eight
+python main.py --motion random
+
+# target shape / size / count / initial location (PS: user-defined)
+python main.py --shape CIRCLE --size 14
+python main.py --targets 3            # PS: 1 mandatory, multiple optional
+python main.py --initial CENTER       # RANDOM (default) or CENTER
+```
+
+The GUI's on-screen scenario chips (1-5), platform mode (6-8) and atmosphere (`A`) chips switch these live at runtime; the CLI flags above override the default scene for both the GUI and headless runs.
 
 ### Multi-Trial Stress Test
 

@@ -27,7 +27,9 @@ from core.orbital import EphemerisModel
 
 class Simulator:
     def __init__(self, preset_name="EASY", seed=None, dt=1.0 / config.FPS,
-                 tracker_factory=None, platform_mode=None, atmosphere=None):
+                 tracker_factory=None, platform_mode=None, atmosphere=None,
+                 motion_type=None, target_shape=None, target_size=None,
+                 num_targets=None, target_initial=None):
         preset = config.DIFFICULTY_PRESETS.get(preset_name, config.DIFFICULTY_PRESETS["EASY"])
         self.preset_name = preset_name
         self.preset = preset
@@ -50,8 +52,12 @@ class Simulator:
             speed=preset["speed"],
             distractors=preset["distractors"],
             obstacles=preset["obstacles"], seed=seed,
-            motion_type=preset.get("motion_type",
-                                   pm.get("motion_default") if pm else None),
+            motion_type=motion_type or preset.get("motion_type",
+                                    pm.get("motion_default") if pm else None),
+            target_shape=target_shape, target_size=target_size,
+            num_targets=num_targets if num_targets is not None
+                        else getattr(config, "NUM_TARGETS", 1),
+            target_initial=target_initial,
         )
         self.eph = EphemerisModel(self.scene.orbit, seed=seed)
         self.gimbal = Gimbal()

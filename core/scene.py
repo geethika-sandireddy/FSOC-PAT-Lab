@@ -37,13 +37,14 @@ class Starfield:
 class Beacon:
     """Satellite B's optical beacon (PS 26169: target shape/size configurable)."""
 
-    def __init__(self, orbit_model, seed=None, shape="SQUARE", size_px=10, size_py=10):
+    def __init__(self, orbit_model, seed=None, shape="SQUARE", size_px=10, size_py=10,
+                 phase_offset=0.0):
         self.orbit = orbit_model
         self.az_deg = 0.0
         self.el_deg = 0.0
         self.range_km = 1000.0
         self.pos = (0.0, 0.0, 1000.0)
-        self._time = 0.0
+        self._time = -abs(phase_offset)   # delayed start: enters later in a run
         self.visible = True
         self.shape = shape          # PS: Square (default), Circle, Spot
         self.size_px = size_px      # PS: 5-20 pixels, default 10
@@ -140,16 +141,33 @@ class Scene3D:
 
     def __init__(self, az_amp=1.4, el_amp=0.9, speed=1.15, distractors=0,
                  obstacles=0, seed=None, motion_type=None,
-                 target_shape=None, target_size=None, num_targets=1):
+                 target_shape=None, target_size=None, num_targets=1,
+                 target_initial=None):
         self.rng = random.Random(seed)
         from core.orbital import RelativeOrbitModel
         self.orbit = RelativeOrbitModel(az_amp=az_amp, el_amp=el_amp,
                                         speed=speed, seed=seed,
-                                        motion_type=motion_type)
+                                        motion_type=motion_type,
+                                        initial=target_initial or
+                                        getattr(config, "TARGET_INITIAL", "RANDOM"))
         shape = target_shape or getattr(config, "TARGET_SHAPE", "SQUARE")
         tsize = target_size or getattr(config, "TARGET_SIZE_PX", 10)
+        self.num_targets = max(1, int(num_targets))
+        # designated primary target (index 0) - everything downstream (ephemeris,
+        # tracker, metrics) tracks THIS one.  Extra targets get phase-delayed
+        # separate orbits so they are additional independent sky objects.
         self.beacon = Beacon(self.orbit, seed=seed,
                              shape=shape, size_px=tsize, size_py=tsize)
+        self.beacons = [self.beacon]
+        for i in range(1, self.num_targets):
+            extra_orbit = RelativeOrbitModel(az_amp=az_amp, el_amp=el_amp,
+                                             speed=speed, seed=(seed or 7) * 31 + i,
+                                             motion_type="random",
+                                             initial="RANDOM")
+            extra = Beacon(extra_orbit, seed=seed + i,
+                           shape=shape, size_px=tsize, size_py=tsize,
+                           phase_offset=0.0)
+            self.beacons.append(extra)
         self.stars = Starfield(config.NUM_STARS, seed=seed)
         self.distractors = []
         self.obstacles = []
@@ -171,7 +189,8 @@ class Scene3D:
 
     def advance(self, dt):
         self._t += dt
-        self.beacon.advance(dt)
+        for b in self.beacons:
+            b.advance(dt)
         bz, bel = self.beacon.az_deg, self.beacon.el_deg
         for d in self.distractors:
             d.advance(dt, bz, bel)
