@@ -30,6 +30,7 @@ for a real SGP4 call; nothing else in the pipeline changes.
 import math
 import random
 
+import config
 from core.motion import MOTION_TYPES
 
 
@@ -91,7 +92,10 @@ class EphemerisModel:
         self._dir = (math.cos(angle), math.sin(angle))
 
     def _bias_deg(self, t):
-        mag = min(0.55 + 0.012 * t, 2.6)
+        start = config.EPHEMERIS_START_BIAS_DEG
+        rate = config.EPHEMERIS_GROWTH_DEG_PER_SEC
+        cap = config.EPHEMERIS_MAX_BIAS_DEG
+        mag = min(start + rate * t, cap)
         return (self._dir[0] * mag, self._dir[1] * mag)
 
     def predict_az_el(self, t):

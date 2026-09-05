@@ -33,6 +33,7 @@ class PerformanceTracker:
         self.start_wall = time.time()
         self.frame_count = 0
         self.acquisition_time_s = None
+        self.acquisition_frame = None
         self.locked_frames = 0
         self.visible_frames = 0
         self.locked_visible_frames = 0
@@ -42,7 +43,7 @@ class PerformanceTracker:
         self.last_tick = 0.0
         self._tick_start = time.time()
         self.was_locked = False
-        self.lock_lost_at = None
+        self.lock_lost_at_frame = None
         self.reacquisition_times = []
         self.lock_events = 0
         self.false_lock_events = 0
@@ -73,6 +74,7 @@ class PerformanceTracker:
         is_locked = state == "LOCKED"
         visible = r["beacon_visible"]
 
+        sim_t = float(r.get("t", 0.0))
         if visible:
             self.visible_frames += 1
         if is_locked:
@@ -81,15 +83,18 @@ class PerformanceTracker:
             if visible:
                 self.locked_visible_frames += 1
             if self.acquisition_time_s is None:
-                self.acquisition_time_s = now - self.start_wall
+                self.acquisition_time_s = sim_t
+                self.acquisition_frame = self.frame_count
                 self.lock_events += 1
             elif not self.was_locked:
                 if self.lock_events == 0:
-                    self.acquisition_time_s = now - self.start_wall
+                    self.acquisition_time_s = sim_t
+                    self.acquisition_frame = self.frame_count
                 self.lock_events += 1
-                if self.lock_lost_at is not None:
-                    self.reacquisition_times.append(now - self.lock_lost_at)
-                    self.lock_lost_at = None
+                if self.lock_lost_at_frame is not None:
+                    dt_reacq = max(0.0, sim_t - (self.lock_lost_at_frame / max(1.0, config.FPS)))
+                    self.reacquisition_times.append(dt_reacq)
+                    self.lock_lost_at_frame = None
 
             err = r["pointing_err_deg"]
             if err is not None:
@@ -97,13 +102,6 @@ class PerformanceTracker:
             if r["est_err_deg"] is not None:
                 self.est_errors_deg.append(r["est_err_deg"])
 
-            # false-lock monitor: locked onto something that is NOT the beacon.
-            # A false lock is declared the INSTANT the tracker has sustained a
-            # wall-clock verified wrong-target lock for N consecutive frames
-            # (beacon visible & in FOV, but the estimate is far from it).  The
-            # event is emitted on the leading edge of the wrong-lock run, so a
-            # lock that stays wrong until the end of the test is STILL counted
-            # (the metric must be able to expose a false lock, not hide it).
             if visible and r["in_fov"]:
                 if r["est_err_deg"] is not None and r["est_err_deg"] > 0.35:
                     self._false_lock_frames += 1
@@ -112,17 +110,13 @@ class PerformanceTracker:
                 else:
                     self._false_lock_frames = 0
 
-            # tracking success rate: of the frames where the beacon was actually
-            # visible and in the FOV (so tracking was expected to succeed), what
-            # fraction was the system genuinely LOCKED?  This is the honest PAT
-            # "did it hold when it should" figure for the judicial panel.
             if visible and r["in_fov"]:
                 self.expected_frames += 1
                 if r.get("state") == "LOCKED" or (is_locked and r["est_err_deg"] is not None and r["est_err_deg"] < 0.4):
                     self.success_frames += 1
         else:
             if self.was_locked:
-                self.lock_lost_at = now
+                self.lock_lost_at_frame = self.frame_count
 
         self.was_locked = is_locked
 

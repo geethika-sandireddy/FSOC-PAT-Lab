@@ -56,16 +56,17 @@ class PointingController:
         """Return (pan_deg, tilt_deg) set-point for this frame."""
         st = self.tracker.state
 
-        if st == "SEARCHING" and self.tracker.last_candidate_age < 0.35 \
+        if st == "TENTATIVE" and self.tracker.est_az is not None:
+            self.pan = self.tracker.est_az
+            self.tilt = self.tracker.est_el
+        elif st == "SEARCHING" and self.tracker.last_candidate_age < 0.80 \
                 and self.tracker.last_candidate_az is not None:
-            # a promising candidate exists: chase it while confirming
             self.pan = self.tracker.last_candidate_az
             self.tilt = self.tracker.last_candidate_el
         elif st in ("LOCKED", "COASTING") and self.tracker.est_az is not None:
             self.pan = self.tracker.est_az
             self.tilt = self.tracker.est_el
         else:
-            # blind expanding-spiral search
             az, el = self.tracker.search_point(t, dt)
             self.pan = az
             self.tilt = el
