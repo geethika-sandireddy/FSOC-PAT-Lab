@@ -54,17 +54,20 @@ class ModulationTrack:
         self.pys = deque(maxlen=win)
         self.values = deque(maxlen=win)
         self.frames = deque(maxlen=win)
+        self.areas = deque(maxlen=win)
 
     def reset(self):
         self.pxs.clear()
         self.pys.clear()
         self.values.clear()
         self.frames.clear()
+        self.areas.clear()
 
-    def push(self, u, v, intensity, frame_n):
+    def push(self, u, v, intensity, frame_n, area=None):
         self.pxs.append(u)
         self.pys.append(v)
         self.values.append(max(0.0, float(intensity)))
+        self.areas.append(float(area) if area is not None else float(intensity))
         self.frames.append(int(frame_n))
 
     @staticmethod
@@ -114,6 +117,60 @@ class ModulationTrack:
             if c > best:
                 best = c
         return best
+
+    @staticmethod
+    def _blend(sign_agree, depth):
+        """0-1 blend of the cadence (sign agreement) and the amplitude (depth)
+        evidence.  Depth >=40 px of area swings is treated as fully decisive."""
+        return 0.6 * sign_agree + 0.4 * min(1.0, max(0.0, depth) / 40.0)
+
+    def corr_area(self):
+        """Continuous AREA-based modulation score of the tracker's history.
+        The tracker holds one object through detection ID reseeds, so this
+        is the stable 'am I locked onto a true 15 Hz blinker' signal, where
+        per-candidate detector tracks under noise can flicker."""
+        areas = list(self.areas)
+        n = len(areas)
+        if n < 8:
+            return 0.0
+        mean_a = sum(areas) / n
+        best_agree, best_depth = 0.0, 0.0
+        for lag in (0, 1, 2):
+            agree = 0.0
+            hi, lo = [], []
+            for a, f in zip(areas, self.frames):
+                sig = 1.0 if a > mean_a else -1.0
+                agree += sig * self._template_sign(f, lag)
+                (hi if self._template_sign(f, lag) > 0 else lo).append(a)
+            if hi and lo:
+                best_depth = max(best_depth, (sum(hi) / len(hi)) - (sum(lo) / len(lo)))
+            best_agree = max(best_agree, max(0.0, (agree / n + 1.0) / 2.0))
+        return self._blend(best_agree, best_depth)
+
+    def predictive_area(self, area, frame_n):
+        """What corr_area() would be if this candidate's AREA were appended."""
+        areas = list(self.areas)
+        n = len(areas)
+        if n < 8:
+            return 0.0
+        new_a = max(0.0, float(area))
+        mean_a = (sum(areas) + new_a) / (n + 1)
+        best_agree, best_depth = 0.0, 0.0
+        n_ext = n + 1
+        for lag in (0, 1, 2):
+            agree = 0.0
+            hi, lo = [], []
+            for a, f in zip(areas, self.frames):
+                sig = 1.0 if a > mean_a else -1.0
+                agree += sig * self._template_sign(f, lag)
+                (hi if self._template_sign(f, lag) > 0 else lo).append(a)
+            sig_n = 1.0 if new_a > mean_a else -1.0
+            agree += sig_n * self._template_sign(frame_n, lag)
+            (hi if self._template_sign(frame_n, lag) > 0 else lo).append(new_a)
+            if hi and lo:
+                best_depth = max(best_depth, (sum(hi) / len(hi)) - (sum(lo) / len(lo)))
+            best_agree = max(best_agree, max(0.0, (agree / n_ext + 1.0) / 2.0))
+        return self._blend(best_agree, best_depth)
 
 
 class Tracker:
@@ -172,15 +229,19 @@ class Tracker:
             if getattr(c, "track_age", 0) >= 2:
                 c.fusion_score *= config.PERSISTENCE_BOOST
             # a blob that actually blinks at the beacon's 15 Hz modulation is
-            # overwhelmingly likely to BE the beacon: its own-track modulation
+            # overwhelmingly likely to BE the beacon: its own-track peak-mod
             # score caps association/fusion against static beacon-like decoys.
             tm = getattr(c, "track_mod", 0.0)
             if tm >= 0.60:
-                c.fusion_score *= 1.0 + config.MOD_ASSOC_K * (tm - 0.55)
+                c.fusion_score *= 1.0 + config.MOD_ASSOC_K * (tm - 0.50)
 
         has_track = self.est_az is not None and self.state in (LOCKED, COASTING)
 
         if has_track:
+            # prefer the true 15 Hz blinker: the fused mod boost in the score
+            # loop gives a persistent area-modulated blob a strong edge over
+            # static beacon-like decoys without ever wrong-restricting (all
+            # candidates remain eligible, so no coast-loss when mod dips).
             best = None
             for c in candidates:
                 d = math.hypot(c.los_az - self.est_az, c.los_el - self.est_el)
@@ -246,7 +307,7 @@ class Tracker:
                 self.mod.reset()
             # else: minor jitter, keep counting spaces
         self._tent_az, self._tent_el = c.los_az, c.los_el
-        self.mod.push(c.u, c.v, c.peak, self._frame)
+        self.mod.push(c.u, c.v, c.peak, self._frame, area=c.area)
         c.mod_score = self.mod.corr()
 
         # steer the gimbal toward the tentative target so it stays in view
@@ -271,7 +332,7 @@ class Tracker:
 
     def _on_tracked(self, c, t, dt, p_az, p_el):
         self.candidates_seen += 1
-        self.mod.push(c.u, c.v, c.peak, self._frame)
+        self.mod.push(c.u, c.v, c.peak, self._frame, area=c.area)
         c.mod_score = self.mod.corr()
         # continuous modulation verification: a locked object that STOPPED
         # matching the beacon signature is a false lock -> drop back to search

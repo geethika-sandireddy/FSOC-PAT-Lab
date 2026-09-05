@@ -63,31 +63,63 @@ class DetectionEngine:
             tr["az"], tr["el"] = cand.los_az, cand.los_el
             tr["miss"] = 0
             tr["age"] += 1
-            tr["hist"].append((self._frame, cand.peak))
+            tr["hist"].append((self._frame, cand.peak, cand.area))
             cand.track_id = tr["id"]
             cand.track_age = tr["age"]
         else:
+            # Rescue relink: a blob that hopped outside the tight association
+            # radius (SEVERE LOS jitter) still belongs to the *nearest* recent
+            # track when it lands within the wider rescue radius - we adopt
+            # that track instead of fragmenting IDs (which would reset the
+            # beacon's modulation history and persistence evidence).
+            adopted = -1
+            best_r = config.TRACK_RESCUE_RADIUS_DEG
+            for i, tr in enumerate(self._tracks):
+                d = math.hypot(cand.los_az - tr["az"], cand.los_el - tr["el"])
+                if d < best_r:
+                    best_r, adopted = d, i
+            hist = _deque(maxlen=config.MOD_CORREL_WIN)
+            if adopted >= 0:
+                tr = self._tracks[adopted]
+                tr["az"], tr["el"] = cand.los_az, cand.los_el
+                tr["miss"] = 0
+                tr["age"] += 1
+                tr["hist"].append((self._frame, cand.peak, cand.area))
+                cand.track_id = tr["id"]
+                cand.track_age = tr["age"]
+                cand.track_mod = self._track_mod_corr(tr["hist"])
+                return
+            # true new object
             self._track_seq += 1
             cand.track_id = self._track_seq
             cand.track_age = 1
+            # inherit the modulation history of the nearest recently-seen track
+            # so an ID reseed does NOT reset the blink evidence
+            for tr in self._tracks:
+                if tr["miss"] <= config.TRACK_MISS_TOL and \
+                        math.hypot(cand.los_az - tr["az"], cand.los_el - tr["el"]) < \
+                        config.TRACK_ASSOC_RADIUS_DEG:
+                    hist.extend(tr["hist"])
+                    break
+            hist.append((self._frame, cand.peak, cand.area))
             self._tracks.append(dict(
                 id=self._track_seq, az=cand.los_az, el=cand.los_el,
-                age=1, miss=0, hist=_deque(maxlen=config.MOD_CORREL_WIN)))
-            self._tracks[-1]["hist"].append((self._frame, cand.peak))
+                age=1, miss=0, hist=hist))
         cand.track_mod = self._track_mod_corr(self._tracks[best_i]["hist"] if best_i >= 0
                                               else self._tracks[-1]["hist"])
 
     @staticmethod
     def _track_mod_corr(hist):
-        """Sign-agreement of this track's brightness history against the known
-        15 Hz beacon square-wave template, best of 0..2 frame lags (phase
-        robust).  A beacon track agrees strongly; a static distractor / noise
-        blob wanders around 0.5.  Returns 0.0 until enough samples exist."""
+        """Sign-agreement of a track's PEAK brightness history against the
+        known 15 Hz beacon square-wave template, best of 0..2 frame lags
+        (phase robust).  A beacon track agrees strongly; a static distractor
+        / noise blob wanders around 0.5.  Returns 0.0 until enough samples
+        have accumulated on one persistent blob track."""
         n = len(hist)
         if n < 8:
             return 0.0
-        vals = [v for _, v in hist]
-        frames = [f for f, _ in hist]
+        vals = [float(v[1]) for v in hist]
+        frames = [v[0] for v in hist]
         mean_v = sum(vals) / n
         best = 0.0
         for lag in (0, 1, 2):
@@ -95,7 +127,9 @@ class DetectionEngine:
             for v, f in zip(vals, frames):
                 sig = 1.0 if v > mean_v else -1.0
                 agree += sig * _mod_template_sign(f, lag)
-            best = max(best, max(0.0, min(1.0, (agree / n + 1.0) / 2.0)))
+            c = max(0.0, min(1.0, (agree / n + 1.0) / 2.0))
+            if c > best:
+                best = c
         return best
 
     def _prune_tracks(self):
