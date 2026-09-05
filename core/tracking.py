@@ -129,6 +129,7 @@ class Tracker:
         self._tent_az = None          # tentative track LOS while acquiring
         self._tent_el = None
         self._tent_frames = 0
+        self._tent_id = None          # persistent blob ID held during acquisition
         self.coast_time = 0.0
         self.search_angle = 0.0
         self.search_radius = 0.0
@@ -149,6 +150,7 @@ class Tracker:
         self.mod.reset()
         self._tent_az = self._tent_el = None
         self._tent_frames = 0
+        self._tent_id = None
         self.coast_time = 0.0
 
     # ------------------------------------------------------------------
@@ -164,7 +166,17 @@ class Tracker:
             c.mod_score = 0.0
             c.prior_score = max(0.0, 1.0 - math.hypot(c.los_az - prior_az,
                                                       c.los_el - prior_el) / 3.0)
+            # persistent (previously-seen) blobs get a fusion edge so acquisition
+            # sticks to one physical object instead of hopping between noise blobs
             c.fusion_score = c.ml_score * c.prior_score
+            if getattr(c, "track_age", 0) >= 2:
+                c.fusion_score *= config.PERSISTENCE_BOOST
+            # a blob that actually blinks at the beacon's 15 Hz modulation is
+            # overwhelmingly likely to BE the beacon: its own-track modulation
+            # score caps association/fusion against static beacon-like decoys.
+            tm = getattr(c, "track_mod", 0.0)
+            if tm >= 0.60:
+                c.fusion_score *= 1.0 + config.MOD_ASSOC_K * (tm - 0.55)
 
         has_track = self.est_az is not None and self.state in (LOCKED, COASTING)
 
@@ -181,15 +193,27 @@ class Tracker:
                 self.associated = best
                 return self._on_tracked(best, t, dt, prior_az, prior_el)
         else:
-            # acquisition: best candidate that clears appearance + prior gate
+            # acquisition: best candidate that clears appearance + prior gate.
+            # Once a tentative object has been chosen we *hold it by track_id* so
+            # modulation history accumulates on ONE physical object; a fresh
+            # blob only takes over if the held object is gone or obviously worse.
             best = None
-            for c in candidates:
-                if c.ml_score < config.ML_LOCK_THRESHOLD:
-                    continue
-                if math.hypot(c.los_az - prior_az, c.los_el - prior_el) > self._prior_gate_deg(t):
-                    continue
-                if best is None or c.fusion_score > best.fusion_score:
-                    best = c
+            if self._tent_id is not None and self._tent_frames > 0:
+                held = None
+                for c in candidates:
+                    if getattr(c, "track_id", None) == self._tent_id:
+                        held = c
+                        break
+                if held is not None:
+                    best = held
+            if best is None:
+                for c in candidates:
+                    if c.ml_score < config.ML_FLOOR_SCORE:
+                        continue
+                    if math.hypot(c.los_az - prior_az, c.los_el - prior_el) > self._prior_gate_deg(t):
+                        continue
+                    if best is None or c.fusion_score > best.fusion_score:
+                        best = c
             if best is not None:
                 self.last_candidate_age = 0.0
                 self.last_candidate_az, self.last_candidate_el = best.los_az, best.los_el
@@ -208,6 +232,7 @@ class Tracker:
 
         if self._tent_frames == 0:
             self._tent_az, self._tent_el = c.los_az, c.los_el
+            self._tent_id = getattr(c, "track_id", None)
             self._tent_frames = 1
         else:
             d = math.hypot(c.los_az - self._tent_az, c.los_el - self._tent_el)
@@ -216,6 +241,7 @@ class Tracker:
             elif d > consistency * 3:
                 # object jumped >> expect -> restart the tentative track
                 self._tent_az, self._tent_el = c.los_az, c.los_el
+                self._tent_id = getattr(c, "track_id", None)
                 self._tent_frames = 1
                 self.mod.reset()
             # else: minor jitter, keep counting spaces
@@ -239,6 +265,7 @@ class Tracker:
                 # modulation fails -> not the real beacon, start over
                 self._tent_frames = 0
                 self._tent_az = self._tent_el = None
+                self._tent_id = None
                 self.mod.reset()
         return SEARCHING, self.est_az, self.est_el, self.confidence
 
@@ -264,6 +291,7 @@ class Tracker:
         self.coast_time = 0.0
         self._tent_az = self._tent_el = None
         self._tent_frames = 0
+        self._tent_id = None
         r_az = c.los_az - p_az
         r_el = c.los_el - p_el
         a = config.ESTIMATOR_ALPHA
@@ -282,6 +310,7 @@ class Tracker:
         self.state = LOCKED
         self.acquisition_count += 1
         self.coast_time = 0.0
+        self._tent_id = None
 
     def _on_miss(self, t, dt):
         if self.state in (LOCKED, COASTING):

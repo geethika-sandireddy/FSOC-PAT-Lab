@@ -27,6 +27,30 @@ class PointingController:
         self.pan = 0.0
         self.tilt = 0.0
         self.searching_since = 0.0
+        self._prev_pan = None
+        self._prev_tilt = None
+        self._v_pan = 0.0
+        self._v_tilt = 0.0
+
+    def _target_velocity(self, pan, tilt, dt):
+        """Smoothed angular velocity of the set-point (deg/s).
+
+        Fed to the gimbal's servo as a velocity feedforward so a PD
+        position loop does not trail a moving beacon.
+        """
+        if self._prev_pan is not None and dt > 0:
+            raw_p = (pan - self._prev_pan) / dt
+            raw_t = (tilt - self._prev_tilt) / dt
+            # bang-bang limiter: reject implausible single-frame spikes
+            if abs(raw_p) > 8.0:
+                raw_p = self._v_pan
+            if abs(raw_t) > 8.0:
+                raw_t = self._v_tilt
+            a = config.CONTROL_VEL_EMA
+            self._v_pan = a * (raw_p - self._v_pan) + self._v_pan
+            self._v_tilt = a * (raw_t - self._v_tilt) + self._v_tilt
+        self._prev_pan, self._prev_tilt = pan, tilt
+        return self._v_pan, self._v_tilt
 
     def compute_setpoint(self, t, dt):
         """Return (pan_deg, tilt_deg) set-point for this frame."""
@@ -49,4 +73,6 @@ class PointingController:
         # slew-shaping happens in the gimbal; here we just clamp sanity
         self.pan = max(-30.0, min(30.0, self.pan))
         self.tilt = max(-30.0, min(30.0, self.tilt))
+        self.gimbal.command_attitude(self.pan, self.tilt,
+                                     *self._target_velocity(self.pan, self.tilt, dt))
         return self.pan, self.tilt

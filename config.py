@@ -93,6 +93,23 @@ DETECTION_ABS_THRESHOLD = 42         # signal above local background (grey level
 DETECTION_MIN_BLOB_AREA = 5          # px^2
 EXPECTED_BEACON_HUE = 8              # HSV hue (OpenCV 0-180) of the beacon core
 
+# A blob far smaller than the beacon's known angular footprint (area_norm
+# well under 1.0) cannot physically be the beacon -- it is salt-pepper or
+# hot-pixel noise.  Pruning these tiny blobs is the single most powerful
+# anti-decoy measure under heavy atmosphere (they are ~90% of SEVERE decoys).
+MIN_BEACON_AREA_NORM = 0.10
+
+# Persistent-blob association: give a stable ID to blobs that survive across
+# frames so acquisition can "stick" to one physical object instead of flip-
+# flopping between noise blobs (the #1 cause of never-locking under heavy
+# atmosphere/noise).  Association done in world LOS space (deg).
+TRACK_ASSOC_RADIUS_DEG = 0.10        # two blobs closer than this = same object
+TRACK_MISS_TOL = 3                   # frames an ID survives while unseen
+PERSISTENCE_BOOST = 1.35             # acquisition fusion multiplier for age>=2 tracks
+MOD_ASSOC_K = 1.6                    # how strongly a blob's own 15 Hz modulation
+                                     # score lifts its association/fusion score
+                                     # (beacon blinks -> wins over static decoys)
+
 # ---------------------------------------------------------------------------
 # Estimation / tracking state machine
 # ---------------------------------------------------------------------------
@@ -105,11 +122,13 @@ MOD_LOCK_THRESHOLD = 0.62            # correlation for beacon-lock commit (true:
 MOD_SUSPECT_FLOOR = 0.58             # locked object below this modulation corr for
 MOD_SUSPECT_DROP_FRAMES = 30         # ... this many frames -> false-lock drop to search
 ML_LOCK_THRESHOLD = 0.55             # appearance-classifier threshold
+ML_FLOOR_SCORE = 0.40                # generous acquisition floor (physical footprint gate does the real pruning)
 FUSION_WEIGHT_MOD = 0.55             # fusion: modulation score weight
 FUSION_WEIGHT_ML = 0.45              # fusion: appearance score weight
 SEARCH_GROWTH_DEG_S = 0.55           # spiral search speed (deg/s)
 SEARCH_MAX_RADIUS_DEG = 3.2
 ESTIMATOR_ALPHA = 0.35               # bias-tracking filter gain (lower = smoother)
+CONTROL_VEL_EMA = 0.30               # set-point velocity feedforward smoothing
 
 # ---------------------------------------------------------------------------
 # Disturbance engine (each 0-100, independently controllable)
