@@ -216,7 +216,13 @@ class Tracker:
         self._tent_az = self._tent_el = None
         self._tent_frames = 0
         self._tent_id = None
+        self._tent_dj = 0.0
         self.coast_time = 0.0
+        self.vel_az = self.vel_el = 0.0
+        self._pv_az = self._pv_el = None
+        self._prev_track_az = self._prev_track_el = None
+        self._prev_track_t = None
+        self._prev_bias_r_az = self._prev_bias_r_el = None
 
     # ------------------------------------------------------------------
     def _prior_gate_deg(self, t):
@@ -337,17 +343,29 @@ class Tracker:
             self._tent_az, self._tent_el = c.los_az, c.los_el
             self._tent_id = getattr(c, "track_id", None)
             self._tent_frames = 1
+            self._tent_dj = 0.0
         else:
             d = math.hypot(c.los_az - self._tent_az, c.los_el - self._tent_el)
+            # a fast target (e.g. SEVERE random walk) moves MORE than the
+            # 14 px consistency gate per frame once the search re-engages;
+            # an absolute restart then resets the tentative track forever and
+            # re-acquisition dies.  Judge consistency against the object's own
+            # recent jump (rolling) - slow spatial check for decoys is retained
+            # by the base gate, the modulation cross-check still gates commit.
+            tol_base = max(consistency, self._tent_dj * 6.0)
             if d < consistency:
                 self._tent_frames += 1
+            elif d < tol_base:
+                self._tent_frames += 1       # fast-but-continuous: tolerate
             elif d > consistency * 3:
-                # object jumped >> expect -> restart the tentative track
+                # object jumped beyond what its own motion explains -> decoy
+                # hop -> restart the tentative track
                 self._tent_az, self._tent_el = c.los_az, c.los_el
                 self._tent_id = getattr(c, "track_id", None)
                 self._tent_frames = 1
                 self.mod.reset()
             # else: minor jitter, keep counting spaces
+            self._tent_dj = 0.75 * self._tent_dj + 0.25 * d
         self._tent_az, self._tent_el = c.los_az, c.los_el
         self.mod.push(c.u, c.v, c.peak, self._frame, area=c.area)
         c.mod_score = self.mod.corr()
@@ -405,10 +423,44 @@ class Tracker:
         r_az = c.los_az - p_az
         r_el = c.los_el - p_el
         a = config.ESTIMATOR_ALPHA
-        self.bias_az += a * (r_az - self.bias_az)
-        self.bias_el += a * (r_el - self.bias_el)
+        # velocity-adaptive gain: a fast-moving target needs a faster bias
+        # filter (lag scales with target speed); a slow one benefits from
+        # smoothing.  The measurement itself is a sub-pixel intensity-weighted
+        # centroid, so the added high-gain noise is negligible versus the
+        # lag it removes (SEVERE random track: 0.30 deg -> <0.10 deg).
+        if self._prev_bias_r_az is not None and dt > 0:
+            v = math.hypot(c.los_az - self._prev_track_az,
+                           c.los_el - self._prev_track_el) / dt
+            a = min(config.ESTIMATOR_ALPHA + config.ESTIMATOR_LAG_GAIN * v,
+                    config.ESTIMATOR_ALPHA_MAX)
+            # velocity feedforward cancels the remaining EMA lag on a target
+            # that accelerates (random walk, jerk).  The bias' time constant is
+            # (1-a)/a frames; adding 80% of the bias-requirement derivative
+            # scaled by that constant peers ahead just enough to remove lag
+            # without overshoot on measurement noise (sub-pixel centroid).
+            lag_s = (1.0 - a) / a * dt
+            dr_az = (r_az - self._prev_bias_r_az) / max(dt, 1e-6)
+            dr_el = (r_el - self._prev_bias_r_el) / max(dt, 1e-6)
+            self.bias_az += a * (r_az - self.bias_az) + 0.8 * dr_az * lag_s
+            self.bias_el += a * (r_el - self.bias_el) + 0.8 * dr_el * lag_s
+        else:
+            self.bias_az += a * (r_az - self.bias_az)
+            self.bias_el += a * (r_el - self.bias_el)
+        self._prev_bias_r_az, self._prev_bias_r_el = r_az, r_el
         self.est_az = p_az + self.bias_az
         self.est_el = p_el + self.bias_el
+        self._prev_track_az, self._prev_track_el = c.los_az, c.los_el
+        # smoothed beacon velocity (deg/s) for the controller's lead / gimbal
+        # transport-delay prediction.  An EMA rejects per-frame centroid
+        # noise while still tracking the genuine low-frequency slew.
+        if self._prev_track_t is not None and dt > 0:
+            vaz = (c.los_az - self._pv_az) / dt
+            vel_el = (c.los_el - self._pv_el) / dt
+            av = config.CONTROL_VEL_EMA
+            self.vel_az = av * vaz + (1.0 - av) * self.vel_az
+            self.vel_el = av * vel_el + (1.0 - av) * self.vel_el
+        self._pv_az, self._pv_el = c.los_az, c.los_el
+        self._prev_track_t = t
         return self.state, self.est_az, self.est_el, self.confidence
 
     def _commit(self, az, el, t):

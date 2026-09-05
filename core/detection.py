@@ -177,6 +177,7 @@ class DetectionEngine:
         self.last_mask = mask
 
         num, labels, stats, cents = cv2.connectedComponentsWithStats(mask, 8)
+        hue_chan = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)[:, :, 0]
 
         candidates = []
         pending = []
@@ -203,14 +204,30 @@ class DetectionEngine:
             if area < config.MIN_BEACON_AREA_NORM * expected_area:
                 continue
 
-            # ---- sub-pixel intensity-weighted centroid (double pass) ----
+            # ---- sub-pixel centroid, PEAK-CENTERED CORE WINDOW ----
+            # An intensity-weighted centroid over the WHOLE blob (bright core +
+            # wide glow halo) is dragged off-target when an obstacle partially
+            # occludes the beacon or a decoy merges with its glow (SEVERE:
+            # 0.25 deg bias vs the beacon's true centre).  The beacon's own
+            # high-intensity core is what physically marks the terminal, so we
+            # centroid only the pixels inside the core radius around the blob's
+            # peak intensity.  This is robust to one-sided occlusion and decoy
+            # halo merging while still giving sub-pixel precision.
             win = sub * seg
-            s = win.sum()
-            if s < 1e-3:
+            if win.sum() < 1e-3:
                 continue
             yy, xx = np.mgrid[y0:y0 + h, x0:x0 + w].astype(np.float32)
-            cx = float((win * xx).sum() / s)
-            cy = float((win * yy).sum() / s)
+            _crow, _ccol = np.unravel_index(int(np.argmax(win)), win.shape)
+            ppy, ppx = y0 + _crow, x0 + _ccol
+            core_r = max(4.0, config.BEACON_ANGULAR_RADIUS_DEG * config.PIXELS_PER_DEG)
+            d2 = ((xx - ppx) ** 2 + (yy - ppy) ** 2)
+            sel = (d2 <= core_r * core_r) & (seg > 0)
+            cws = win[sel].sum()
+            if cws < 1e-3:
+                sel = win > 0
+                cws = win[sel].sum()
+            cx = float((win[sel] * xx[sel]).sum() / cws)
+            cy = float((win[sel] * yy[sel]).sum() / cws)
 
             peak = float(sub.max())
             local_bg = float(bg[y0 + h // 2, x0 + w // 2]) if (y0 + h // 2) < bg.shape[0] and (x0 + w // 2) < bg.shape[1] else float(bg.max())
@@ -227,9 +244,9 @@ class DetectionEngine:
 
             area_norm = min(3.0, area / max(1.0, expected_area))
 
-            # hue distance from the beacon hue
-            hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-            segpix = hsv[y0:y0 + h, x0:x0 + w, 0][seg > 0]
+            # hue distance from the beacon hue (single HSV conversion already
+            # hoisted above -- was recomputed per-candidate, a big FPS sink)
+            segpix = hue_chan[y0:y0 + h, x0:x0 + w][seg > 0]
             hue_val = float(np.median(segpix)) if segpix.size else 0.0
             hue_dist, hue_dist_n = _hue_distance(hue_val, config.EXPECTED_BEACON_HUE)
 

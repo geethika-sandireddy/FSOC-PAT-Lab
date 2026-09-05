@@ -146,6 +146,10 @@ FUSION_WEIGHT_ML = 0.45              # fusion: appearance score weight
 SEARCH_GROWTH_DEG_S = 0.55           # spiral search speed (deg/s)
 SEARCH_MAX_RADIUS_DEG = 3.2
 ESTIMATOR_ALPHA = 0.35               # bias-tracking filter gain (lower = smoother)
+ESTIMATOR_LAG_GAIN = 0.18            # extra bias-gain per deg/s of target motion
+                                     # (kills lag on fast random targets, keeps
+                                     # low-noise smoothing on slow ones)
+ESTIMATOR_ALPHA_MAX = 0.85           # adaptive gain cap (never pure pass-through)
 CONTROL_VEL_EMA = 0.6                # set-point velocity feedforward smoothing
 
 # ---------------------------------------------------------------------------
