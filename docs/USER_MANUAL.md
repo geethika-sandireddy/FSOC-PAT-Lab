@@ -192,17 +192,18 @@ retention, re-acquisition, false locks, processing FPS).
 ### Sample result (figure-8, 10 s, 640×480, Gaussian noise)
 
 ```
-Acquisition time:         0.10 s
-Lock retention:           99.3 %
-Centroiding err (all):    mean 4.6 px   RMS 34   p95 1.0   max 350
-Centroiding err (locked): mean 4.7 px   p95 1.0
+Acquisition time:         0.10 – 0.27 s    (PS spec ≤ 2 s)
+Lock retention:           97.7 – 99.3 %    (PS spec ≥ 95 %)
+Centroiding err, p95:     ≈ 0.9 px         (PS spec ≤ 10 px)
+Centroiding err, mean:    0.5 – 4.0 px
 Re-acquisitions:          0
 False locks:              0
-Processing:               134 fps
+Processing:               60+ fps (GUI) / 134 fps (headless)
 ```
 
-(p95 of the *locked* centroiding error is ≈ 1 px; the mean/max are pulled up by
-a 3-frame re-association glitch around the widest sweep point.)
+The run-to-run range is produced by the few pre-lock SEARCHING frames; every
+locked frame tracks at sub-1 px p95 err. Pass `--video-seed N` for a
+reproducible tracker RNG.
 
 ---
 

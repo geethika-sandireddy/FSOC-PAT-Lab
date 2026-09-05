@@ -49,7 +49,7 @@ class App:
                  platform_mode=None, atmosphere=None,
                  motion_type=None, target_shape=None, target_size=None,
                  num_targets=None, target_initial=None,
-                 video_path=None):
+                 video_path=None, video_seed=None):
         pygame.init()
         flags = pygame.FULLSCREEN | pygame.SCALED if fullscreen else 0
         self.screen = pygame.display.set_mode((APP_W, APP_H),
@@ -67,11 +67,13 @@ class App:
         self.initial_override = target_initial
         self.video_path = video_path
         self.video_done = False
+        self.video_seed = video_seed
         if video_path:
             from core.simulator import VideoInputSimulator
             truth = os.path.splitext(video_path)[0] + "_truth.csv"
             self.sim = VideoInputSimulator(
-                video_path, truth_csv=truth if os.path.isfile(truth) else None)
+                video_path, seed=video_seed,
+                truth_csv=truth if os.path.isfile(truth) else None)
             self.video_mode = True
         else:
             self.sim = Simulator(preset_name=preset, seed=seed,
@@ -276,7 +278,7 @@ class App:
             from core.simulator import VideoInputSimulator
             truth = os.path.splitext(self.video_path)[0] + "_truth.csv"
             self.sim = VideoInputSimulator(
-                self.video_path,
+                self.video_path, seed=self.video_seed,
                 truth_csv=truth if os.path.isfile(truth) else None)
             self.video_done = False
             self.perf = PerformanceTracker()
@@ -330,7 +332,8 @@ class App:
         truth = os.path.splitext(path)[0] + "_truth.csv"
         try:
             self.sim = VideoInputSimulator(
-                path, truth_csv=truth if os.path.isfile(truth) else None)
+                path, seed=self.video_seed,
+                truth_csv=truth if os.path.isfile(truth) else None)
         except Exception as ex:
             print(f"cannot open video: {ex}")
             return
@@ -1040,6 +1043,9 @@ def main():
                          "coarse-pointing loop (bypasses the virtual PTZ). "
                          "A <video>_truth.csv sidecar enables ground-truth "
                          "centroiding-error evaluation.")
+    ap.add_argument("--video-seed", type=int, default=None,
+                    help="RNG seed for the video-mode tracker (reproducible "
+                         "demo); omit for random behaviour per run.")
     args = ap.parse_args()
 
     if args.frames > 0:
@@ -1053,7 +1059,8 @@ def main():
               platform_mode=args.platform, atmosphere=args.atmosphere,
               motion_type=args.motion, target_shape=args.shape,
               target_size=args.size, num_targets=args.targets,
-              target_initial=args.initial, video_path=args.video)
+              target_initial=args.initial, video_path=args.video,
+              video_seed=args.video_seed)
     app.run()
 
 

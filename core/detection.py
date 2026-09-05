@@ -55,6 +55,8 @@ class DetectionEngine:
         best_d = 1e9
         best_i = -1
         for i, tr in enumerate(self._tracks):
+            if tr["claimed"]:
+                continue
             d = math.hypot(cand.los_az - tr["az"], cand.los_el - tr["el"])
             if d < config.TRACK_ASSOC_RADIUS_DEG and d < best_d:
                 best_d, best_i = d, i
@@ -63,6 +65,7 @@ class DetectionEngine:
             tr["az"], tr["el"] = cand.los_az, cand.los_el
             tr["miss"] = 0
             tr["age"] += 1
+            tr["claimed"] = True
             tr["hist"].append((self._frame, cand.peak, cand.area))
             cand.track_id = tr["id"]
             cand.track_age = tr["age"]
@@ -84,6 +87,7 @@ class DetectionEngine:
                 tr["az"], tr["el"] = cand.los_az, cand.los_el
                 tr["miss"] = 0
                 tr["age"] += 1
+                tr["claimed"] = True
                 tr["hist"].append((self._frame, cand.peak, cand.area))
                 cand.track_id = tr["id"]
                 cand.track_age = tr["age"]
@@ -104,7 +108,7 @@ class DetectionEngine:
             hist.append((self._frame, cand.peak, cand.area))
             self._tracks.append(dict(
                 id=self._track_seq, az=cand.los_az, el=cand.los_el,
-                age=1, miss=0, hist=hist))
+                age=1, miss=0, claimed=True, hist=hist))
         cand.track_mod = self._track_mod_corr(self._tracks[best_i]["hist"] if best_i >= 0
                                               else self._tracks[-1]["hist"])
 
@@ -157,6 +161,8 @@ class DetectionEngine:
         arbitrary-resolution MP4 maps to LOS correctly.
         """
         self._frame += 1
+        for tr in self._tracks:
+            tr["claimed"] = False
         grey = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
 
         # ---- top-hat: local background subtraction ----
@@ -173,6 +179,7 @@ class DetectionEngine:
         num, labels, stats, cents = cv2.connectedComponentsWithStats(mask, 8)
 
         candidates = []
+        pending = []
         for i in range(1, num):
             area = int(stats[i, cv2.CC_STAT_AREA])
             if area < config.DETECTION_MIN_BLOB_AREA:
@@ -239,11 +246,32 @@ class DetectionEngine:
             cand.los_az, cand.los_el = geometry.ray_to_azel(
                 cx, cy, focal_px, gimbal_basis,
                 cu=cu, cv=cv)
+            pending.append(cand)
+
+        # Track-ID assignment must be deterministic regardless of the (build-,
+        # thread-, run-dependent) connected-component numbering.  When several
+        # blobs compete for one persistent track in a frame, the physically
+        # right claim is the blob CLOSEST to that track's last known position
+        # (a beacon cannot jump, so hops belong to noise).  Sorting by that
+        # proximity before associating makes ID ownership both reproducible and
+        # beacon-favoured.
+        tracks = self._tracks
+        pending.sort(
+            key=lambda c: (min(
+                (math.hypot(c.los_az - tr["az"], c.los_el - tr["el"])
+                 for tr in tracks), default=1e9), -c.area))
+        for cand in pending:
             self._associate(cand)
             candidates.append(cand)
 
         self._prune_tracks()
-        candidates.sort(key=lambda c: c.ml_score, reverse=True)
+        # Deterministic ordering.  Appearance scores frequently TIE between
+        # the beacon and bright hot-pixel noise (both cap at ~1.0), and plain
+        # sort is not stable across OpenCV's run-varying component numbering.
+        # Break equal scores by AREA (a physical, run-independent quantity) so
+        # the brightest largest blob - the beacon - is always first; acquisition
+        # then favours it, and the result reproduces exactly across runs.
+        candidates.sort(key=lambda c: (c.ml_score, c.area), reverse=True)
         return candidates
 
 

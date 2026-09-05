@@ -260,10 +260,30 @@ class Tracker:
             if self.video_mode and self.associated is not None:
                 held_id = getattr(self.associated, "track_id", None)
                 if held_id is not None:
-                    for c in candidates:
-                        if getattr(c, "track_id", None) == held_id:
-                            best = c
-                            break
+                    # The DetectionEngine guarantees at most one candidate per
+                    # track ID per frame, so the held ID already names the
+                    # beacon.  Among candidates that share it (defensive), keep
+                    # the one closest to the beacon's last-known position - a
+                    # beacon cannot hop tens of pixels in one frame, so this is
+                    # both the physically correct choice and fully independent
+                    # of detection component ordering.
+                    ref_az = self.last_candidate_az if self.last_candidate_az is not None \
+                        else getattr(self.associated, "los_az", None)
+                    ref_el = self.last_candidate_el if self.last_candidate_el is not None \
+                        else getattr(self.associated, "los_el", None)
+                    if ref_az is not None:
+                        d_best = self.gate_deg
+                        for c in candidates:
+                            if getattr(c, "track_id", None) == held_id:
+                                d = math.hypot(c.los_az - ref_az,
+                                               c.los_el - ref_el)
+                                if d < d_best:
+                                    d_best, best = d, c
+                    else:
+                        for c in candidates:
+                            if getattr(c, "track_id", None) == held_id:
+                                best = c
+                                break
             if best is None:
                 for c in candidates:
                     d = math.hypot(c.los_az - self.est_az, c.los_el - self.est_el)

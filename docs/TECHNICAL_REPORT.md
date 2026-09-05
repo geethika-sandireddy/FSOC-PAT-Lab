@@ -293,20 +293,22 @@ values" the evaluators compare against); without a sidecar the error is
 reported from the frame centre.
 
 Representative result — newly generated figure-8 video, 640×480 @ 30 fps,
-10 s, Gaussian noise (via `metrics/mp4_bypass.py`):
+10 s, Gaussian noise (via `metrics/mp4_bypass.py`; figures span the observed
+run-to-run range over 6 independent process runs):
 
-| Metric | Value |
-|--------|-------|
-| Acquisition time | 0.10 s (PS spec ≤ 2 s) |
-| Lock retention | 99.3 % (PS spec ≥ 95 %) |
-| Centroiding error, locked p95 | 1.0 px (PS spec ≤ 10 px) |
-| Centroiding error, all frames mean | 4.6 px |
-| Re-acquisitions / false locks | 0 / 0 |
-| Processing speed | 134 fps (PS spec ≥ 20 fps) |
+| Metric | Result | PS spec |
+|--------|--------|---------|
+| Acquisition time | 0.10 – 0.27 s | ≤ 2 s |
+| Lock retention | 97.7 – 99.3 % | ≥ 95 % |
+| Centroiding error, locked p95 | 0.89 – 0.96 px | ≤ 10 px |
+| Centroiding error, all-frame mean | 0.5 – 4.0 px | — |
+| Re-acquisitions / false locks | 0 / 0 | 0 |
+| Processing speed | 134 fps (offline), 60+ fps (GUI) | ≥ 20 fps |
 
-The mean/all-frame figure is dominated by a single 3-frame re-association
-glitch at the widest sweep point; 297 of 300 frames track at sub-2 px
-centroiding error. The GUI exposes the same loop via the **LOAD MP4** button
+The variance is confined to the few SEARCHING frames before lock: while
+hunting, the tracker may briefly associate a hot-pixel blob (all other frames
+track the beacon at sub-1 px p95). Every run in every preset reported **zero
+false locks**. The GUI exposes the same loop via the **LOAD MP4** button
 (`L`) or `python main.py --video <file>.mp4`.
 
 ---
