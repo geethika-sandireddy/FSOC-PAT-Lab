@@ -3,11 +3,11 @@ ai/train_classifier.py
 ----------------------
 Offline trainer for detection/classifier.py.
 
-Generates synthetic candidate-blob *feature* distributions that match the
-measured characteristics of real beacon vs decoy detections in this
-simulator (calibrated by running DetectionEngine on rendered frames), then
-trains a standardized logistic regression by gradient descent, entirely in
-NumPy (reproducible, no ML framework required).
+Collects REAL candidate-blob features by running the actual rendering +
+detection pipeline across every difficulty preset (several seeds), labels
+each blob as beacon (within 0.1 deg of ground truth) or decoy, then trains
+a standardized logistic regression by gradient descent, entirely in NumPy
+(reproducible, no ML framework required).
 
 Usage:
     python -m ai.train_classifier
@@ -17,38 +17,33 @@ ai/classifier.py.  A training-accuracy report is printed as evidence the
 appearance channel genuinely separates beacon from decoy.
 """
 
+import math
+
 import numpy as np
 
+import config
+from core.simulator import Simulator
 
-def rng(seed=2026):
-    return np.random.default_rng(seed)
+
+BEACON_RADIUS_DEG = 0.10   # blob within this LOS of truth counts as beacon
 
 
-def generate_dataset(n_pos=4000, n_neg=4000, seed=2026):
-    """Synthetic feature distributions calibrated on rendered frames:
-      * beacon: compact, bright, near-beacon-color, ~expected area
-      * decoy:  looser shape, dimmer or off-color, variable area
-    """
-    g = rng(seed)
-
-    # --- positive class (beacon) ---
-    area_norm_pos = np.clip(g.normal(0.90, 0.30, n_pos), 0.2, 2.5)
-    circ_pos = np.clip(g.normal(0.80, 0.16, n_pos), 0.35, 1.0)
-    snr_pos = np.clip(g.normal(8.0, 5.0, n_pos), 1.2, 60.0)
-    hue_pos = np.clip(np.abs(g.normal(0.03, 0.04, n_pos)), 0.0, 0.6)
-
-    # --- negative class (decoy) ---
-    area_norm_neg = np.clip(g.normal(1.4, 0.9, n_neg), 0.2, 4.0)
-    circ_neg = np.clip(g.normal(0.50, 0.28, n_neg), 0.1, 1.0)
-    snr_neg = np.clip(g.normal(3.0, 3.0, n_neg), 0.6, 50.0)
-    hue_neg = np.clip(np.abs(g.normal(0.45, 0.35, n_neg)), 0.0, 1.0)
-
-    X = np.vstack([
-        np.column_stack([area_norm_pos, circ_pos, snr_pos, hue_pos]),
-        np.column_stack([area_norm_neg, circ_neg, snr_neg, hue_neg]),
-    ])
-    y = np.concatenate([np.ones(n_pos), np.zeros(n_neg)])
-    return X, y
+def collect_real_dataset(presets=None, seed=2026, seconds=8.0):
+    """Run the sim end-to-end and record (features, is_beacon) per blob."""
+    if presets is None:
+        presets = config.PRESET_ORDER
+    feats, labels = [], []
+    for p in presets:
+        sim = Simulator(preset_name=p, seed=seed, dt=1.0 / config.FPS)
+        n_frames = int(seconds / sim.dt)
+        for _ in range(n_frames):
+            r = sim.step()
+            truth_az, truth_el = r["truth_az"], r["truth_el"]
+            for c in r["cand_list"]:
+                d = math.hypot(c.los_az - truth_az, c.los_el - truth_el)
+                feats.append([c.area_norm, c.circularity, c.snr, c.hue_dist_n])
+                labels.append(1.0 if d < BEACON_RADIUS_DEG else 0.0)
+    return np.array(feats, dtype=np.float64), np.array(labels, dtype=np.float64)
 
 
 def standardize(X):
@@ -57,7 +52,7 @@ def standardize(X):
     return (X - mean) / std, mean, std
 
 
-def train(X, y, iters=4000, lr=0.5):
+def train(X, y, iters=6000, lr=0.5):
     """Gradient-descent logistic regression on standardized features."""
     Xs, mean, std = standardize(X)
     Xs = np.column_stack([np.ones(len(Xs)), Xs])
@@ -68,7 +63,7 @@ def train(X, y, iters=4000, lr=0.5):
         p = 1.0 / (1.0 + np.exp(-z))
         grad = Xs.T @ (p - y) / n
         w -= lr * grad
-        if it % 500 == 0:
+        if it % 1000 == 0:
             loss = -np.mean(y * np.log(p + 1e-9) + (1 - y) * np.log(1 - p + 1e-9))
             print(f"  iter {it:5d} loss {loss:.4f}")
     return w, mean, std
@@ -89,8 +84,11 @@ def evaluate(w, mean, std, X, y):
 
 
 def main():
-    print("Generating synthetic candidate features...")
-    X, y = generate_dataset()
+    print("Collecting real candidate features from the simulator (all presets)...")
+    X, y = collect_real_dataset()
+    print(f"  collected {len(y)} blobs ({int(y.sum())} beacon, "
+          f"{int((1 - y).sum())} decoy)")
+
     iidx = np.random.default_rng(1).permutation(len(y))
     split = int(0.8 * len(y))
     Xtr, ytr = X[iidx[:split]], y[iidx[:split]]
