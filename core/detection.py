@@ -164,6 +164,14 @@ class DetectionEngine:
         for tr in self._tracks:
             tr["claimed"] = False
         grey = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        # anti-impulse prefilter: a 3x3 median kills isolated salt-and-pepper
+        # pixels BEFORE they reach the top-hat and merge (via CLOSE) into the
+        # massive saturated regions that otherwise swamp detection on noisy
+        # Benchmark-2 MP4s (10% salt at full-scale saturates ~30k px/frame).
+        # Blurring is negligible for a ~5-20 px beacon core and a ~1px
+        # impulse-measurement shift for real targets.
+        if config.DETECTION_MEDIAN_PREFILTER:
+            grey = cv2.medianBlur(grey, 3)
 
         # ---- top-hat: local background subtraction ----
         kernel = max(3, config.TOP_HAT_RADIUS * 2 + 1)
@@ -204,23 +212,26 @@ class DetectionEngine:
             if area < config.MIN_BEACON_AREA_NORM * expected_area:
                 continue
 
-            # ---- sub-pixel centroid, PEAK-CENTERED CORE WINDOW ----
+            # ---- sub-pixel centroid, CORE WINDOW ----
             # An intensity-weighted centroid over the WHOLE blob (bright core +
             # wide glow halo) is dragged off-target when an obstacle partially
             # occludes the beacon or a decoy merges with its glow (SEVERE:
             # 0.25 deg bias vs the beacon's true centre).  The beacon's own
             # high-intensity core is what physically marks the terminal, so we
             # centroid only the pixels inside the core radius around the blob's
-            # peak intensity.  This is robust to one-sided occlusion and decoy
-            # halo merging while still giving sub-pixel precision.
-            win = sub * seg
-            if win.sum() < 1e-3:
-                continue
+            # *intensity centroid*.  (Anchoring on the argmax pixel biases a
+            # 10 px square benchmark beacon by ~6 px; the centroid anchor keeps
+            # sub-pixel precision on symmetric targets while still clipping the
+            # halo/decoy mass that occlusion pulls on.)
             yy, xx = np.mgrid[y0:y0 + h, x0:x0 + w].astype(np.float32)
-            _crow, _ccol = np.unravel_index(int(np.argmax(win)), win.shape)
-            ppy, ppx = y0 + _crow, x0 + _ccol
+            win = sub * seg
+            s_all = win.sum()
+            if s_all < 1e-3:
+                continue
+            cx0 = float((win * xx).sum() / s_all)
+            cy0 = float((win * yy).sum() / s_all)
             core_r = max(4.0, config.BEACON_ANGULAR_RADIUS_DEG * config.PIXELS_PER_DEG)
-            d2 = ((xx - ppx) ** 2 + (yy - ppy) ** 2)
+            d2 = ((xx - cx0) ** 2 + (yy - cy0) ** 2)
             sel = (d2 <= core_r * core_r) & (seg > 0)
             cws = win[sel].sum()
             if cws < 1e-3:

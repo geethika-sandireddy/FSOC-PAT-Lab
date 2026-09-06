@@ -98,6 +98,9 @@ GIMBAL_STABIZATION_REJECT = 0.97     # inner-loop disturbance rejection (0-1).
 # Detection (Block D - front end)
 # ---------------------------------------------------------------------------
 TOP_HAT_RADIUS = 13                  # local-background estimation kernel
+DETECTION_MEDIAN_PREFILTER = True    # 3x3 median kills salt-and-pepper spikes
+                                     # before top-hat/CLOSE can fuse them into
+                                     # large saturated regions (Benchmark-2 S&P)
 DETECTION_ABS_THRESHOLD = 42         # signal above local background (grey levels)
 DETECTION_MIN_BLOB_AREA = 5          # px^2
 EXPECTED_BEACON_HUE = 8              # HSV hue (OpenCV 0-180) of the beacon core
@@ -138,7 +141,13 @@ ASSOC_GATE_DEG = 0.30                # candidate->track association gate
 MOD_CORREL_WIN = 18                  # frames of intensity history for modulation ID
 MOD_LOCK_THRESHOLD = 0.62            # correlation for beacon-lock commit (true:~0.95, decoy:<0.55)
 MOD_SUSPECT_FLOOR = 0.58             # locked object below this modulation corr for
-MOD_SUSPECT_DROP_FRAMES = 30         # ... this many frames -> false-lock drop to search
+MOD_SUSPECT_DROP_FRAMES = 12         # ... this many frames -> false-lock drop to
+                                     # search (was 30: a merged/decoys lock at
+                                     # ~0.5 lingered for a full second).  True
+                                     # beacon reads 0.75-0.89, so 12 frames of
+                                     # sustained sub-floor correlation is a safe
+                                     # false-lock signal while keeping fade/
+                                     # occlusion relook margins (0.4 s).
 ML_LOCK_THRESHOLD = 0.55             # appearance-classifier threshold
 ML_FLOOR_SCORE = 0.40                # generous acquisition floor (physical footprint gate does the real pruning)
 FUSION_WEIGHT_MOD = 0.55             # fusion: modulation score weight

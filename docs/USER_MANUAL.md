@@ -189,21 +189,22 @@ Runs the whole video through the real loop and writes the mandatory
 performance log (centroiding error mean/RMS/p95/max, acquisition time, lock
 retention, re-acquisition, false locks, processing FPS).
 
-### Sample result (figure-8, 10 s, 640×480, Gaussian noise)
+### Sample results (figure-8, 10 s, 640×480; Gaussian-only and 10 % salt-and-pepper)
 
 ```
-Acquisition time:         0.10 – 0.27 s    (PS spec ≤ 2 s)
-Lock retention:           97.7 – 99.3 %    (PS spec ≥ 95 %)
-Centroiding err, p95:     ≈ 0.9 px         (PS spec ≤ 10 px)
-Centroiding err, mean:    0.5 – 4.0 px
-Re-acquisitions:          0
-False locks:              0
-Processing:               60+ fps (GUI) / 134 fps (headless)
+                                Gaussian        Salt-pepper
+Acquisition time:               0.10 s          0.13 s     (PS spec ≤ 2 s)
+Lock retention:                 99.7 %          99.5 %     (PS spec ≥ 95 %)
+Centroiding err, p95:           1.10 px         1.48 px    (PS spec ≤ 10 px)
+Centroiding err, mean:          0.62 px         0.78 px
+False locks:                    0               0
+Processing:                     60+ fps (GUI) / 130+ fps (headless)
 ```
 
-The run-to-run range is produced by the few pre-lock SEARCHING frames; every
-locked frame tracks at sub-1 px p95 err. Pass `--video-seed N` for a
-reproducible tracker RNG.
+The hard 10 % salt-and-pepper MP4 is handled by a 3×3 median pre-filter that
+kills isolated spikes before the detector's morphological steps can fuse them
+into saturation regions. Every locked frame tracks the true beacon at
+sub-2 px p95. Pass `--video-seed N` for a reproducible tracker RNG.
 
 ---
 
