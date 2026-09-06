@@ -110,13 +110,13 @@ class App:
         }
         self.chips = {}
         # scenario chips live in the top header, right of the title
-        xs = 430
+        xs = 320
         for name in config.PRESET_ORDER:
-            self.chips[name] = W.Chip((xs, 12, 60, 26), name, T.C.CYAN)
-            xs += 66
+            self.chips[name] = W.Chip((xs, 12, 72, 26), name, T.C.CYAN)
+            xs += 78
         # platform-mode chips (PS 26169: Sat-Sat, UAV-Sat, UAV-UAV) + atmosphere
         self.platform_chips = {}
-        pm_x = 800
+        pm_x = 650
         for pm in ["SATELLITE_SATELLITE", "UAV_SATELLITE", "UAV_UAV"]:
             label = {"SATELLITE_SATELLITE": "SAT-SAT",
                      "UAV_SATELLITE": "UAV-SAT",
@@ -124,7 +124,7 @@ class App:
             self.platform_chips[pm] = W.Chip((pm_x, 12, 72, 26), label, T.C.GREEN)
             pm_x += 78
         self.atmos_chips = {}
-        at_x = 1040
+        at_x = 990
         for atm in ["CLEAR", "HAZE", "FOG", "RAIN", "LOW_LIGHT"]:
             self.atmos_chips[atm] = W.Chip((at_x, 12, 66, 26), atm, T.C.AMBER)
             at_x += 72

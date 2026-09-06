@@ -1,107 +1,148 @@
 """
 metrics/stress_test.py
 ----------------------
-Headless multi-trial performance sweeps - the harness that *proves* the
-accuracy claims in the technical report rather than a single cherry-picked
-demo run.
+Headless multi-trial performance sweeps - the single canonical benchmark
+command that reproduces every performance number in the README and the
+technical report (docs/TECHNICAL_REPORT.md, Section 9.2), and writes them as
+`logs/stress_test_summary.csv` + `logs/benchmark_summary.json`.
 
-Runs the whole pipeline (render -> detect -> track -> control) with no
-window across every difficulty preset and several random seeds and reports:
+Metric definitions (identical to the report):
 
-  * mean acquisition time
-  * lock retention (total + visibility-normalised)
-  * mean / RMS / max pointing error while tracked
-  * false-lock events (must be 0 everywhere)
-  * average FPS
+  * Acquisition        - sim time until the FIRST visible LOCKED frame.
+  * Post-lock retention - locked-frames / visible-frames counted only AFTER
+                          the first visible lock (startup acquisition
+                          excluded), matching the PS "target loss" definition.
+  * Est err            - tracker LoS *estimate* error vs truth while locked.
+  * Point err          - k* gimbal boresight residual while locked (includes
+                          the 5 deg/s slew limit + 2-frame latency).
+  * Strike frames      - locked frames whose est err exceeds 0.35 deg
+                          (stricter than the wrong-target threshold).
+  * False locks        - sustained wrong-target holds (locked, visible, est
+                          err > 0.35 for 5 consecutive frames).
 
 Usage:
-    python -m metrics.stress_test --trials 3 --seconds 20
+    python -m metrics.stress_test                 # reproduces report numbers
+    python -m metrics.stress_test --seed-base 2026 --trials 5 --frames 300
 """
 
 import argparse
 import csv
+import json
 import os
 import statistics
 import sys
+import time
 
 import config
 
 
-def run_trial(preset, seed, seconds, dt=1.0 / config.FPS):
+def run_trial(preset, seed, frames, dt=1.0 / config.FPS):
     from core.simulator import Simulator
     from metrics.performance import PerformanceTracker
 
     sim = Simulator(preset_name=preset, seed=seed, dt=dt)
     perf = PerformanceTracker()
 
-    n_frames = int(seconds / dt)
-    for _ in range(n_frames):
+    post_ret_locked = post_ret_visible = 0
+    first_visible_lock = False
+
+    for _ in range(frames):
         sim.step()
         perf.record_frame(sim)
+        r = sim.last_result
+        if r["state"] == "LOCKED" and r["beacon_visible"]:
+            first_visible_lock = True
+        if first_visible_lock and r["beacon_visible"]:
+            post_ret_visible += 1
+            if r["state"] == "LOCKED":
+                post_ret_locked += 1
 
     stats = perf.live_stats()
-    return stats, perf.acquisition_time_s, perf.false_lock_events, stats["retention_visible_pct"], stats["mean_err_deg"], stats["fps"]
+    post_ret = (post_ret_locked / post_ret_visible * 100.0) if post_ret_visible else 0.0
+    return stats, post_ret
 
 
-def summarize(results):
-    out = {}
-    for key, values in results.items():
-        vals = [v for v in values if v is not None]
-        if not vals:
-            out[key] = None
-            continue
-        out[key] = dict(mean=statistics.mean(vals),
-                        stdev=statistics.stdev(vals) if len(vals) > 1 else 0.0,
-                        min=min(vals), max=max(vals))
-    return out
+def aggregate(preset, trials, frames):
+    acqs, rets, estm, estp, ptm, strikes, fls, fpss = ([], [], [], [], [], [], [], [])
+    for seed in trials:
+        stats, ret = run_trial(preset, seed, frames)
+        acqs.append(stats["acquisition_time_s"] if stats["acquisition_time_s"] is not None else 999.0)
+        rets.append(ret)
+        estm.append(stats["est_err_mean_deg"] if stats["est_err_mean_deg"] is not None else 99.0)
+        estp.append(stats["est_err_p95_deg"] if stats["est_err_p95_deg"] is not None else 99.0)
+        ptm.append(stats["mean_err_deg"] if stats["mean_err_deg"] is not None else 99.0)
+        strikes.append(stats["strike_frames"])
+        fls.append(stats["false_lock_events"])
+        fpss.append(stats["fps"])
+    return dict(
+        acq_min=min(acqs), acq_max=max(acqs),
+        ret_min=min(rets), ret_max=max(rets),
+        est_mean_min=min(estm), est_mean_max=max(estm),
+        est_p95_max=max(estp),
+        point_mean_min=min(ptm), point_mean_max=max(ptm),
+        strike_max=max(strikes),
+        false_lock_total=sum(fls),
+        fps_min=min(fpss), fps_max=max(fpss),
+    )
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--trials", type=int, default=3)
-    ap.add_argument("--seconds", type=float, default=20.0)
+    ap.add_argument("--trials", type=int, default=3,
+                    help="independent seeds per preset (default 3 = report)")
+    ap.add_argument("--frames", type=int, default=450,
+                    help="frames per seed (default 450 = 15 s at 30 Hz)")
+    ap.add_argument("--seed-base", type=int, default=0,
+                    help="first seed (seeds = base .. base+trials-1, default 0)")
     ap.add_argument("--presets", default=",".join(config.PRESET_ORDER))
     args = ap.parse_args()
 
-    presets = args.presets.split(",")
+    presets = [p.strip() for p in args.presets.split(",") if p.strip()]
+    seeds = list(range(args.seed_base, args.seed_base + args.trials))
     os.makedirs(config.LOG_DIR, exist_ok=True)
-    summary_path = os.path.join(config.LOG_DIR, "stress_test_summary.csv")
+    csv_path = os.path.join(config.LOG_DIR, "stress_test_summary.csv")
+    json_path = os.path.join(config.LOG_DIR, "benchmark_summary.json")
 
-    print(f"{'preset':<12}{'acq(s)':>8}{'ret%':>7}{'succ%':>7}{'mean_deg':>9}"
-          f"{'p95_deg':>9}{'max_deg':>9}{'false':>6}{'fps':>6}")
+    print(f"benchmark: presets={presets} seeds={seeds} frames={args.frames}")
+    header = ("preset acq_min acq_max ret_min ret_max est_mn_min est_mn_max "
+              "est_p95_max pt_min pt_max strike fl fps_min fps_max")
+    print(header)
     rows = []
     for preset in presets:
-        acqs, rets, succs, means, p95s, maxes, false_locks, fpss = [], [], [], [], [], [], [], []
-        for seed in range(args.trials):
-            stats, acq, fl, retv, mean_err, fps = run_trial(preset, seed, args.seconds)
-            acqs.append(acq if acq is not None else 999.0)
-            rets.append(stats["retention_total_pct"])
-            succs.append(stats["success_rate_pct"])
-            means.append(stats["mean_err_deg"] if stats["mean_err_deg"] is not None else 99.0)
-            p95s.append(stats["p95_err_deg"] if stats["p95_err_deg"] is not None else 99.0)
-            maxes.append(stats["max_err_deg"] if stats["max_err_deg"] is not None else 99.0)
-            false_locks.append(stats["false_lock_events"])
-            fpss.append(stats["fps"])
-        s = dict(
-            preset=preset,
-            acq_mean=statistics.mean(acqs), acq_min=min(acqs),
-            ret_total_mean=statistics.mean(rets), ret_total_min=min(rets),
-            success_rate_mean=statistics.mean(succs),
-            err_mean_mean=statistics.mean(means), err_p95_mean=statistics.mean(p95s),
-            err_max_mean=statistics.mean(maxes), err_max_max=max(maxes),
-            false_lock_total=sum(false_locks),
-            fps_mean=statistics.mean(fpss),
-        )
-        rows.append(s)
-        print(f"{preset:<12}{s['acq_mean']:>8.2f}{s['ret_total_mean']:>7.1f}"
-              f"{s['success_rate_mean']:>7.1f}{s['err_mean_mean']:>9.4f}{s['err_p95_mean']:>9.4f}"
-              f"{s['err_max_mean']:>9.4f}{s['false_lock_total']:>6}{s['fps_mean']:>6.1f}")
+        row = dict(preset=preset)
+        row.update(aggregate(preset, seeds, args.frames))
+        rows.append(row)
+        print(f"{preset:<12}{row['acq_min']:>7.2f}{row['acq_max']:>7.2f}"
+              f"{row['ret_min']:>7.1f}{row['ret_max']:>7.1f}"
+              f"{row['est_mean_min']:>9.4f}{row['est_mean_max']:>9.4f}"
+              f"{row['est_p95_max']:>9.4f}{row['point_mean_min']:>7.4f}"
+              f"{row['point_mean_max']:>7.4f}{row['strike_max']:>6}"
+              f"{row['false_lock_total']:>4}{row['fps_min']:>6.1f}{row['fps_max']:>6.1f}")
 
-    with open(summary_path, "w", newline="") as f:
+    with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
-    print(f"\nsummary -> {summary_path}")
+
+    wall = time.time()
+    summary = dict(
+        commit=os.popen("git rev-parse --short HEAD").read().strip() if os.path.isdir(".git") else "n/a",
+        generated=time.strftime("%Y-%m-%d %H:%M:%S"),
+        presets=presets,
+        seeds=seeds,
+        frames_per_trial=args.frames,
+        camera_resolution=f"{config.CAM_VIEW_W}x{config.CAM_VIEW_H}",
+        fov_deg=f"{config.CAMERA_FOV_H_DEG}x{config.CAMERA_FOV_V_DEG}",
+        pixels_per_deg=config.PIXELS_PER_DEG,
+        gimbal_slew_deg_s=config.GIMBAL_MAX_SLEW_DEG_S,
+        gimbal_tilt_deg_s=config.GIMBAL_MAX_TILT_DEG_S,
+        results=rows,
+    )
+    with open(json_path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"\nsummary -> {csv_path}")
+    print(f"metadata -> {json_path}")
 
 
 if __name__ == "__main__":

@@ -123,10 +123,15 @@ class PerformanceTracker:
     # ------------------------------------------------------------------
     def live_stats(self):
         n = len(self.errors_deg)
+        ne = len(self.est_errors_deg)
         mean_err = sum(self.errors_deg) / n if n else None
         max_err = max(self.errors_deg) if n else None
         rms = math.sqrt(sum(e * e for e in self.errors_deg) / n) if n else None
         p95 = sorted(self.errors_deg)[int(n * 0.95) - 1] if n else None
+        est_mean = sum(self.est_errors_deg) / ne if ne else None
+        est_max = max(self.est_errors_deg) if ne else None
+        est_p95 = sorted(self.est_errors_deg)[int(ne * 0.95) - 1] if ne else None
+        strike_frames = sum(1 for e in self.est_errors_deg if e > 0.35) if ne else 0
         success_rate = (self.success_frames / self.expected_frames * 100) if self.expected_frames else 0.0
         retention_total = (self.locked_frames / self.frame_count * 100) if self.frame_count else 0.0
         retention_vis = (self.locked_visible_frames / self.visible_frames * 100) if self.visible_frames else 0.0
@@ -137,6 +142,10 @@ class PerformanceTracker:
             max_err_deg=max_err,
             rms_err_deg=rms,
             p95_err_deg=p95,
+            est_err_mean_deg=est_mean,
+            est_err_p95_deg=est_p95,
+            est_err_max_deg=est_max,
+            strike_frames=strike_frames,
             acquisition_time_s=self.acquisition_time_s,
             retention_total_pct=retention_total,
             retention_visible_pct=retention_vis,
