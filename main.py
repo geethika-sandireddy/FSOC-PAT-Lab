@@ -665,6 +665,27 @@ class App:
         W.hbar(cam, (10, 36, 110, 6), res["confidence"], T.C.STATE[st])
         T.text(cam, (124, 36), "conf", 8, T.C.TEXT_FAINT)
 
+        # ---- Phase 2: model-vision trust diagnostics (compact stack) ----
+        tr = self.sim.tracker
+        cf = getattr(tr, "conf", None)
+        if cf is not None:
+            snap = cf.snapshot()
+            T.text(cam, (10, 48),
+                   f"ID {snap['identity']:.2f}  POS {snap['position']:.2f}  "
+                   f"PRED {snap['prediction']:.2f}  PT {snap['pointing']:.2f}",
+                   8, T.C.TEXT_FAINT)
+            tm = getattr(tr, "trust", None)
+            if tm is not None:
+                T.text(cam, (10, 60),
+                       f"VL {tm.vision_trust:.2f}  ML {tm.model_trust:.2f}  "
+                       f"sigma {getattr(tr.unc, 'sigma_px', 0.0):.1f}px  "
+                       f"[{tm.mode}]",
+                       8, T.C.TEXT_FAINT)
+            T.text(cam, (10, 72),
+                   f"ph {getattr(tr, 'phase', res['state'])}  "
+                   f"dist {getattr(tr, 'dist_level_est', 0.0):.2f}",
+                   8, T.C.TEXT_FAINT)
+
         # ---- scenario / eval time (small, unobtrusive) ----
         T.text(cam, (r.right - 10, 6), f"t={res['t']:6.2f}s", 9, T.C.TEXT_FAINT, anchor="tr")
 

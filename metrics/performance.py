@@ -24,6 +24,8 @@ import time
 
 import config
 
+from core.tracking import LOCKED, DEGRADED_LOCK
+
 
 USE_WALL_CLOCK = False  # robustness: release-mode FPS uses ticks if False
 
@@ -52,6 +54,8 @@ class PerformanceTracker:
         self.expected_frames = 0     # frames where beacon is visible AND in FOV
         self.success_frames = 0      # of those, frames the tracker held LOCKED
         self.state_time = {}
+        self.trust_samples = []    # (vision_trust, model_trust) per tracked frame
+        self.unc_samples = []      # sigma_px per frame
 
     # ------------------------------------------------------------------
     def record_frame(self, sim):
@@ -71,8 +75,16 @@ class PerformanceTracker:
         state = r["state"]
         self.state_time[state] = self.state_time.get(state, 0) + 1
 
-        is_locked = state == "LOCKED"
+        is_locked = state in (LOCKED, DEGRADED_LOCK)
         visible = r["beacon_visible"]
+
+        # Adaptive trust / uncertainty log (Phase 2 evidence)
+        trk = sim.tracker
+        if hasattr(trk, "trust"):
+            self.trust_samples.append((trk.trust.vision_trust,
+                                       trk.trust.model_trust))
+        if hasattr(trk, "unc"):
+            self.unc_samples.append(trk.unc.sigma_px)
 
         sim_t = float(r.get("t", 0.0))
         if visible:
@@ -112,7 +124,9 @@ class PerformanceTracker:
 
             if visible and r["in_fov"]:
                 self.expected_frames += 1
-                if r.get("state") == "LOCKED" or (is_locked and r["est_err_deg"] is not None and r["est_err_deg"] < 0.4):
+                if r.get("state") in (LOCKED, DEGRADED_LOCK) or \
+                        (is_locked and r["est_err_deg"] is not None
+                         and r["est_err_deg"] < 0.4):
                     self.success_frames += 1
         else:
             if self.was_locked:
@@ -136,6 +150,10 @@ class PerformanceTracker:
         retention_total = (self.locked_frames / self.frame_count * 100) if self.frame_count else 0.0
         retention_vis = (self.locked_visible_frames / self.visible_frames * 100) if self.visible_frames else 0.0
         mean_reacq = (sum(self.reacquisition_times) / len(self.reacquisition_times)) if self.reacquisition_times else None
+        nt = len(self.trust_samples)
+        mean_vision_trust = (sum(v for v, _ in self.trust_samples) / nt) if nt else None
+        mean_model_trust = (sum(m for _, m in self.trust_samples) / nt) if nt else None
+        nu = len(self.unc_samples)
         return dict(
             fps=self.last_tick,
             mean_err_deg=mean_err,
@@ -155,6 +173,10 @@ class PerformanceTracker:
             last_reacq_s=self.reacquisition_times[-1] if self.reacquisition_times else None,
             false_lock_events=self.false_lock_events,
             lock_events=self.lock_events,
+            mean_vision_trust_pct=mean_vision_trust * 100 if mean_vision_trust is not None else None,
+            mean_model_trust_pct=mean_model_trust * 100 if mean_model_trust is not None else None,
+            mean_uncertainty_px=(sum(self.unc_samples) / nu) if nu else None,
+            max_uncertainty_px=max(self.unc_samples) if nu else None,
             path="",
         )
 
@@ -194,6 +216,14 @@ class PerformanceTracker:
             w.writerow(["mean_reacquisition_time_s", round(stats["mean_reacq_s"], 3)
                         if stats["mean_reacq_s"] is not None else "n/a"])
             w.writerow(["false_lock_events", self.false_lock_events])
+            w.writerow(["mean_vision_trust_pct", round(stats["mean_vision_trust_pct"], 1)
+                        if stats["mean_vision_trust_pct"] is not None else "n/a"])
+            w.writerow(["mean_model_trust_pct", round(stats["mean_model_trust_pct"], 1)
+                        if stats["mean_model_trust_pct"] is not None else "n/a"])
+            w.writerow(["mean_uncertainty_px", round(stats["mean_uncertainty_px"], 2)
+                        if stats["mean_uncertainty_px"] is not None else "n/a"])
+            w.writerow(["max_uncertainty_px", round(stats["max_uncertainty_px"], 2)
+                        if stats["max_uncertainty_px"] is not None else "n/a"])
             w.writerow(["states", {k: round(v / max(1, self.frame_count) * 100, 1)
                                    for k, v in self.state_time.items()}])
             return path

@@ -1,0 +1,40 @@
+{
+  "commit": "be47afc",
+  "generated": "2026-09-06 13:02:44",
+  "scenario": "none",
+  "rows": {
+    "ISRO_RX": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 75.19206554955883,
+        "trust_model_mean_pct": 96.88725888979796,
+        "uncertainty_mean_px": 2.9262312672701127,
+        "uncertainty_max_px": 17.4,
+        "trust_modes": {
+          "MODEL_DOMINANT": 437
+        }
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 75.08012130647715,
+        "trust_model_mean_pct": 96.92605439456142,
+        "uncertainty_mean_px": 2.876631902877999,
+        "uncertainty_max_px": 10.98721689612882,
+        "trust_modes": {
+          "MODEL_DOMINANT": 437
+        }
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 74.47869752721779,
+        "trust_model_mean_pct": 96.94149705605109,
+        "uncertainty_mean_px": 2.802896876430019,
+        "uncertainty_max_px": 3.1125174544605505,
+        "trust_modes": {
+          "MODEL_DOMINANT": 389,
+          "BALANCED": 34
+        }
+      }
+    ]
+  }
+}

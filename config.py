@@ -163,6 +163,30 @@ ESTIMATOR_ALPHA_MAX = 0.85           # adaptive gain cap (never pure pass-throug
 CONTROL_VEL_EMA = 0.6                # set-point velocity feedforward smoothing
 
 # ---------------------------------------------------------------------------
+# Adaptive Model-Vision Trust (Phase 2 novelty)
+# ---------------------------------------------------------------------------
+# The tracker continuously decides how much to trust the visual measurement
+# versus the motion-model / ephemeris prediction, from confidence + uncertainty
+# + prediction residual + disturbance level.  Decisions use hysteresis so the
+# mode cannot chatter frame-to-frame.
+TRUST_VISION_W_ML = 0.30             # weight of AI appearance confidence
+TRUST_VISION_W_MOD = 0.25            # weight of modulation identity
+TRUST_VISION_W_SNR = 0.25            # weight of measurement SNR
+TRUST_VISION_W_CENTROID = 0.20       # weight of centroid stability
+TRUST_MODEL_W_PRED = 0.45            # weight of prediction residual consistency
+TRUST_MODEL_W_PRIOR = 0.30           # weight of prior reliability (historical)
+TRUST_MODEL_W_DIST = 0.25            # weight of disturbance condition
+DEGRADED_ENTER_CONF = 0.55           # enter DEGRADED_LOCK below this overall conf
+DEGRADED_EXIT_CONF = 0.70            # exit DEGRADED_LOCK above this overall conf
+VISION_DOMINANT_MARGIN = 0.18        # vision_trust >= model_trust + margin
+MODEL_DOMINANT_MARGIN = 0.18         # model_trust >= vision_trust + margin
+UNCERTAINTY_BASE_PX = 2.0            # nominal position uncertainty (px)
+UNCERTAINTY_SNR_K = 8.0              # snr -> sigma scale (lower snr -> higher sigma)
+UNCERTAINTY_COAST_GROW_S = 0.25      # coast uncertainty growth rate (px/s)
+UNCERTAINTY_COAST_GROW2_S = 0.35     # cooperative growth (px/s^2)
+REACQUIRE_UNCERTAINTY_PX = 18.0      # uncertainty above this -> active reacquisition
+
+# ---------------------------------------------------------------------------
 # Disturbance engine (each 0-100, independently controllable)
 #
 # Each dial maps LINEARLY to a physically meaningful maximum, so the slider
@@ -237,6 +261,19 @@ DIFFICULTY_PRESETS = {
         az_amp=2.60, el_amp=1.60, speed=2.00,
         noise_types=["gaussian", "salt_pepper", "poisson"],
         motion_type="figure_eight",
+    ),
+    # ISRO benchmark preset - "RX sat downlink" conditions: benign two-axis
+    # ephemeris pub track, moderate atmospheric turbulence, and a bright
+    # solar-panel-glare distractor parked near the beam (the classic wrong-target
+    # test for any coarse-pointer).  Solar glare is a *static* luminous blob, so
+    # it maximally stresses the identity/decoy separation of the AI+modulation
+    # fusion; kept out of PRESET_ORDER (not part of the 1-5 live schema).
+    "ISRO_RX": dict(
+        turbulence=25, vibration=10, sensor_noise=12, jerk_prob=0,
+        beacon_fade=5, distractors=2, obstacles=1,
+        az_amp=1.20, el_amp=0.80, speed=1.00,
+        noise_types=["gaussian"],
+        motion_type="straight_line",
     ),
 }
 

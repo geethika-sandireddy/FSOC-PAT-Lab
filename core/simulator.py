@@ -22,7 +22,7 @@ from core.gimbal import Gimbal
 from core.sensor import VirtualSensor
 from core.disturbances import DisturbanceEngine
 from core.detection import DetectionEngine
-from core.tracking import Tracker, SEARCHING, COASTING, LOCKED
+from core.tracking import (Tracker, SEARCHING, COASTING, LOCKED, DEGRADED_LOCK)
 from core.control import PointingController
 from core.orbital import EphemerisModel
 
@@ -362,7 +362,7 @@ class VideoInputSimulator:
         self.lock_history.append((self.frame_idx, state))
 
         # acquisition / re-acquisition timing
-        is_locked = (state == "LOCKED")
+        is_locked = state in (LOCKED, DEGRADED_LOCK)
         if is_locked:
             if self.acquisition_time_s is None:
                 self.acquisition_time_s = self.t

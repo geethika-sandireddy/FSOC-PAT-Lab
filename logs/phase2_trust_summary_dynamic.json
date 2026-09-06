@@ -1,0 +1,122 @@
+{
+  "commit": "be47afc",
+  "generated": "2026-09-06 12:28:45",
+  "scenario": "dynamic",
+  "rows": {
+    "EASY": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 74.95691793137287,
+        "trust_model_mean_pct": 96.65685707503918,
+        "uncertainty_mean_px": 23.294603174603168,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 74.29086229840775,
+        "trust_model_mean_pct": 96.63058879492773,
+        "uncertainty_mean_px": 23.294603174603168,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 74.9674565704686,
+        "trust_model_mean_pct": 96.5833198102433,
+        "uncertainty_mean_px": 23.294603174603168,
+        "uncertainty_max_px": 23.999999999999993
+      }
+    ],
+    "MODERATE": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 73.29928270552908,
+        "trust_model_mean_pct": 96.79371242195177,
+        "uncertainty_mean_px": 23.294603174603168,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 73.66850954110822,
+        "trust_model_mean_pct": 96.71851050194368,
+        "uncertainty_mean_px": 23.294603174603168,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 72.50567924643411,
+        "trust_model_mean_pct": 96.52630153198731,
+        "uncertainty_mean_px": 23.240979479207226,
+        "uncertainty_max_px": 23.999999999999993
+      }
+    ],
+    "HARD": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 74.46882217252774,
+        "trust_model_mean_pct": 96.40702571220824,
+        "uncertainty_mean_px": 22.610158730158723,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 75.22917413397843,
+        "trust_model_mean_pct": 96.38886245490978,
+        "uncertainty_mean_px": 23.294603174603168,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 74.38258126560368,
+        "trust_model_mean_pct": 96.36093470705187,
+        "uncertainty_mean_px": 22.610158730158723,
+        "uncertainty_max_px": 23.999999999999993
+      }
+    ],
+    "SEVERE": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 65.02088804876468,
+        "trust_model_mean_pct": 83.4940856280392,
+        "uncertainty_mean_px": 18.909090062097146,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 67.09095571266643,
+        "trust_model_mean_pct": 84.30030970895723,
+        "uncertainty_mean_px": 22.21904761904761,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 67.71574104548641,
+        "trust_model_mean_pct": 82.64863603989053,
+        "uncertainty_mean_px": 22.765677867188,
+        "uncertainty_max_px": 23.999999999999993
+      }
+    ],
+    "ADVERSARIAL": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 79.76057088155262,
+        "trust_model_mean_pct": 94.73471466767795,
+        "uncertainty_mean_px": 22.610158730158723,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 79.65582914774325,
+        "trust_model_mean_pct": 93.57828466506099,
+        "uncertainty_mean_px": 23.294603174603168,
+        "uncertainty_max_px": 23.999999999999993
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 77.83751506661002,
+        "trust_model_mean_pct": 93.94814771497964,
+        "uncertainty_mean_px": 22.610158730158723,
+        "uncertainty_max_px": 23.999999999999993
+      }
+    ]
+  }
+}

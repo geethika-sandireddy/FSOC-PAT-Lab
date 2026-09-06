@@ -1,0 +1,174 @@
+{
+  "commit": "be47afc",
+  "generated": "2026-09-06 13:11:24",
+  "scenario": "none",
+  "rows": {
+    "EASY": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 74.95691793137287,
+        "trust_model_mean_pct": 96.65685707503918,
+        "uncertainty_mean_px": 2.89874857845731,
+        "uncertainty_max_px": 3.197232442664072,
+        "trust_modes": {
+          "MODEL_DOMINANT": 437
+        }
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 74.29086229840775,
+        "trust_model_mean_pct": 96.63058879492773,
+        "uncertainty_mean_px": 2.900824268646763,
+        "uncertainty_max_px": 3.224502229508789,
+        "trust_modes": {
+          "MODEL_DOMINANT": 437
+        }
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 74.9674565704686,
+        "trust_model_mean_pct": 96.5833198102433,
+        "uncertainty_mean_px": 2.900996177014958,
+        "uncertainty_max_px": 3.225122704762313,
+        "trust_modes": {
+          "MODEL_DOMINANT": 437
+        }
+      }
+    ],
+    "MODERATE": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 73.29928270552908,
+        "trust_model_mean_pct": 96.79371242195177,
+        "uncertainty_mean_px": 2.9646273831157983,
+        "uncertainty_max_px": 3.2890215489057453,
+        "trust_modes": {
+          "MODEL_DOMINANT": 437
+        }
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 73.66850954110822,
+        "trust_model_mean_pct": 96.71851050194368,
+        "uncertainty_mean_px": 2.967649064384468,
+        "uncertainty_max_px": 3.3275778579754975,
+        "trust_modes": {
+          "MODEL_DOMINANT": 437
+        }
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 72.50567924643411,
+        "trust_model_mean_pct": 96.52630153198731,
+        "uncertainty_mean_px": 2.9923820807504793,
+        "uncertainty_max_px": 13.978902298792983,
+        "trust_modes": {
+          "MODEL_DOMINANT": 423
+        }
+      }
+    ],
+    "HARD": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 74.46882217252774,
+        "trust_model_mean_pct": 96.40702571220824,
+        "uncertainty_mean_px": 3.0233280673932272,
+        "uncertainty_max_px": 3.5386233770119366,
+        "trust_modes": {
+          "MODEL_DOMINANT": 423
+        }
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 75.22917413397843,
+        "trust_model_mean_pct": 96.38886245490978,
+        "uncertainty_mean_px": 3.109079073199089,
+        "uncertainty_max_px": 10.722152087934386,
+        "trust_modes": {
+          "MODEL_DOMINANT": 399,
+          "BALANCED": 38
+        }
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 74.38258126560368,
+        "trust_model_mean_pct": 96.36093470705187,
+        "uncertainty_mean_px": 3.030877353931387,
+        "uncertainty_max_px": 3.540926132155642,
+        "trust_modes": {
+          "MODEL_DOMINANT": 423
+        }
+      }
+    ],
+    "SEVERE": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 65.02088804876468,
+        "trust_model_mean_pct": 83.4940856280392,
+        "uncertainty_mean_px": 8.699667095740688,
+        "uncertainty_max_px": 23.649658006582488,
+        "trust_modes": {
+          "MODEL_DOMINANT": 109,
+          "BALANCED": 239
+        }
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 67.09095571266643,
+        "trust_model_mean_pct": 84.30030970895723,
+        "uncertainty_mean_px": 9.463958003131228,
+        "uncertainty_max_px": 23.63989344457248,
+        "trust_modes": {
+          "MODEL_DOMINANT": 122,
+          "BALANCED": 279
+        }
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 67.71574104548641,
+        "trust_model_mean_pct": 82.64863603989053,
+        "uncertainty_mean_px": 11.255417600287464,
+        "uncertainty_max_px": 23.731533254793995,
+        "trust_modes": {
+          "MODEL_DOMINANT": 146,
+          "BALANCED": 281
+        }
+      }
+    ],
+    "ADVERSARIAL": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 79.76057088155262,
+        "trust_model_mean_pct": 94.73471466767795,
+        "uncertainty_mean_px": 3.6759631927085508,
+        "uncertainty_max_px": 22.178563846072464,
+        "trust_modes": {
+          "MODEL_DOMINANT": 39,
+          "BALANCED": 384
+        }
+      },
+      {
+        "seed": 1,
+        "trust_vision_mean_pct": 79.65582914774325,
+        "trust_model_mean_pct": 93.57828466506099,
+        "uncertainty_mean_px": 4.397814119283946,
+        "uncertainty_max_px": 22.631486395728857,
+        "trust_modes": {
+          "MODEL_DOMINANT": 24,
+          "BALANCED": 413
+        }
+      },
+      {
+        "seed": 2,
+        "trust_vision_mean_pct": 77.83751506661002,
+        "trust_model_mean_pct": 93.94814771497964,
+        "uncertainty_mean_px": 3.9789411455875743,
+        "uncertainty_max_px": 21.731187150572246,
+        "trust_modes": {
+          "MODEL_DOMINANT": 54,
+          "BALANCED": 369
+        }
+      }
+    ]
+  }
+}

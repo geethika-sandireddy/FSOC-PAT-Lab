@@ -61,7 +61,15 @@ class PointingController:
             # a promising candidate exists: chase it while confirming
             self.pan = self.tracker.last_candidate_az
             self.tilt = self.tracker.last_candidate_el
-        elif st in ("LOCKED", "COASTING") and self.tracker.est_az is not None:
+        elif st in ("LOCKED", "DEGRADED_LOCK", "COASTING", "REACQUIRING") \
+                and self.tracker.est_az is not None:
+            # tracked / re-acquiring states: point at the fused estimate.  During
+            # predictive coast the tracker has already extrapolated est with its
+            # smoothed velocity; re-acquisition is *targeted* - hold the last
+            # predicted position while the association gate widens, so the
+            # camera never sweeps the beacon out of view on a fast target.
+            # DEGRADED_LOCK keeps exactly the same pointing (the estimator
+            # already smooths the measurement via the trust-driven bias gain).
             self.pan = self.tracker.est_az
             self.tilt = self.tracker.est_el
         else:
@@ -70,9 +78,12 @@ class PointingController:
             self.pan = az
             self.tilt = el
 
-        # slew-shaping happens in the gimbal; here we just clamp sanity
+        # slewing happens in the gimbal; here we just clamp sanity
         self.pan = max(-30.0, min(30.0, self.pan))
         self.tilt = max(-30.0, min(30.0, self.tilt))
-        self.gimbal.command_attitude(self.pan, self.tilt,
-                                     *self._target_velocity(self.pan, self.tilt, dt))
+        vp, vt = self._target_velocity(self.pan, self.tilt, dt)
+        self.gimbal.command_attitude(self.pan, self.tilt, vp, vt)
+        # pointing confidence: how close commanded vs realized attitude is
+        self.tracker.conf.update_pointing(
+            math.hypot(self.pan - self.gimbal.pan, self.tilt - self.gimbal.tilt))
         return self.pan, self.tilt

@@ -32,11 +32,22 @@ import math
 from collections import deque
 
 import config
+from core.confidence import ConfidenceState
+from core.uncertainty import UncertaintyEstimator
+from core.trust import (AdaptiveTrustManager, MODE_BALANCED, MODE_VISION,
+                        MODE_MODEL)
 
 
 SEARCHING = "SEARCHING"
 COASTING = "COASTING"
 LOCKED = "LOCKED"
+DEGRADED_LOCK = "DEGRADED_LOCK"
+REACQUIRING = "REACQUIRING"
+
+# fine-grained phases (subset of states; phases live inside SEARCHING and the
+# tracked states).  These name the acquisition sub-steps visible in the GUI.
+CANDIDATE = "CANDIDATE"
+ACQUIRING = "ACQUIRING"
 
 
 class ModulationTrack:
@@ -207,6 +218,14 @@ class Tracker:
         self._frame = 0
         self._suspect = 0         # consecutive low-modulation associated frames
 
+        # ---- Phase 2: unified confidence + uncertainty + adaptive trust ----
+        self.phase = SEARCHING    # fine-grained phase (CANDIDATE/ACQUIRING/...)
+        self.conf = ConfidenceState()
+        self.unc = UncertaintyEstimator()
+        self.trust = AdaptiveTrustManager()
+        self.dist_level_est = 0.0      # tracker-derived disturbance condition (0-1)
+        self.coast_mode = None         # last coasting mode (for GUI/metrics)
+
     # ------------------------------------------------------------------
     def reset(self, az, el):
         self.est_az, self.est_el = az, el
@@ -220,9 +239,16 @@ class Tracker:
         self.coast_time = 0.0
         self.vel_az = self.vel_el = 0.0
         self._pv_az = self._pv_el = None
+        self._pv_u = self._pv_v = None
         self._prev_track_az = self._prev_track_el = None
         self._prev_track_t = None
         self._prev_bias_r_az = self._prev_bias_r_el = None
+        self.phase = SEARCHING
+        self.conf = ConfidenceState()
+        self.unc = UncertaintyEstimator()
+        self.trust = AdaptiveTrustManager()
+        self.dist_level_est = 0.0
+        self.coast_mode = None
 
     # ------------------------------------------------------------------
     def _prior_gate_deg(self, t):
@@ -251,7 +277,9 @@ class Tracker:
             if tm >= 0.60:
                 c.fusion_score *= 1.0 + config.MOD_ASSOC_K * (tm - 0.50)
 
-        has_track = self.est_az is not None and self.state in (LOCKED, COASTING)
+        has_track = self.est_az is not None and self.state in (LOCKED, COASTING,
+                                                        DEGRADED_LOCK,
+                                                        REACQUIRING)
 
         if has_track:
             # prefer the true 15 Hz blinker: the fused mod boost in the score
@@ -338,6 +366,10 @@ class Tracker:
         """Build a tentative track: spatial consistency, then modulation ID."""
         self.candidates_seen += 1
         consistency = config.ACQUIRE_CONSISTENCY_PX / config.PIXELS_PER_DEG
+        self.phase = CANDIDATE if self._tent_frames == 0 else ACQUIRING
+        self._update_conf(c, p_az, p_el)
+        self.trust.update(conf=self.conf, mod_score=0.0, snr=c.snr,
+                          dist_level=self.dist_level_est, visible=True)
 
         if self._tent_frames == 0:
             self._tent_az, self._tent_el = c.los_az, c.los_el
@@ -372,6 +404,7 @@ class Tracker:
 
         # steer the gimbal toward the tentative target so it stays in view
         self.est_az, self.est_el = c.los_az, c.los_el
+        self._pv_u, self._pv_v = c.u, c.v
 
         # enough temporally-consistent frames AND enough modulation samples
         need_samples = int(config.MOD_CORREL_WIN * 0.8)
@@ -414,8 +447,27 @@ class Tracker:
                 return SEARCHING, self.est_az, self.est_el, self.confidence
         else:
             self._suspect = 0
-        self.confidence = c.ml_score if self.video_mode else c.mod_score
-        self.state = LOCKED
+        self.phase = LOCKED
+        # ---- Phase 2 confidence + trust (this is what the manager consumes) ----
+        self._update_conf(c, p_az, p_el)
+        mode = self.trust.update(conf=self.conf,
+                                 mod_score=(0.0 if self.video_mode
+                                            else self.mod.corr_area()),
+                                 snr=c.snr, dist_level=self.dist_level_est,
+                                 visible=True)
+        self.coast_mode = mode
+        self.unc.observe(snr=c.snr,
+                         centroid_residual_px=self._centroid_jitter_px(c),
+                         pred_residual_px=getattr(self, "_resid_deg_lead", 0.0)
+                         * config.PIXELS_PER_DEG)
+        # ---- DEGRADED_LOCK banding (design zones: 0.55-0.70 -> DEGRADED_LOCK
+        # hold, >=0.70 -> full LOCKED; below 0.55 left untouched: the existing
+        # suspect/coast machinery owns the transition out of the lock) ----
+        if self.conf.overall >= config.DEGRADED_EXIT_CONF:
+            self.state = LOCKED
+        elif self.conf.overall >= config.DEGRADED_ENTER_CONF:
+            self.state = DEGRADED_LOCK
+        self.confidence = self.conf.overall
         self.coast_time = 0.0
         self._tent_az = self._tent_el = None
         self._tent_frames = 0
@@ -431,8 +483,21 @@ class Tracker:
         if self._prev_bias_r_az is not None and dt > 0:
             v = math.hypot(c.los_az - self._prev_track_az,
                            c.los_el - self._prev_track_el) / dt
-            a = min(config.ESTIMATOR_ALPHA + config.ESTIMATOR_LAG_GAIN * v,
-                    config.ESTIMATOR_ALPHA_MAX)
+            a_vis = min(config.ESTIMATOR_ALPHA + config.ESTIMATOR_LAG_GAIN * v,
+                        config.ESTIMATOR_ALPHA_MAX)
+            # trust-adaptive observation gain:
+            #   VISION_DOMINANT -> belief collapses toward the camera (jerk /
+            #     wrong prior): give the observation the floor and follow it.
+            #   MODEL_DOMINANT  -> measurement degraded (fade / noise):
+            #     smooth through it instead of chasing the noise.
+            #   BALANCED        -> both agree: the normal verification-tested
+            #     velocity-adaptive gain is kept bit-for-bit.
+            if not self.video_mode and mode == MODE_VISION:
+                a = config.ESTIMATOR_ALPHA_MAX
+            elif not self.video_mode and mode == MODE_MODEL:
+                a = a_vis * 0.5
+            else:
+                a = a_vis
             # velocity feedforward cancels the remaining EMA lag on a target
             # that accelerates (random walk, jerk).  The bias' time constant is
             # (1-a)/a frames; adding 80% of the bias-requirement derivative
@@ -443,10 +508,10 @@ class Tracker:
             dr_el = (r_el - self._prev_bias_r_el) / max(dt, 1e-6)
             self.bias_az += a * (r_az - self.bias_az) + 0.8 * dr_az * lag_s
             self.bias_el += a * (r_el - self.bias_el) + 0.8 * dr_el * lag_s
+            self._prev_bias_r_az, self._prev_bias_r_el = r_az, r_el
         else:
             self.bias_az += a * (r_az - self.bias_az)
             self.bias_el += a * (r_el - self.bias_el)
-        self._prev_bias_r_az, self._prev_bias_r_el = r_az, r_el
         self.est_az = p_az + self.bias_az
         self.est_el = p_el + self.bias_el
         self._prev_track_az, self._prev_track_el = c.los_az, c.los_el
@@ -460,6 +525,7 @@ class Tracker:
             self.vel_az = av * vaz + (1.0 - av) * self.vel_az
             self.vel_el = av * vel_el + (1.0 - av) * self.vel_el
         self._pv_az, self._pv_el = c.los_az, c.los_el
+        self._pv_u, self._pv_v = c.u, c.v
         self._prev_track_t = t
         return self.state, self.est_az, self.est_el, self.confidence
 
@@ -470,19 +536,96 @@ class Tracker:
         self.est_az = az
         self.est_el = el
         self.state = LOCKED
+        self.phase = LOCKED
         self.acquisition_count += 1
         self.coast_time = 0.0
         self._tent_id = None
 
+    # ------------------------------------------------------------------
+    def _update_conf(self, c, p_az, p_el):
+        """Fill the unified ConfidenceState for an observation (0-1 each).
+
+        The disturbance condition fed to the TrustManager is *derived* from
+        measurement quality (SNR, centroid flicker, model residual) -- the
+        tracker never reads the true disturbance value (blind mode).
+        """
+        # "Is the motion-model prediction reliable?"  The model predicts THIS frame
+        # from the ephemeris prior plus the learned bias (the belief state): if
+        # the beacon arrives where tracked, the model is right.  Systematic
+        # ephemeris offsets are learned away (bias), so this grades transient
+        # disagreement - a hard manoeuvre, a corrupted prior, an unmodelled
+        # disturbance - not static calibration error.  A small velocity lead
+        # (same extrapolation the controller uses to coast) removes the moving
+        # target's steady slew from the residual.
+        if self.est_az is not None:
+            _base_az, _base_el = self.est_az, self.est_el
+        else:
+            _base_az, _base_el = p_az + self.bias_az, p_el + self.bias_el
+        _lead_dt = 1.0 / config.FPS
+        resid_deg = math.hypot(c.los_az - (_base_az + self.vel_az * _lead_dt),
+                               c.los_el - (_base_el + self.vel_el * _lead_dt))
+        self._resid_deg_lead = resid_deg
+        if self.video_mode:
+            identity_src = c.ml_score
+        else:
+            # Identity = AI appearance (the trained, verified classifier) fused
+            # with the continuous 15 Hz modulation evidence.  Both are needed:
+            # appearance alone can be fooled by a luminous decoy, modulation
+            # alone can flicker under noise (corr_area dips on uniform patches).
+            identity_src = 0.6 * c.ml_score + 0.4 * self.mod.corr_area()
+        self.conf.update(
+            identity_src=identity_src,
+            snr=c.snr,
+            centroid_residual_px=self._centroid_jitter_px(c),
+            pred_residual_deg=resid_deg,
+            pred_scale_deg=max(0.08, self._prior_gate_deg(self.coast_time)),
+            model_conf=(0.25 if self.video_mode else 1.0),
+            dist_level=self.dist_level_est,
+            point_err_deg=self.point_err_deg if hasattr(self, "point_err_deg") else 0.0,
+            point_err_scale_deg=0.2)
+        # derived disturbance condition for the trust manager (blind estimate)
+        self.dist_level_est = max(
+            0.0, min(1.0, 0.8 * (1.0 - self.conf.position)
+                     + 0.2 * min(1.0, resid_deg / 0.4)))
+
+    def _centroid_jitter_px(self, c):
+        """EMA of per-frame centroid displacement in the camera pixel plane -
+        a direct measurement of how stable the blob centroid is."""
+        if self._pv_u is None:
+            self._jit_px = 0.0
+            return 0.0
+        d_px = math.hypot(c.u - self._pv_u, c.v - self._pv_v)
+        j = getattr(self, "_jit_px", d_px)
+        self._jit_px = 0.6 * d_px + 0.4 * j
+        return self._jit_px
+
     def _on_miss(self, t, dt):
-        if self.state in (LOCKED, COASTING):
+        if self.state in (LOCKED, DEGRADED_LOCK, COASTING, REACQUIRING):
             self.coast_time += dt
+            # prediction uncertainty grows while unobserved
+            self.unc.coast(dt)
             if self.coast_time > config.COAST_TIMEOUT_S:
                 self.state = SEARCHING
+                self.phase = SEARCHING
                 self.search_angle = 0.0
                 self.search_radius = 0.0
+            elif self.unc.reacquire_threshold_reached():
+                # uncertainty beyond credibility -> stop following the model,
+                # actively search (from the predicted position, expanding)
+                self.state = REACQUIRING
+                self.phase = REACQUIRING
             else:
+                # predictive coast: extrapolate the estimate with the smoothed
+                # velocity so the gimbal keeps riding the last known motion
+                if self.est_az is not None:
+                    self.est_az += self.vel_az * dt
+                    self.est_el += self.vel_el * dt
                 self.state = COASTING
+                self.phase = COASTING
+            self.coast_mode = self.trust.update_coast(False, self.unc)
+        else:
+            self.phase = SEARCHING
+            self.coast_mode = self.trust.update_coast(False, self.unc)
         self.associated = None
         return self.state, self.est_az, self.est_el, self.confidence
 

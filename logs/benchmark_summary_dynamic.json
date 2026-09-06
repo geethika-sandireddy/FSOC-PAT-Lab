@@ -1,6 +1,6 @@
 {
   "commit": "be47afc",
-  "generated": "2026-09-06 13:11:24",
+  "generated": "2026-09-06 12:28:45",
   "presets": [
     "EASY",
     "MODERATE",
@@ -14,7 +14,7 @@
     2
   ],
   "frames_per_trial": 450,
-  "scenario": "none",
+  "scenario": "dynamic",
   "camera_resolution": "640x480",
   "fov_deg": "4.0x3.0",
   "pixels_per_deg": 160.0,
@@ -34,8 +34,8 @@
       "point_mean_max": 0.028427298193306465,
       "strike_max": 0,
       "false_lock_total": 0,
-      "fps_min": 44.210473427388514,
-      "fps_max": 46.23779739175071
+      "fps_min": 57.4641232129511,
+      "fps_max": 59.66086331224034
     },
     {
       "preset": "MODERATE",
@@ -50,8 +50,8 @@
       "point_mean_max": 0.05298719957981645,
       "strike_max": 26,
       "false_lock_total": 1,
-      "fps_min": 40.90400877227126,
-      "fps_max": 41.43594717527035
+      "fps_min": 51.31076179694062,
+      "fps_max": 53.53967489275928
     },
     {
       "preset": "HARD",
@@ -66,8 +66,8 @@
       "point_mean_max": 0.047462383091539335,
       "strike_max": 0,
       "false_lock_total": 0,
-      "fps_min": 24.232710776481397,
-      "fps_max": 24.686282856241906
+      "fps_min": 31.4931593242129,
+      "fps_max": 31.503539233923963
     },
     {
       "preset": "SEVERE",
@@ -82,8 +82,8 @@
       "point_mean_max": 0.2466214777665224,
       "strike_max": 19,
       "false_lock_total": 1,
-      "fps_min": 12.537312763574329,
-      "fps_max": 24.20520386690367
+      "fps_min": 30.78489346521834,
+      "fps_max": 31.106311119488495
     },
     {
       "preset": "ADVERSARIAL",
@@ -98,8 +98,8 @@
       "point_mean_max": 0.09010940752530863,
       "strike_max": 0,
       "false_lock_total": 0,
-      "fps_min": 12.31253554477853,
-      "fps_max": 22.88858401097192
+      "fps_min": 30.261990406862136,
+      "fps_max": 30.57060887507012
     }
   ]
 }
