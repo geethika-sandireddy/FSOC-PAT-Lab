@@ -27,6 +27,10 @@ python -m metrics.stress_test --presets ISRO_RX --trials 3
 
 # Run the acquire → lose → coast → reacquire recovery demo (ideal for a judging panel)
 python -m metrics.scenario_demo --preset MODERATE --inject occlude
+python -m metrics.scenario_demo --preset MODERATE --inject recover   # full loss-and-recovery story
+
+# Trust-manager vignette: beacon burn the ephemeris doesn't know about
+python -m metrics.stress_test --scenario truststory
 
 # Benchmark a grader-supplied MP4 (Benchmark-2 bypass)
 python -m metrics.mp4_bypass -i path/to/video.mp4
@@ -79,8 +83,8 @@ main.py                    Mission console GUI (pygame-ce 2.5.8)
 ├── ai/classifier.py       Baked logistic-regression weights; single-scenario snapshot
 ├── ai/train_classifier.py Whole-seed train/val/test training (no frame leakage)
 ├── metrics/performance.py CSV logging, live stats (acquisition, retention, error, reacquisition, false-lock)
-├── metrics/stress_test.py Multi-trial headless benchmark harness
-├── metrics/scenario_demo.py Scripted acquire/lose/coast/reacquire recovery demo
+├── metrics/stress_test.py Multi-trial headless benchmark harness (canonical sweep + wrongprior/dynamic/truststory scenarios)
+├── metrics/scenario_demo.py Scripted acquire/lose/coast/reacquire recovery demo --inject recover|occlude|fade
 └── config.py              All tunables, difficulty presets, servo parameters
 ```
 
@@ -178,16 +182,28 @@ vs "how much do I believe the ephemeris model"* — and makes it visible.
 - **Uncertainty** (`core/uncertainty.py`) — smooth `σ` in px (measurement +
   residual + quadratic coast growth) that truly reflects link health: ~3 px on
   quiet links, rising past the 18 px re-acquire line under occlusions/fades.
+  Inner tracking uses the *internal*, uncapped σ; the on-screen readout is
+  capped at 24 px so a handling panel stays readable under SEVERE conditions.
+- **Reachable re-acquisition** (`core/tracking.py`) — while the beacon is lost
+  the old path is extrapolated, the gimbal is aimed at that lane, and the
+  association gate opens 2×: recovery is **REACQUIRING**, not a blind
+  SEARCHING sweep. Scripted as a live demo (`--inject recover`).
 - **Adaptive trust** (`core/trust.py`) — mode-driven vision share:
   `VISION_DOMINANT` 0.85, `MODEL_DOMINANT` 0.30, `BALANCED` 0.4–0.6; hysteresis
   debounce; keeps the point when the prior jumps (Section on stress scenario).
-- **Scenario runs** — `--scenario none|wrongprior|dynamic` in
+- **Scenario runs** — `--scenario none|wrongprior|dynamic|truststory` in
   `metrics/stress_test.py`: a 0.35° ephemeris prior step + drag + random walk
   is re-baselined transparently (100% retention on EASY/HARD/ADVERSARIAL,
   ≤ 1 false lock) and the trust pair visibly rebalances (SEVERE/ADVERSARIAL
-  shift MODEL_DOMINANT → BALANCED).
+  shift MODEL_DOMINANT → BALANCED). The `truststory` vignette stages the one
+  failure model a leaky-absorbed bias *cannot* hide from — a beacon burn off
+  its own ephemeris: the bias must chase at `acc·(t−7)`°/s, the model-honesty
+  residual stays above the VISION margin, and **VISION_DOMINANT holds the
+  loop** through the manoeuvre (40–77 % of the window, 3 seeds), reverting
+  cleanly to BALANCED/MODEL_DOMINANT after the post-burn state-vector heal.
 - **Evidence files** — `logs/phase2_trust_summary.json` (per-seed vision/model
-  trust % and σ per preset), plus `*_wrongprior`, `*_dynamic` variants.
+  trust % and σ per preset), plus `*_wrongprior`, `*_dynamic`, `*_truststory`
+  variants.
 - **Live readout** — the GUI stack shows ID / POS / PRED / PT and
   VL / ML / σ / [mode] every frame.
 

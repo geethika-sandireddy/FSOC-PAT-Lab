@@ -292,13 +292,69 @@ Some parameters can be adjusted live using the sliders on the right panel. Chang
 
 ---
 
-## 8. File Output
+## 8. Scenario Demos & Stress Runs
+
+The harnesses expose scripted failure-and-recovery events, all deterministic
+(seeded), so a judge can rerun the exact recorded sequence.
+
+### 8.1 Real-time recovery demo (GUI)
+
+```
+python -m metrics.scenario_demo --inject recover
+```
+
+Drives one full loss-and-recovery event through the disturbance engine:
+vision degrades 8.0-9.2 s, the beacon disappears 9.2-9.62 s, then the link
+recovers. The readout shows `LOCKED → DEGRADED_LOCK → COASTING →
+REACQUIRING → LOCKED` (about 0.4 s coast to re-acquire). `--inject fade`
+(progressive beacon fade) and `--inject occlude` (a real obstacle, blanking
+signal for ~4 s) demonstrate the same machinery with one lever each.
+
+### 8.2 Stress scenarios (headless benchmark)
+
+```
+python -m metrics.stress_test --scenario wrongprior --trials 3
+python -m metrics.stress_test --scenario dynamic   --trials 3
+python -m metrics.stress_test --scenario truststory --trials 3
+```
+
+- `wrongprior` — a corrupted ephemeris (drag + recalibration steps + random
+  walk). The bias filter re-baselines the broken prior within ~2 frames and
+  the trust manager uses the camera during the transient.
+- `dynamic` — "solar storm": every disturbance ramps 10× for the second half
+  of the run.
+- `truststory` — the trust-manager vignette: a beacon burn the ephemeris
+  doesn't know about (phase A pristine `BALANCED/MODEL`, phase B vision
+  degraded `MODEL_DOMINANT`, phase C manoeuvre `VISION_DOMINANT` majority,
+  phase D state-vector heal back to `BALANCED/MODEL`). Per-phase mode
+  percentages and the live mode timeline land in the `_truststory` files
+  under `logs/`.
+
+Optional last two CLI flags on stress runs: `--tag NAME` appends a filename
+suffix, and `--burn-t1 SEC` (truststory only) moves the burn-end time.
+
+### 8.3 What re-acquisition means on screen
+
+When the signal is lost the tracker keeps the last good path, then turns the
+gimbal to the extrapolated lane with a widened association gate: the beacon
+is picked back up without a blind sweep. The persistent readout shows the
+estimate error ~never leaves the fine-acquisition band during these events.
+Only an obstacle masking the target for well past a second (obstacle
+coverage) legitimately pauses the track.
+
+---
+
+## 9. File Output
 
 ### Logs Directory
 
 All output is saved to the `logs/` directory:
 
-- `stress_test_summary.csv`: Benchmark results (one row per preset)
+- `stress_test_summary.csv` / `benchmark_summary.json`: canonical benchmark
+  results (one row per preset); `_scenario` suffixed variants for
+  `wrongprior` / `dynamic` / `truststory` runs
+- `phase2_trust_summary*.json`: trust/uncertainty telemetry, including the
+  per-phase mode story for `truststory`
 - `run_*.csv`: Per-frame performance logs from GUI sessions
 - `shot_*.png`: GUI screenshots
 

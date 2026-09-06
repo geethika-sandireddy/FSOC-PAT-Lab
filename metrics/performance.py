@@ -55,7 +55,7 @@ class PerformanceTracker:
         self.success_frames = 0      # of those, frames the tracker held LOCKED
         self.state_time = {}
         self.trust_samples = []    # (vision_trust, model_trust) per tracked frame
-        self.unc_samples = []      # sigma_px per frame
+        self.unc_samples = []      # display (HUD-capped) sigma_px per frame
 
     # ------------------------------------------------------------------
     def record_frame(self, sim):
@@ -84,7 +84,10 @@ class PerformanceTracker:
             self.trust_samples.append((trk.trust.vision_trust,
                                        trk.trust.model_trust))
         if hasattr(trk, "unc"):
-            self.unc_samples.append(trk.unc.sigma_px)
+            # display (capped) sigma so benchmark tables report the number the
+            # HUD/evaluator actually reads; the loop's internal value remains
+            # unbounded and is what drives the REACQ escalation.
+            self.unc_samples.append(trk.unc.display_sigma_px)
 
         sim_t = float(r.get("t", 0.0))
         if visible:

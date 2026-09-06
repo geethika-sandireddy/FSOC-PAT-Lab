@@ -182,9 +182,50 @@ VISION_DOMINANT_MARGIN = 0.18        # vision_trust >= model_trust + margin
 MODEL_DOMINANT_MARGIN = 0.18         # model_trust >= vision_trust + margin
 UNCERTAINTY_BASE_PX = 2.0            # nominal position uncertainty (px)
 UNCERTAINTY_SNR_K = 8.0              # snr -> sigma scale (lower snr -> higher sigma)
-UNCERTAINTY_COAST_GROW_S = 0.25      # coast uncertainty growth rate (px/s)
-UNCERTAINTY_COAST_GROW2_S = 0.35     # cooperative growth (px/s^2)
+# Coast growth: sigma(t) = sigma0 + k1*t + k2*t^2.  With the coefs below a
+# nominal 2 px state crosses the 18 px REACQUIRE line at ~0.34 s - well
+# inside COAST_TIMEOUT_S=0.45 - so the escalation COAST -> REACQUIRING ->
+# (re-lock | SEARCH) is genuinely exercised instead of being dead code
+# (previously growth was far too slow and REACQUIRING was unreachable).
+UNCERTAINTY_COAST_GROW_S = 36.0      # coast uncertainty linear growth (px/s)
+UNCERTAINTY_COAST_GROW2_S = 30.0     # cooperative growth (px/s^2)
 REACQUIRE_UNCERTAINTY_PX = 18.0      # uncertainty above this -> active reacquisition
+# HUD/plot display cap.  The estimator's INTERNAL sigma is unbounded (the real
+# telemetry the loop acts on); only the number painted on screen is clamped so
+# a long outage cannot render a silly bar.  Reacquisition logic always reads
+# the internal value, so this cap never gates behaviour.
+UNCERTAINTY_DISPLAY_PX_CAP = 24.0
+# Association gate multiplier while in REACQUIRING: the "gate widens" while an
+# ambiguous re-observation is sought near the predicted LOS (control.py comment
+# for REACQUIRING).  Buffer, never a blind reset - _on_tracked still runs the
+# full appearance/modulation verification before re-committing LOCKED.
+REACQ_GATE_MULT = 2.0
+# Model-honesty conversion: how strongly the filter's bias-CHASE RATE (deg/s)
+# counts as a prediction residual (deg).  A healthy ephemeris needs only tiny,
+# slow bias corrections; a corrupted prior or an unmodelled manoeuvre forces
+# the bias filter to run continuously, and THAT activity is a signal the bias
+# absorber cannot cancel (the absorption itself is the evidence).  A chase rate
+# of, e.g., ~0.5 deg/s weighs like a ~0.4 deg residual against the 0.55 deg
+# prediction scale -> model trust collapses -> VISION_DOMINANT hands the loop
+# to the camera.
+TRUST_CHASE_K = 0.8
+# trust-story (stress_test --scenario truststory) beacon-burn acceleration
+# (deg/s^2).  The burn accelerates the beacon away from (and only away from)
+# the ephemeris the tracker believes; the monotonic displacement forces the
+# bias filter to chase the prior every frame (chase = acc*(t-7) deg/s), which
+# the model-honesty conversion reads as a constant prediction failure ->
+# VISION_DOMINANT holds the loop for the whole burn.  At BURN_T1 ops uploads
+# the post-burn elements (the scenario re-anchors the tracker's ephemeris and
+# bias), so phase D reverts to BALANCED/MODEL without any geometric step.
+TRUSTSTORY_ACC = 0.8
+TRUSTSTORY_BURN_T1 = 12.5
+# Per-preset burn profile: harder presets get a gentler, shorter burn so the
+# maximum displacement stays inside the bias absorber / association-gate reach
+# -- the VISION story still holds (the chase rate keeps the model-honesty
+# residual above the VISION margin the whole burn) but the loop never outruns
+# itself into a coast before the state-vector heal.
+TRUSTSTORY_ACC_BY_PRESET = dict(EASY=0.8, MODERATE=0.7, HARD=0.7)
+TRUSTSTORY_T1_BY_PRESET = dict(EASY=12.5, MODERATE=11.5, HARD=11.5)
 
 # ---------------------------------------------------------------------------
 # Disturbance engine (each 0-100, independently controllable)

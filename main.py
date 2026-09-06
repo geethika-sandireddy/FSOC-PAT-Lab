@@ -691,7 +691,7 @@ class App:
             if tm is not None:
                 T.text(cam, (10, 60),
                        f"VL {tm.vision_trust:.2f}  ML {tm.model_trust:.2f}  "
-                       f"sigma {getattr(tr.unc, 'sigma_px', 0.0):.1f}px  "
+                       f"sigma {getattr(tr.unc, 'display_sigma_px', 0.0):.1f}px  "
                        f"[{tm.mode}]",
                        8, T.C.TEXT_FAINT)
             T.text(cam, (10, 72),

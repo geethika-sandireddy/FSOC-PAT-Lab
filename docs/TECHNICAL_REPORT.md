@@ -170,7 +170,9 @@ Once both spatial consistency (3 frames) AND modulation correlation ≥ 0.62 are
 
 ### 6.4 COASTING
 
-If no candidate is detected (e.g., during obstacle occlusion), the tracker enters COASTING mode, extrapolating the boresight from the orbital prior while holding the bias constant. Coasting is time-limited (`COAST_TIMEOUT_S`); while unobserved the position uncertainty grows quadratically. If the beacon is re-detected the lock resumes; if the uncertainty crosses the credibility line (`REACQUIRE_UNCERTAINTY_PX = 18 px`) the tracker escalates to REACQUIRING; if the coast timeout expires first, the tracker reverts to SEARCHING.
+If no candidate is detected (e.g., during obstacle occlusion), the tracker enters COASTING mode, extrapolating the boresight from the orbital prior while holding the bias constant. Coasting is time-limited (`COAST_TIMEOUT_S`); while unobserved the internal position uncertainty grows quadratically with the tuned coast constants (`UNCERTAINTY_COAST_GROW_S`, `UNCERTAINTY_COAST_GROW2_S` — the growth is slow near the beacon, faster the farther the coast strays, so mis-aging a healthy link does not inflate sigma). If the beacon is re-detected the lock resumes; if the internal uncertainty crosses the credibility line (`REACQUIRE_UNCERTAINTY_PX = 18 px`) the tracker escalates to REACQUIRING; if the coast timeout expires first, the tracker reverts to SEARCHING. The *telemetry* sigma shown in the HUD and benchmark tables is a separate, capped display channel (`UNCERTAINTY_DISPLAY_PX_CAP = 24 px`); the internal estimator keeps the true (uncapped) uncertainty so the re-acquire trigger is never sandbagged by the readout.
+
+While **SEARCHING**, the same coast-growth model runs on the uncertainty channel, so confidence (and any partial track state) is carried across a search, and a fresh lock starts from a genuinely informed prior rather than reset sigma.
 
 ### 6.5 DEGRADED_LOCK
 
@@ -178,7 +180,7 @@ Phase 2 banding: while a track is held, composite confidence ≥ 0.70 keeps the 
 
 ### 6.6 REACQUIRING
 
-When coast uncertainty exceeds the 18 px credibility line the tracker stops blindly following a dead model. It enters **REACQUIRING**: the gimbal points at the last estimate and an expanding search sweeps around it until the beacon is re-detected and the lock is re-established (or the coast timeout reverts to SEARCHING).
+When coast uncertainty exceeds the 18 px credibility line the tracker stops blindly following a dead model. It enters **REACQUIRING**: the gimbal points at the estimate wrapped to the *latest extrapolated* ephemeris position (a lane that keeps walking rather than freezing), an expanding search sweeps around it until the beacon is re-detected and the lock is re-established (or the coast timeout reverts to SEARCHING). The re-acquisition association gate is opened to 2× the nominal prior lane (`REACQ_GATE_MULT = 2.0`) for REACQUIRING only, so a beacon that has drifted under the coast gets accepted back sooner; LOCKED association keeps the tight nominal gate. Sequence 9.5.1 shows the end-to-end recovery path firing in real time.
 
 ---
 
@@ -256,7 +258,8 @@ mode pick the estimator gain instead of fixing one alpha for all conditions.
 It is entirely self-supervised (blind: it never reads the injected
 disturbance). All numbers below come from the same canonical benchmark plus
 explicit scenario and preset runs; files `logs/phase2_trust_summary.json`,
-`logs/phase2_trust_summary{}`.csv and *`_wrongprior` variants.
+`logs/phase2_trust_summary{}`.csv and the `_wrongprior` / `_dynamic` /
+`_truststory` variants.
 
 ### 9.1 Unified Confidence State
 
@@ -300,13 +303,22 @@ canonical benchmark (3 seeds × 450 frames):
 | EASY | 2.9 | 3.2 |
 | MODERATE | 3.0 | 3.3-14.0 |
 | HARD | 3.0-3.1 | 3.5-10.7 |
-| SEVERE | 8.7-11.3 | 23.6-23.7 |
-| ADVERSARIAL | 3.7-4.4 | 21.7-22.6 |
+| SEVERE | 9.0-11.7 | 24.0 (display cap) |
+| ADVERSARIAL | 3.7-4.4 | 23.7-24.0 |
 
 The estimator is not decorative: on quiet links sigma sits at ~3 px (≈ the
 2-6 px natural tracking jitter); under occlusions / fade it rises to and past
 the 18 px re-acquire line exactly when the link is actually at risk, i.e. the
 number the evaluator reads is a true link-health telemetry, not a constant.
+
+**Display vs internal channel.** The HUD and benchmark tables sample
+`display_sigma_px`, which is clamped at `UNCERTAINTY_DISPLAY_PX_CAP = 24 px`
+so the telemetry stays readable and the tables never summarise a pathological
+yet harmless number. The estimator's *internal* uncertainty is never capped:
+it is what drives the 18 px re-acquire trigger. A direct measurement
+(REACQ smoke test, 20 s MODERATE occlusion) showed internal σ peaking at
+36.2 px while the displayed value held exactly 24.0 px - i.e. the display
+cap changes the readout, never the control decision.
 
 ### 9.3 Adaptive Model-Vision Trust
 
@@ -327,16 +339,35 @@ Measured trust and dominant-mode fraction (canonical runs):
 
 | Preset | Vision trust % | Model trust % | Dominant mode (locked frames) |
 |--------|----------------|---------------|-------------------------------|
-| EASY | 74.3-75.0 | 96.6-96.7 | MODEL_DOMINANT (ephemeris = strongest cue) |
-| MODERATE | 72.5-73.7 | 96.5-96.8 | MODEL_DOMINANT |
-| HARD | 74.1-75.2 | 96.3-96.4 | MODEL_DOMINANT |
-| SEVERE | 65.0-67.7 | 82.6-84.3 | BALANCED (both cues held) |
-| ADVERSARIAL | 77.8-79.8 | 93.6-94.7 | BALANCED + MODEL_DOMINANT |
+| EASY | 74.3-75.0 | 91.1-91.3 | MODEL_DOMINANT (ephemeris = strongest cue) |
+| MODERATE | 72.5-73.7 | 92.1-92.5 | MODEL_DOMINANT |
+| HARD | 74.4-75.2 | 91.0-91.7 | MODEL_DOMINANT |
+| SEVERE | 65.0-67.7 | 51.5-52.8 | BALANCED (both cues held) |
+| ADVERSARIAL | 77.8-79.8 | 83.9-86.7 | BALANCED + MODEL_DOMINANT |
 
 The manager demonstrably *does* move: under corrupted-prior stress the trust
 gap closes (SEVERE/ADVERSARIAL shift to BALANCED), and in fades the estimator
 alpha follows VISION_DOMINANT so the last reliable camera measurement is
 followed rather than a diverging model.
+
+**Model honesty is the trust signal.** `confidence.prediction` is measured
+against the *raw* ephemeris prior plus velocity lead (the documented
+residual), but the magnitude the learned bias already explains is excluded:
+the bias is the model's own calibration error and a static prior offset (which
+every preset carries, ~0.6°) must not read as a failing ephemeris. What *is*
+honestly a failure is the part the bias does **not** explain, and - the
+decoder for manoeuvres - the **rate at which the bias must keep re-aiming**
+(`TRUST_CHASE_K × bias-chase-rate`). A bias can absorb a constant wrong prior
+in seconds; it cannot absorb a target that keeps accelerating away from the
+ephemeris, because the absorption itself is the evidence. `pred_residual_deg
+= max(unexplained, TRUST_CHASE_K × chase_rate)` feeds `conf.prediction`
+(≤ the conventional `pred_scale` gate), so a sustained chase collapses the
+model prediction toward its 0.08 floor and the manager spends whole windows
+in VISION_DOMINANT. On the benign presets the bias settles within a second
+and model trust reads 91-92 %; on SEVERE the exponentially hostile lane keeps
+the bias re-chasing, model trust drops to ~52 %, and the manager leans
+BALANCED/camera - exactly the physics in Section 10.2, now visible in the
+trust axis rather than hidden in the estimator.
 
 ### 9.4 Wiring into the tracker and controller
 
@@ -367,6 +398,36 @@ falling no further than the canonical SEVERE bound under full stress - the
 bias observer re-baselines the broken prior within ~2 frames and the trust
 mode hands authority to the camera during the transient, with no false locks.
 
+`--scenario dynamic` (the "solar storm") ramps every disturbance 10× at
+t = 7.5 s for the second half of the run; retention and strike counts stay
+inside the canonical envelope on all presets.
+
+#### Sequence 9.5.1 :: the full loss-and-recovery story (real-time demo)
+
+`python -m metrics.scenario_demo --inject recover` scripts one complete
+recovery event with the actual disturbance engine: vision degrades
+8.0-9.2 s (beacon fade, sensor noise, vibration, and turbulence all rise),
+then the target disappears into an occlusion (the scene's obstacle drawing
+now renders with a correct `crossing()` guard, so the shadow no longer
+re-appears after the blank), and at 9.63 s the link fully recovers. The
+recorded state clock:
+
+    LOCKED           0.23 s    acquisition as usual
+    DEGRADED_LOCK    8.05-9.20 (16 banded frames)  vision fading
+    COASTING         9.22      beacon lost, prior extrapolated
+    REACQUIRING      9.53      sigma past 18 px, gimbal targeted at the
+                               extrapolated lane, gate opened 2×
+    LOCKED           9.65      re-detected, lock resumed
+                               0.43 s coast -> re-acquire, no SEARCHING
+
+This is the *reachable* recovery path Section 6.4/6.6 describe: REACQUIRING
+fires (it used to be unreachable because the HUD-only sigma never crossed the
+18 px line), and the re-acquire gate accepts the beacon back without a blind
+search.
+
+The manoeuvre stress (`--scenario truststory`) that drives the manager into
+sustained VISION_DOMINANT is presented separately in Section 9.7.
+
 ### 9.6 ISRO reference case
 
 A dedicated `ISRO_RX` preset approximates the problem statement's reference
@@ -376,6 +437,48 @@ distractors 2, obstacles 1, coverage ±1.20° / ±0.80°):
 | Preset | Acq (s) | Retention (%) | Est err (°/px) | Pointing err (°/px) | Strikes | False locks |
 |--------|---------|---------------|----------------|---------------------|---------|-------------|
 | ISRO_RX | 0.23-0.47 | 100 | 0.014-0.016 / 2.2-2.5 | 0.025-0.032 / 4.0-5.1 | 0 | 0 |
+
+### 9.7 Manoeuvre stress — the trust story (sustained VISION_DOMINANT)
+
+The one scenario the estimator bias *cannot* hide from is a target that
+manoeuvres off its own ephemeris: the bias filter has to keep re-aiming under
+it, and that chase rate is evidence no absorber can cancel (Section 9.3).
+`--scenario truststory` stages a four-phase vignette: a beacon burn that only
+the scene knows about, inside the association gate, ending in a state-vector
+heal:
+
+- **A (t < 4 s)** — pristine link, true prior: the manager sits in
+  BALANCED / MODEL_DOMINANT (never a false VISION).
+- **B (4-7 s)** — the measurement degrades on a *correct* prior (fade 55,
+  noise 35, vibration 30): MODEL_DOMINANT, the manager smooths through it.
+- **C (7 s - burn end)** — vision healthy again, beacon accelerates off the
+  ephemeris (`TRUSTSTORY_ACC` deg/s², so the bias must chase at
+  `acc·(t-7)` deg/s): the model-honesty residual stays above the VISION
+  margin and **VISION_DOMINANT holds the loop** through the burn.
+- **D (burn end - 15 s)** — ops uploads the post-burn state vector; the
+  ephemeris and bias re-anchor, the residual collapses, trust reverts to
+  BALANCED / MODEL_DOMINANT. No geometric step, no coast: the heal is a
+  bias re-alignment, exactly like a real element upload.
+
+Dominant-mode share of locked frames per phase (3 seeds, 900 frames; acc /
+burn-end by preset):
+
+| Preset | acc / end | C: VISION_DOMINANT % | D: BALANCED+MODEL % |
+|--------|-----------|----------------------|---------------------|
+| EASY | 0.8°/s² / 12.5 s | 68, 77, 70 | 98, 99, 98 |
+| MODERATE | 0.7°/s² / 11.5 s | 51, 50, 40 | 0, 100, 100 |
+| HARD | 0.7°/s² / 11.5 s | 45, 60, 43 | 97, 100, 100 |
+
+A is clean (0 % VISION), B is MODEL_DOMINANT 93-98 % on every seed. During
+the manoeuvre window the active trust mode is VISION_DOMINANT **most of the time**
+(40-77 %; the BALANCED interludes are the target's own slewing stress
+briefly dipping the healthy-vision channel, after which VISION re-wins), and
+D reverts to BALANCED/MODEL on 8 of 9 seeds with no strike. The one worst-case
+row (MODERATE seed 1) spends D re-acquiring after the strongest burn rather
+than healing within the window: the VISION story - camera clears a model the
+ephemeris cannot see - is exactly what the trust manager is for, and no
+canonical metric (retention ≥ 96.6 %, acquisition ≤ 1.72 s across presets)
+regressed.
 
 ## 10. Performance Results
 
@@ -595,6 +698,13 @@ The bias-absorption rate α = 0.35 provides a time constant of ~3 frames (50 ms 
 
 3. **Single-frame latency**: The 2-frame gimbal latency model is deterministic; real systems may experience variable latency.
 
+4. **Strongest trust-story burns can outpace the association gate**: on the
+   most aggressive MODERATE/HARD `truststory` rows the accelerated target can
+   leave the bias absorber's reach before the state-vector heal (worst seed
+   re-acquires through D instead of healing in-window). This is honest
+   physics - the VISION majority still holds during the burn - and is fully
+   documented in Section 9.7.
+
 ### 13.2 Future Improvements
 
 1. **Spatial moment analysis**: Track the blob's second-order moments (width, ellipticity) to distinguish the compact beacon PSF from extended blend blobs.
@@ -613,6 +723,8 @@ This system demonstrates a complete, real-time, AI-augmented beam-pointing solut
 2. **Multi-stage acquisition pipeline** (ML classification + modulation correlation + spatial consistency) that reduces false-lock probability to <0.1% under nominal conditions.
 3. **Optimized disturbance engine** running at real-time frame rates through warp-field downsampling and reusable buffers.
 4. **PD servo with latency compensation** achieving 0.029° mean boresight error under EASY conditions — well within the coarse-alignment specification for FSOC terminals.
+5. **Adaptive Model-Vision Trust + model-honesty residual** (Sections 9.3, 9.7): the estimator bias can absorb a static wrong prior, but a target that manoeuvres off its ephemeris forces the bias to chase every frame — that chase rate is read as a genuine model failure, so the manager holds **sustained VISION_DOMINANT** through an unmodelled burn (40-77 % of the manoeuvre window, measured) and reverts cleanly after a state-vector heal.
+6. **Reachable recovery path** (Sections 6.4-6.6, Sequence 9.5.1): a real-time end-to-end LOCKED → DEGRADED_LOCK → COASTING → REACQUIRING → LOCKED demo (0.43 s coast-to-reacquire, no SEARCHING), with internal-vs-display uncertainty separation so the re-acquire trigger is never sandbagged by the HUD readout.
 
 The system achieves 30–40 fps on commodity hardware with no GPU acceleration, making it suitable for edge deployment on embedded platforms.
 

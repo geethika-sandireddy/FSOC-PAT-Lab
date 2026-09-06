@@ -243,6 +243,7 @@ class Tracker:
         self._prev_track_az = self._prev_track_el = None
         self._prev_track_t = None
         self._prev_bias_r_az = self._prev_bias_r_el = None
+        self._prev_bias_az = self._prev_bias_el = None
         self.phase = SEARCHING
         self.conf = ConfidenceState()
         self.unc = UncertaintyEstimator()
@@ -319,9 +320,17 @@ class Tracker:
                                 best = c
                                 break
             if best is None:
+                # active REACQUIRING widens the association gate around the
+                # predicted LOS so a beacon returning after a blank links the
+                # moment it peeks back in (the "gate widens" documented for
+                # REACQUIRING in core/control.py).  Any object caught by the
+                # wider gate still has to pass the full _on_tracked
+                # appearance/modulation verification before LOCKED.
+                gate = self.gate_deg * (config.REACQ_GATE_MULT
+                                        if self.state == REACQUIRING else 1.0)
                 for c in candidates:
                     d = math.hypot(c.los_az - self.est_az, c.los_el - self.est_el)
-                    if d < self.gate_deg:
+                    if d < gate:
                         if best is None or c.fusion_score > best.fusion_score:
                             best = c
             if best is not None:
@@ -549,22 +558,56 @@ class Tracker:
         measurement quality (SNR, centroid flicker, model residual) -- the
         tracker never reads the true disturbance value (blind mode).
         """
-        # "Is the motion-model prediction reliable?"  The model predicts THIS frame
-        # from the ephemeris prior plus the learned bias (the belief state): if
-        # the beacon arrives where tracked, the model is right.  Systematic
-        # ephemeris offsets are learned away (bias), so this grades transient
-        # disagreement - a hard manoeuvre, a corrupted prior, an unmodelled
-        # disturbance - not static calibration error.  A small velocity lead
-        # (same extrapolation the controller uses to coast) removes the moving
-        # target's steady slew from the residual.
+        # "Is the motion-model prediction reliable?"  Two residuals are kept:
+        #
+        #  * _resid_deg_lead (estimator quality): the observation vs the FUSED
+        #    belief (bias-absorbed estimate + velocity lead).  This is what the
+        #    uncertainty estimator and the derived disturbance estimate read:
+        #    it stays small by construction, exactly because the bias filter
+        #    learns the prior's static error away.  Byte-identical to the
+        #    pre-manoeuvre-forward legacy behaviour.
+        #
+        #  * prior_resid_deg (TRUST signal, confidence.py's documented
+        #    "residual between model prior and observation"): the observation
+        #    vs the RAW ephemeris prediction (prior + velocity lead, NO learned
+        #    bias), BARRING the magnitude the bias filter already explains.
+        #    The bias is the model's own learned calibration error; a static
+        #    ephemeris offset (which every preset carries, and which the
+        #    estimator legitimately absorbs) should NOT be re-flagged as a
+        #    failing model.  Only the part of the disagreement the bias does
+        #    NOT explain -- a corrupted prior, a manoeuvre the ephemeris never
+        #    knew about, a target agenda change -- collapses conf.prediction,
+        #    model trust falls, and the AdaptiveTrustManager hands control to
+        #    the camera (VISION_DOMINANT).
+        _lead_dt = 1.0 / config.FPS
         if self.est_az is not None:
             _base_az, _base_el = self.est_az, self.est_el
         else:
             _base_az, _base_el = p_az + self.bias_az, p_el + self.bias_el
-        _lead_dt = 1.0 / config.FPS
         resid_deg = math.hypot(c.los_az - (_base_az + self.vel_az * _lead_dt),
                                c.los_el - (_base_el + self.vel_el * _lead_dt))
         self._resid_deg_lead = resid_deg
+        prior_resid_deg = math.hypot(c.los_az - (p_az + self.vel_az * _lead_dt),
+                                     c.los_el - (p_el + self.vel_el * _lead_dt))
+        self._prior_resid_deg = prior_resid_deg
+        _unexplained_deg = max(0.0, prior_resid_deg
+                               - math.hypot(self.bias_az, self.bias_el))
+        self._unexplained_resid_deg = _unexplained_deg
+        # how hard must the filter CHASE the ephemeris right now (deg/s)?
+        # The bias magnitude can absorb a lot, but the rate at which the bias
+        # must keep moving cannot: a static offset needs a flat bias; a
+        # corrupted prior or an accelerating/slewing target keeps the bias
+        # re-angling frame after frame.  That chase rate IS the proof the
+        # model is wrong, so it feeds the trust-facing prediction residual.
+        if self._prev_bias_az is not None and _lead_dt > 0:
+            _chase = math.hypot(self.bias_az - self._prev_bias_az,
+                                self.bias_el - self._prev_bias_el) / _lead_dt
+        else:
+            _chase = 0.0
+        self._prev_bias_az, self._prev_bias_el = self.bias_az, self.bias_el
+        self._prior_chase_rate = _chase
+        _model_disagreement_deg = max(_unexplained_deg,
+                                      config.TRUST_CHASE_K * _chase)
         if self.video_mode:
             identity_src = c.ml_score
         else:
@@ -577,7 +620,7 @@ class Tracker:
             identity_src=identity_src,
             snr=c.snr,
             centroid_residual_px=self._centroid_jitter_px(c),
-            pred_residual_deg=resid_deg,
+            pred_residual_deg=_model_disagreement_deg,
             pred_scale_deg=max(0.08, self._prior_gate_deg(self.coast_time)),
             model_conf=(0.25 if self.video_mode else 1.0),
             dist_level=self.dist_level_est,
@@ -614,6 +657,14 @@ class Tracker:
                 # actively search (from the predicted position, expanding)
                 self.state = REACQUIRING
                 self.phase = REACQUIRING
+                # still ride the last known motion: freezing the prediction
+                # here would let the (still-moving) beacon drift out of the
+                # association gate before it becomes visible again.  REACQUIRING
+                # differs from COASTING by the widened association gate below,
+                # not by throwing away the velocity lead.
+                if self.est_az is not None:
+                    self.est_az += self.vel_az * dt
+                    self.est_el += self.vel_el * dt
             else:
                 # predictive coast: extrapolate the estimate with the smoothed
                 # velocity so the gimbal keeps riding the last known motion
@@ -625,6 +676,12 @@ class Tracker:
             self.coast_mode = self.trust.update_coast(False, self.unc)
         else:
             self.phase = SEARCHING
+            # the blind search is itself unobserved: the estimate keeps getting
+            # LESS certain every frame we sweep without a hit, so keep growing
+            # the internal uncertainty through SEARCH too (display value stays
+            # clamped for the HUD; the reacquisition line was already crossed
+            # on the way in - this is what guarantees a fresh lock attempt).
+            self.unc.coast(dt)
             self.coast_mode = self.trust.update_coast(False, self.unc)
         self.associated = None
         return self.state, self.est_az, self.est_el, self.confidence
