@@ -64,7 +64,8 @@ main.py                    Mission console GUI (pygame-ce 2.5.8)
 │   ├── core/disturbances.py  Turbulence, vibration, sensor noise, sky background,
 │   │                      beacon fade; each control carries a physical-unit hint
 │   ├── core/detection.py  Gaussian blob detection + ML logistic-regression classifier
-│   ├── core/tracking.py   State machine (SEARCHING → TENTATIVE → LOCKED → COASTING)
+│   ├── core/tracking.py   State machine (SEARCHING → TENTATIVE → LOCKED →
+│   │                      DEGRADED_LOCK → COASTING / REACQUIRING)
 │   │                      Phase-robust modulation correlator, suspect-floor verifier,
 │   │                      DEGRADED_LOCK banding, mode-driven estimator gain
 │   ├── core/confidence.py Unified 0-1 confidence state (identity/position/prediction/
@@ -86,7 +87,7 @@ main.py                    Mission console GUI (pygame-ce 2.5.8)
 ### Core Tracking Pipeline
 
 1. **Scene rendering** — PS virtual-scene semantics: the world is a configurable 2000×2000 "screen" canvas; the pan-tilt camera (640×480, 4°×3° — the PS defaults) starts at the canvas centre and views it through a moving viewport crop. A 15 Hz amplitude-modulated beacon, distractors, obstacles, atmospheric turbulence and platform vibration are stamped into the crop.
-2. **Detection** — A 3×3 median pre-filter kills salt-and-pepper spikes before they can fuse (via morphological close) into saturation regions; a top-hat local-background subtraction then yields candidate blobs. Each candidate is scored by an ML logistic-regression classifier (appearance, SNR, area, circularity).
+2. **Detection** — A 3×3 median pre-filter kills salt-and-pepper spikes before they can fuse (via morphological close) into saturation regions; a top-hat local-background subtraction then yields candidate blobs. Each candidate is scored by an ML logistic-regression classifier on the 4-feature appearance vector `[area_norm, circularity, snr, hue_dist_n]`.
 3. **Modulation identification** — Phase-robust sign-agreement correlator tests candidates against the known 15 Hz modulation signature over a sliding 18-frame window, maximizing over 0–2 frame lag hypotheses.
 4. **Acquisition gating** — Candidates must pass the ML appearance bar AND the ephemeris prior gate; a tentative track requires spatial consistency for 3 frames (speed-tolerant jitter budget) AND modulation correlation ≥ 0.62 before LOCKED is committed.
 5. **Continuous verification** — While LOCKED, a suspect-floor monitor (corr < 0.58 for 12 consecutive frames) drops a wrong-target track back to SEARCHING.

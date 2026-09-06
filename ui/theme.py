@@ -33,6 +33,8 @@ class C:
         "SEARCHING": AMBER,
         "COASTING": CYAN,
         "LOCKED": GREEN,
+        "DEGRADED_LOCK": GREEN_DIM,
+        "REACQUIRING": PURPLE,
         "LOST": RED,
     }
 

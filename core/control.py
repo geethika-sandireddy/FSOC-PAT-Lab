@@ -83,7 +83,11 @@ class PointingController:
         self.tilt = max(-30.0, min(30.0, self.tilt))
         vp, vt = self._target_velocity(self.pan, self.tilt, dt)
         self.gimbal.command_attitude(self.pan, self.tilt, vp, vt)
-        # pointing confidence: how close commanded vs realized attitude is
-        self.tracker.conf.update_pointing(
-            math.hypot(self.pan - self.gimbal.pan, self.tilt - self.gimbal.tilt))
+        # pointing confidence: how close commanded vs realized attitude is.
+        # The naive baseline tracker (metrics/compare_trackers) has no Phase-2
+        # confidence stack, so feed it only when present.
+        conf = getattr(self.tracker, "conf", None)
+        if conf is not None:
+            conf.update_pointing(
+                math.hypot(self.pan - self.gimbal.pan, self.tilt - self.gimbal.tilt))
         return self.pan, self.tilt

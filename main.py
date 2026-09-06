@@ -43,6 +43,11 @@ CAM_W, CAM_H = config.CAM_VIEW_W, config.CAM_VIEW_H
 CAM_SCALE = 1.6
 DISPLAY_CAP = 60
 
+# states that hold a lock on the true target (a lock is still a lock even
+# when confidence drops into the DEGRADED band); the HUD treats these as
+# "TRACKING" so a degraded lock never renders as search/coast.
+LOCKED_STATES = ("LOCKED", "DEGRADED_LOCK")
+
 
 class App:
     def __init__(self, preset="EASY", seed=None, fullscreen=False,
@@ -182,7 +187,7 @@ class App:
                     pygame.display.flip()
                     break
                 self.perf.record_frame(self.sim)
-                if res["state"] == "LOCKED":
+                if res["state"] in LOCKED_STATES:
                     self.error_spark.append(res["pointing_err_deg"])
                 # synthetic-ephemeris prediction at current time (coarse prior)
                 self.eph_pred_az, self.eph_pred_el = self.sim.eph.predict_az_el(res["t"])
@@ -479,7 +484,8 @@ class App:
         res = self.sim.last_result
         st = res["state"]
         steps = ["PREDICT", "POINT", "SEARCH", "TRACK", "LOCK"]
-        idx = {"SEARCHING": 2, "COASTING": 3, "LOCKED": 4}.get(st, 0)
+        idx = {"SEARCHING": 2, "REACQUIRING": 2, "COASTING": 3,
+               "LOCKED": 4, "DEGRADED_LOCK": 4}.get(st, 0)
         box = pygame.Rect(dest.x + 8, dest.y + 8, dest.w - 16, 30)
         pygame.draw.rect(surf, (8, 12, 20), box)
         pygame.draw.rect(surf, T.C.BORDER, box, 1)
@@ -503,6 +509,8 @@ class App:
             self._stepper_badge(surf, box, "PREDICTIVE COAST", T.C.CYAN)
         elif st == "SEARCHING":
             self._stepper_badge(surf, box, "SEARCHING / LOST", T.C.AMBER)
+        elif st == "REACQUIRING":
+            self._stepper_badge(surf, box, "RE-ACQUIRING · SEARCH", T.C.PURPLE)
 
     def _stepper_badge(self, surf, box, label, col):
         # keep the badge clear of the right sidebar (starts at x=1280) -
@@ -530,6 +538,10 @@ class App:
             label, col = "BEACON LOST · PREDICTIVE COAST", T.C.CYAN
         elif st == "LOCKED":
             label, col = "BEACON ACQUIRED · LOCKED", T.C.GREEN
+        elif st == "DEGRADED_LOCK":
+            label, col = "BEACON HELD · DEGRADED LOCK", T.C.GREEN_DIM
+        elif st == "REACQUIRING":
+            label, col = "BEACON LOST · RE-ACQUIRING", T.C.PURPLE
         else:
             label, col = "SEARCHING", T.C.AMBER
         r = pygame.Rect(dest.x + 8, dest.bottom - 34, dest.w - 8, 26)
@@ -567,7 +579,7 @@ class App:
         # tracked beacon are close together (e.g. right after acquisition).
         assoc = self.sim.tracker.associated
         beacon_anchor = None
-        if assoc is not None and res["state"] == "LOCKED":
+        if assoc is not None and res["state"] in LOCKED_STATES:
             beacon_anchor = (int(assoc.u), int(assoc.v))
 
         def _label_clear(pt, min_dist=34, *others):
@@ -603,21 +615,22 @@ class App:
             col = T.C.CYAN_DIM
             box = pygame.Rect(int(c.u) - 8, int(c.v) - 8, 16, 16)
             pygame.draw.rect(cam, col, box, 1)
-        if assoc is not None and res["state"] == "LOCKED":
+        if assoc is not None and res["state"] in LOCKED_STATES:
             apx, apy = int(assoc.u), int(assoc.v)
             # bright tracking ring + crosshair on the detected beacon
-            pygame.draw.circle(cam, T.C.GREEN, (apx, apy), 14, 2)
-            pygame.draw.circle(cam, T.C.GREEN, (apx, apy), 18, 1)
-            _bracket(cam, (apx, apy), T.C.GREEN, 22, 2)
-            pygame.draw.line(cam, T.C.GREEN, (apx - 24, apy), (apx - 18, apy), 2)
-            pygame.draw.line(cam, T.C.GREEN, (apx + 18, apy), (apx + 24, apy), 2)
-            pygame.draw.line(cam, T.C.GREEN, (apx, apy - 24), (apx, apy - 18), 2)
-            pygame.draw.line(cam, T.C.GREEN, (apx, apy + 18), (apx, apy + 24), 2)
-            T.text(cam, (apx, apy - 28), "SAT-B BEACON", 9, T.C.GREEN, bold=True, anchor="cc")
+            ring_col = T.C.GREEN if res["state"] == "LOCKED" else T.C.GREEN_DIM
+            pygame.draw.circle(cam, ring_col, (apx, apy), 14, 2)
+            pygame.draw.circle(cam, ring_col, (apx, apy), 18, 1)
+            _bracket(cam, (apx, apy), ring_col, 22, 2)
+            pygame.draw.line(cam, ring_col, (apx - 24, apy), (apx - 18, apy), 2)
+            pygame.draw.line(cam, ring_col, (apx + 18, apy), (apx + 24, apy), 2)
+            pygame.draw.line(cam, ring_col, (apx, apy - 24), (apx, apy - 18), 2)
+            pygame.draw.line(cam, ring_col, (apx, apy + 18), (apx, apy + 24), 2)
+            T.text(cam, (apx, apy - 28), "SAT-B BEACON", 9, ring_col, bold=True, anchor="cc")
         elif assoc is not None:
             _bracket(cam, (int(assoc.u), int(assoc.v)), T.C.GREEN, 13, 2)
         # if coasting (estimate exists but no associated blob), mark est LOS
-        elif res.get("est_az") is not None and res["state"] != "LOCKED":
+        elif res.get("est_az") is not None and res["state"] not in LOCKED_STATES:
             p = self._est_pixel(res["est_az"], res["est_el"])
             if p is not None:
                 pygame.draw.circle(cam, T.C.CYAN, p, 7, 1)
@@ -847,12 +860,12 @@ class App:
         T.text(surf, (x + 10, y + 6), "MISSION", 10, T.C.TEXT_DIM)
         res = self.sim.last_result
         st = res["state"]
-        lock = st == "LOCKED"
+        lock = st in LOCKED_STATES
         if self.video_mode:
             rows = [
                 ("Source", "INPUT VIDEO (PTZ bypassed)"),
                 ("Mode", "Benchmark-2 · video feed"),
-                ("Status", "TRACKING" if st == "LOCKED" else
+                ("Status", "TRACKING" if st in LOCKED_STATES else
                            ("ACQUIRING" if st == "SEARCHING" else "COAST")),
             ]
             yy = y + 22
@@ -871,7 +884,7 @@ class App:
             ("Observer", "SAT-A"),
             ("Target", "SAT-B  (optical beacon)"),
             ("Link", pm_label + "  ·  " + (self.atmosphere or "CLEAR")),
-            ("Status", "TRACKING" if st == "LOCKED" else
+            ("Status", "TRACKING" if st in LOCKED_STATES else
                        ("SEARCH" if st == "SEARCHING" else "COAST")),
         ]
         yy = y + 22

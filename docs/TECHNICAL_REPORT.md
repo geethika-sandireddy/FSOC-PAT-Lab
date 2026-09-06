@@ -35,11 +35,11 @@ Each frame (~16–33 ms at 30–60 fps), the following steps execute sequentiall
 
 2. **Disturbance injection** (`core/disturbances.py`): Atmospheric turbulence (Kolmogorov-approximation via random phase screens), platform vibrations, sensor noise, and random platform jerks corrupt the image.
 
-3. **Detection** (`core/detection.py`): OpenCV blob detection identifies bright point sources; a logistic-regression ML classifier scores each candidate on appearance features (SNR, area, circularity, hue distance).
+3. **Detection** (`core/detection.py`): OpenCV blob detection identifies bright point sources; a logistic-regression ML classifier scores each candidate on the 4-feature appearance vector (`area_norm`, `circularity`, `snr`, `hue_dist_n`).
 
 4. **Classification** (`ai/classifier.py`): The ML model outputs a classification score (0–1) for each candidate, distinguishing beacon-like objects from distractors.
 
-5. **Tracking** (`core/tracking.py`): A finite-state machine (SEARCHING → TENTATIVE → LOCKED → COASTING) manages acquisition. While LOCKED, modulation correlation and suspect-floor monitoring validate the tracked object's identity.
+5. **Tracking** (`core/tracking.py`): A finite-state machine (SEARCHING → TENTATIVE → LOCKED, with DEGRADED_LOCK / COASTING / REACQUIRING as the locked-hold and loss-recovery states) manages acquisition. While locked, modulation correlation and suspect-floor monitoring validate the tracked object's identity.
 
 6. **Estimation** (`core/tracking.py`): The boresight estimate is computed as an ephemeris prior plus a leaky-absorbed bias term, providing smooth, low-latency commands.
 
@@ -150,7 +150,7 @@ The classification threshold (`ML_LOCK_THRESHOLD = 0.55`) is set low enough to f
 
 ## 6. Tracking State Machine
 
-The tracking system (`core/tracking.py`) implements a four-state finite-state machine with well-defined transitions:
+The tracking system (`core/tracking.py`) implements a finite-state machine with well-defined transitions:
 
 ### 6.1 SEARCHING
 
@@ -170,7 +170,15 @@ Once both spatial consistency (3 frames) AND modulation correlation ≥ 0.62 are
 
 ### 6.4 COASTING
 
-If no candidate is detected (e.g., during obstacle occlusion), the tracker enters COASTING mode, extrapolating the boresight from the orbital prior while holding the bias constant. COASTING is time-limited (0.45 s); if no re-detection occurs, the tracker reverts to SEARCHING.
+If no candidate is detected (e.g., during obstacle occlusion), the tracker enters COASTING mode, extrapolating the boresight from the orbital prior while holding the bias constant. Coasting is time-limited (`COAST_TIMEOUT_S`); while unobserved the position uncertainty grows quadratically. If the beacon is re-detected the lock resumes; if the uncertainty crosses the credibility line (`REACQUIRE_UNCERTAINTY_PX = 18 px`) the tracker escalates to REACQUIRING; if the coast timeout expires first, the tracker reverts to SEARCHING.
+
+### 6.5 DEGRADED_LOCK
+
+Phase 2 banding: while a track is held, composite confidence ≥ 0.70 keeps the state LOCKED, whereas confidence in the 0.55–0.70 band holds the same target as **DEGRADED_LOCK** (weak signal — the estimator already smooths it; control keeps full pointing authority). Below 0.55 the suspect-floor / coast machinery owns the transition out of the lock.
+
+### 6.6 REACQUIRING
+
+When coast uncertainty exceeds the 18 px credibility line the tracker stops blindly following a dead model. It enters **REACQUIRING**: the gimbal points at the last estimate and an expanding search sweeps around it until the beacon is re-detected and the lock is re-established (or the coast timeout reverts to SEARCHING).
 
 ---
 
@@ -550,12 +558,11 @@ Training data is generated synthetically:
 
 ### 11.3 Feature Engineering
 
-The five features capture complementary information:
+The four features capture complementary information:
 - `area_norm`: Beacon has a characteristic PSF area (~22–24 pixels).
-- `snr`: Beacon has high SNR (>3) due to concentrated intensity.
 - `circularity`: Beacon PSF is nearly circular (>0.85).
+- `snr`: Beacon has high SNR (>3) due to concentrated intensity.
 - `hue_dist_n`: Beacon hue (warm white) differs from cool-white distractors.
-- `peak_normalized`: Intensity normalized to [0,1] range.
 
 ---
 
