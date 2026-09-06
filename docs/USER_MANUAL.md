@@ -51,7 +51,7 @@ The mission-console GUI opens in an 1600×900 window with a dark aerospace theme
 │                                                                     │
 │  ┌─────────────────────────────────┐  ┌───────────────────────┐    │
 │  │                                 │  │ Chips: CAM INERTIAL   │    │
-│  │     Camera View (800×450)       │  │ TRACKING   GOOD       │    │
+│  │     Camera View (640×480)       │  │ TRACKING   GOOD       │    │
 │  │     ┌─────┐  ┌─────┐           │  │                        │    │
 │  │     │guide│  │brack│           │  │  ┌──────────────────┐  │    │
 │  │     │box  │  │ets  │           │  │  │                  │  │    │
@@ -108,7 +108,7 @@ Color semantics are consistent: **green = detected/locked target**, **yellow = p
 
 ### Bottom Strip
 
-- **ANGULAR POINTING ERROR** — a single live graph (in degrees) with a shaded fine-acquisition band (< 0.10°), so a disturbance and the controller's recovery are clearly visible. Right side shows a **CAMERA / ACTUATOR** readout (Azimuth, Elevation, FOV, MODE) and an **A → beam → B** alignment mini-diagram with the live mdeg error.
+- **ANGULAR POINTING ERROR** — a single live graph (in degrees) with a shaded fine-acquisition band (< 0.0625° ≈ the PS 10 px spec at 160 px/°), so a disturbance and the controller's recovery are clearly visible. Right side shows a **CAMERA / ACTUATOR** readout (Azimuth, Elevation, FOV, MODE) and an **A → beam → B** alignment mini-diagram with the live mdeg error.
 
 ### Right Column (stacked cards)
 
@@ -275,7 +275,7 @@ Some parameters can be adjusted live using the sliders on the right panel. Chang
 
 ### Beacon Not Detected
 
-- Check that the beacon is within the camera FOV (800×450 px, HFOV 2.4°)
+- Check that the beacon is within the camera FOV (640×480 px viewport, 4°×3° FOV, Pan/Tilt ≤ 5°/s)
 - At higher difficulty levels, the beacon may be occluded by obstacles — wait for re-acquisition
 - If stuck in SEARCHING, press `R` to reset the tracker
 

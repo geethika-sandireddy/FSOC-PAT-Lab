@@ -15,7 +15,6 @@ import math
 import numpy as np
 
 import config
-from core import geometry
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +58,17 @@ def _draw_sprite(frame, cx, cy, kernel, intensity):
 
 
 class VirtualSensor:
-    """Renders the 3D world from the gimbal's realized attitude."""
+    """Renders the 3D world from the gimbal's realized attitude.
+
+    PS 26169 virtual-scene semantics: the world is a config.SCREEN_SIZE_W x
+    SCREEN_SIZE_H "screen" (2000x2000) canvas; the pan-tilt camera looks at
+    it through a CAM_VIEW_W x CAM_VIEW_H viewport crop and starts at the
+    canvas centre.  Each sky object's az/el maps to a canvas pixel via
+    PIXELS_PER_DEG; the viewport is the crop centred on the gimbal's
+    realized (encoder) attitude - equivalent to the narrow-FOV pinhole at
+    these angles but with the canvas geometry explicit and the camera
+    physically moving across a 2000x2000 screen.
+    """
 
     def __init__(self):
         self.w = config.CAM_VIEW_W
@@ -73,6 +82,19 @@ class VirtualSensor:
         bg[..., 2] = (14 + 10 * yy)
         self.background = bg
 
+    @staticmethod
+    def _canvas_xy(az_deg, el_deg):
+        """Map an az/el LOS onto the 2000x2000 virtual-screen canvas."""
+        return (config.SCREEN_CANVAS_CX + az_deg * config.PIXELS_PER_DEG,
+                config.SCREEN_CANVAS_CY - el_deg * config.PIXELS_PER_DEG)
+
+    @staticmethod
+    def _viewport_px(az_deg, el_deg, cam_canvas):
+        """Viewport pixel of a canvas point as seen through the crop."""
+        ox, oy = VirtualSensor._canvas_xy(az_deg, el_deg)
+        return (config.PRINCIPAL_U + (ox - cam_canvas[0]),
+                config.PRINCIPAL_V + (oy - cam_canvas[1]))
+
     def render(self, scene, gimbal, focal_px, disturbance=None, dt=1.0 / 60.0):
         """Return a BGR frame (uint8) as seen from the gimbal through the
         disturbance engine (turbulence + sensor noise already applied).
@@ -80,11 +102,11 @@ class VirtualSensor:
         scene : Scene3D  |  gimbal : Gimbal  |  disturbance : DisturbanceEngine
         """
         frame = np.copy(self.background)
-        cam_pos = (0.0, 0.0, 0.0)
         right, up, fwd = gimbal.basis()
         basis = (right, up, fwd)
         focal = focal_px
         cu, cv = config.PRINCIPAL_U, config.PRINCIPAL_V
+        cam_canvas = self._canvas_xy(gimbal.pan, gimbal.tilt)
 
         # --- starfield (dim background features, project per frame) ---
         # vectorized projection of all star directions into the sensor
@@ -104,11 +126,7 @@ class VirtualSensor:
 
         # --- distractors (decoy sprites) ---
         for d in scene.distractors:
-            pos = geometry.azel_to_vec(d.az, d.el, 8.0e5)
-            pix = geometry.project_point_into_camera(pos, cam_pos, basis, focal, cu, cv)
-            if pix is None:
-                continue
-            u, v = pix
+            u, v = self._viewport_px(d.az, d.el, cam_canvas)
             if -60 <= u < self.w + 60 and -60 <= v < self.h + 60:
                 amp = d.intensity()
                 _draw_sprite(frame, u, v, _DISTRACTOR_KERNEL, amp)
@@ -126,11 +144,8 @@ class VirtualSensor:
         # optional) render identically so the detector sees every sky object.
         occ = 0.0
         for b in getattr(scene, "beacons", [scene.beacon]):
-            pix = geometry.project_point_into_camera(b.pos, cam_pos, basis, focal, cu, cv)
-            b.visible = pix is not None
-            if pix is None:
-                continue
-            u, v = pix
+            u, v = self._viewport_px(b.az_deg, b.el_deg, cam_canvas)
+            b.visible = (0 <= u < self.w and 0 <= v < self.h)
             amp = b.intensity(b.time)
             if disturbance is not None and getattr(disturbance, "beacon_fade", 0) > 0:
                 fade = 1.0 - (disturbance.beacon_fade / 100.0) * config.BEACON_FADE_MAX
@@ -140,13 +155,11 @@ class VirtualSensor:
                 for o in scene.obstacles:
                     cover = o.crossing(scene.time)
                     if cover > 0:
-                        opos = geometry.azel_to_vec(o.az, o.el, 8.0e5)
-                        opix = geometry.project_point_into_camera(opos, cam_pos, basis, focal, cu, cv)
-                        if opix is not None:
-                            r_ob = o.radius_deg * config.PIXELS_PER_DEG
-                            dist_beacon = math.hypot(opix[0] - pix[0], opix[1] - pix[1])
-                            if dist_beacon < r_ob * 2.2:
-                                occ = max(occ, cover)
+                        ou, ov = self._viewport_px(o.az, o.el, cam_canvas)
+                        r_ob = o.radius_deg * config.PIXELS_PER_DEG
+                        dist_beacon = math.hypot(ou - u, ov - v)
+                        if dist_beacon < r_ob * 2.2:
+                            occ = max(occ, cover)
                 if occ > 0.0:
                     amp *= max(0.0, 1.0 - occ)
                     if occ > 0.55:
@@ -172,11 +185,7 @@ class VirtualSensor:
 
         # --- obstacles (dark occluders over the scene, correct depth) ---
         for o in scene.obstacles:
-            opos = geometry.azel_to_vec(o.az, o.el, 8.0e5)
-            opix = geometry.project_point_into_camera(opos, cam_pos, basis, focal, cu, cv)
-            if opix is None:
-                continue
-            u, v = opix
+            u, v = self._viewport_px(o.az, o.el, cam_canvas)
             r_ob = o.radius_deg * config.PIXELS_PER_DEG
             _draw_dark_disc(frame, u, v, r_ob)
 

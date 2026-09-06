@@ -230,7 +230,7 @@ class DetectionEngine:
                 continue
             cx0 = float((win * xx).sum() / s_all)
             cy0 = float((win * yy).sum() / s_all)
-            core_r = max(4.0, config.BEACON_ANGULAR_RADIUS_DEG * config.PIXELS_PER_DEG)
+            core_r = max(4.0, float(config.TARGET_SIZE_PX))
             d2 = ((xx - cx0) ** 2 + (yy - cy0) ** 2)
             sel = (d2 <= core_r * core_r) & (seg > 0)
             cws = win[sel].sum()

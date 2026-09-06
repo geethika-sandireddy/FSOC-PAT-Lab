@@ -22,21 +22,22 @@ WINDOW_DEFAULT_H = 900
 FPS = 60
 
 # ---------------------------------------------------------------------------
-# PS 26169 - Virtual Environment Parameters (user-configurable)
+# PS 26169 - Virtual Environment Parameters
 #
-# Resolution / FOV are "Optional: User-defined" in the PS (default 640x480
-# @ 4x3 deg).  This implementation ships a user-defined camera: 800x450
-# sensor px over a 2.4 deg HFOV (PIXELS_PER_DEG = 333.3, so the PS target
-# of 10 px -> ~0.03 deg).  Both dials below are the SINGLE source of truth;
-# CAM_VIEW_* / HFOV_* / FOCAL_PX below derive from them, so switching to the
-# PS default (640x480 @ 4x3) is a two-line change and everything rescales.
+# The PS's virtual "screen" is a 2000x2000 canvas the virtual camera pans
+# across (initial camera position = centre of the screen).  The camera is
+# 640x480 @ 4x3 deg (PS defaults), so PIXELS_PER_DEG = 160 -> the 10 px
+# tracking-error spec ~ 0.0625 deg.  Both dials below are the SINGLE source
+# of truth; CAM_VIEW_* / HFOV_* / FOCAL_PX derive from them.
 # ---------------------------------------------------------------------------
 SCREEN_SIZE_W = 2000                   # PS: min 2000x2000, user-defined
 SCREEN_SIZE_H = 2000
-CAMERA_RESOLUTION_W = 800              # user-defined (PS default: 640x480)
-CAMERA_RESOLUTION_H = 450              # user-defined (PS default: 480)
-CAMERA_FOV_H_DEG = 2.4                 # user-defined (PS default: 4 deg)
-CAMERA_FOV_V_DEG = CAMERA_RESOLUTION_H / CAMERA_RESOLUTION_W * CAMERA_FOV_H_DEG
+SCREEN_CANVAS_CX = SCREEN_SIZE_W / 2.0 # virtual-screen centre == initial
+SCREEN_CANVAS_CY = SCREEN_SIZE_H / 2.0 # camera position ("centre of the screen")
+CAMERA_RESOLUTION_W = 640              # PS default 640x480
+CAMERA_RESOLUTION_H = 480
+CAMERA_FOV_H_DEG = 4.0                 # PS default: 4 deg x 3 deg
+CAMERA_FOV_V_DEG = 3.0
 CAMERA_UPDATE_HZ = 60                  # PS min: 30 Hz
 CAMERA_TYPE = "MONOCHROME"             # PS: Monochrome (optional: Colour)
 
@@ -84,8 +85,8 @@ EPHEMERIS_MAX_BIAS_DEG = 2.6
 # ---------------------------------------------------------------------------
 # Pan-tilt gimbal (actuator realism)
 # ---------------------------------------------------------------------------
-GIMBAL_MAX_SLEW_DEG_S = 10.0          # max allowable slew velocity (deg/s)
-GIMBAL_MAX_TILT_DEG_S = 8.0
+GIMBAL_MAX_SLEW_DEG_S = 5.0          # PS default: max 5-10 deg/s, default 5
+GIMBAL_MAX_TILT_DEG_S = 5.0          # PS default: max 5-10 deg/s, default 5
 GIMBAL_ACCEL_DEG_S2 = 14.0            # acceleration limit (inertia)
 GIMBAL_SERVO_KP = 25.0                # position gain  [1/s^2]
 GIMBAL_SERVO_KD = 10.0                # velocity damping [1/s]  (= 2*sqrt(kp))
@@ -196,7 +197,7 @@ OBSTACLE_SPEED_FRACTION = 0.5        # obstacle crossing speed relative to beaco
 # Performance metric defaults
 # ---------------------------------------------------------------------------
 TARGET_MEAN_ERROR_DEG = 0.050        # what the report calls "excellent"
-FINE_ACQUISITION_REGION_DEG = 0.100  # coarse stage must park the beacon inside this
+FINE_ACQUISITION_REGION_DEG = 0.0625 # PS 10 px tracking spec at 160 px/deg
 
 # ---------------------------------------------------------------------------
 # Difficulty presets (switched live with keys 1-5)
