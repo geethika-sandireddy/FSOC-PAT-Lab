@@ -10,13 +10,13 @@ class C:
     PANEL    = (8, 13, 26)
     PANEL_2  = (14, 22, 42)
     PANEL_3  = (22, 34, 60)
-    BORDER   = (28, 44, 72)
-    BORDER_B = (48, 76, 118)
-    BORDER_DIM = (18, 26, 44)
+    BORDER   = (40, 62, 92)
+    BORDER_B = (68, 104, 148)
+    BORDER_DIM = (26, 38, 60)
 
-    TEXT       = (212, 228, 248)
-    TEXT_DIM   = (146, 181, 216)
-    TEXT_FAINT = (104, 132, 166)
+    TEXT       = (228, 238, 250)
+    TEXT_DIM   = (164, 194, 224)
+    TEXT_FAINT = (122, 151, 184)
 
     CYAN      = (0, 210, 255)
     CYAN_DIM  = (0, 96, 140)
@@ -60,9 +60,9 @@ class C:
 
 # ---------------------------------------------------------------- fonts
 def _font(size, bold=False):
-    size = max(9, int(round(size * 1.12)))
+    size = max(10, int(round(size * 1.22)))
     return pygame.font.SysFont(
-        "consolas,menlo,dejavusansmono,monospace", size, bold=bold)
+        "segoeui,arial,dejavusans, sans", size, bold=bold)
 
 
 _FONTS, _FONTS_B = {}, {}
@@ -103,7 +103,7 @@ def fit_text(surf, rect, s, size=13, color=C.TEXT, bold=False,
     """Render readable text that stays inside a compact UI rectangle."""
     max_width = max(1, rect.w - padding * 2)
     draw_size = size
-    while draw_size > 9 and font(draw_size, bold).size(s)[0] > max_width:
+    while draw_size > 8 and font(draw_size, bold).size(s)[0] > max_width:
         draw_size -= 1
     text(surf, (rect.centerx, rect.centery), s, draw_size, color,
          bold=bold, anchor=anchor)
@@ -138,10 +138,10 @@ def angled_panel(surf, rect, fill=C.PANEL, border=C.BORDER, cut=12, accent=None)
 # ---------------------------------------------------------------- section header
 def section_hdr(surf, x, y, label, color=C.CYAN, panel_w=None):
     """Accent tick + section label + optional full-width underline."""
-    pygame.draw.rect(surf, color, (x, y, 3, 14), border_radius=1)
-    text(surf, (x + 8, y), label, 9, C.TEXT_DIM)
+    pygame.draw.rect(surf, color, (x, y + 1, 4, 15), border_radius=1)
+    text(surf, (x + 11, y), label, 11, C.TEXT_DIM, bold=True)
     if panel_w:
-        pygame.draw.line(surf, C.BORDER, (x, y + 16), (x + panel_w, y + 16), 1)
+        pygame.draw.line(surf, C.BORDER, (x, y + 19), (x + panel_w, y + 19), 1)
 
 
 # ---------------------------------------------------------------- glow + pulse

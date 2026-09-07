@@ -470,10 +470,10 @@ class App:
 
     # ---------------------------------------------------------------- background grid
     def _draw_bg_grid(self, surf):
-        col = (10, 18, 32)
-        for x in range(0, APP_W, 80):
+        col = (8, 15, 27)
+        for x in range(0, APP_W, 120):
             pygame.draw.line(surf, col, (x, HDR_H), (x, BTM_Y), 1)
-        for y in range(HDR_H, BTM_Y, 60):
+        for y in range(HDR_H, BTM_Y, 80):
             pygame.draw.line(surf, col, (0, y), (CAM_X1, y), 1)
 
     # ---------------------------------------------------------------- header
@@ -489,8 +489,8 @@ class App:
 
         # ── System ID block ──────────────────────────────────────────
         T.text(surf, (14, 7),  "FSOC-PAT",              16, T.C.CYAN,       bold=True)
-        T.text(surf, (14, 27), "OPTICAL TRACK CONSOLE", 7,  T.C.TEXT_FAINT)
-        T.text(surf, (14, 38), "SIH 2026 · PS 26169",   7,  T.C.TEXT_FAINT)
+        T.text(surf, (14, 27), "OPTICAL TRACK CONSOLE", 9,  T.C.TEXT_DIM)
+        T.text(surf, (14, 41), "SIH 2026 · PS 26169",   8,  T.C.TEXT_FAINT)
         pygame.draw.line(surf, T.C.BORDER, (178, 4), (178, HDR_H - 5), 1)
 
         # ── State block (state-reactive) ─────────────────────────────
@@ -501,12 +501,14 @@ class App:
         pygame.draw.rect(surf, st_fill, (183, 0, 152, HDR_H))
         pygame.draw.rect(surf, st_col,  (183, 0, 3,   HDR_H))   # left accent
         pygame.draw.line(surf, T.C.BORDER, (335, 4), (335, HDR_H - 5), 1)
-        T.text(surf, (260, 8),  "TRACK STATE", 7, st_col, anchor="cc")
-        T.text(surf, (260, 22), st,            15, st_col, bold=True, anchor="cc")
+        T.text(surf, (260, 7),  "TRACK STATE", 9, st_col, bold=True, anchor="cc")
+        T.fit_text(surf, pygame.Rect(194, 20, 132, 27), st, 17, st_col,
+                 bold=True, padding=4)
         # status dot
         dot_col = T.C.AMBER if self.paused else st_col
         pygame.draw.circle(surf, dot_col, (188, 52), 4)
-        T.text(surf, (196, 48), "PAUSED" if self.paused else "LIVE", 7, dot_col)
+        T.text(surf, (196, 47), "PAUSED" if self.paused else "LIVE", 9, dot_col,
+               bold=True)
 
         # ── Live metrics ─────────────────────────────────────────────
         elapsed = res.get("t", 0.0)
@@ -518,23 +520,23 @@ class App:
 
         def _hdr_metric(x, label, value, vcol):
             pygame.draw.line(surf, T.C.BORDER, (x, 6), (x, HDR_H - 6), 1)
-            T.text(surf, (x + 8, 7),  label, 7,  T.C.TEXT_FAINT)
-            T.text(surf, (x + 8, 18), value, 13, vcol, bold=True)
+            T.text(surf, (x + 8, 6),  label, 8,  T.C.TEXT_DIM, bold=True)
+            T.text(surf, (x + 8, 19), value, 14, vcol, bold=True)
 
         _hdr_metric(340, "ELAPSED",    f"{elapsed:7.1f} s",     T.C.TEXT)
         _hdr_metric(420, "POINT ERR",  f"{err*1000:6.1f} m°",   ec)
         _hdr_metric(510, "CONFIDENCE", f"{conf:.2f}",            T.C.CYAN)
 
         fps_col = T.C.GREEN if fps >= 25 else T.C.AMBER
-        T.text(surf, (APP_W - 12, 6),  f"{fps:.0f} FPS",          9,  fps_col,       bold=True, anchor="tr")
-        T.text(surf, (APP_W - 12, 20), self._platform_label(),     7,  T.C.TEXT_FAINT, anchor="tr")
-        T.text(surf, (APP_W - 12, 32), self.atmosphere or "CLEAR", 7,  T.C.TEXT_FAINT, anchor="tr")
+        T.text(surf, (APP_W - 12, 5),  f"{fps:.0f} FPS",          10, fps_col,       bold=True, anchor="tr")
+        T.text(surf, (APP_W - 12, 20), self._platform_label(),     9,  T.C.TEXT_DIM, anchor="tr")
+        T.text(surf, (APP_W - 12, 35), self.atmosphere or "CLEAR", 9,  T.C.TEXT_FAINT, anchor="tr")
 
         # ── Chip groups ───────────────────────────────────────────────
         # Labels above chip rows
-        T.text(surf, (self.chips["EASY"].rect.x, 4),       "SCENARIO",   7, T.C.TEXT_FAINT)
-        T.text(surf, (list(self.platform_chips.values())[0].rect.x, 4), "PLATFORM",   7, T.C.TEXT_FAINT)
-        T.text(surf, (list(self.atmos_chips.values())[0].rect.x, 4),    "ATMOSPHERE", 7, T.C.TEXT_FAINT)
+        T.text(surf, (self.chips["EASY"].rect.x, 3),       "SCENARIO",   8, T.C.TEXT_FAINT, bold=True)
+        T.text(surf, (list(self.platform_chips.values())[0].rect.x, 3), "PLATFORM",   8, T.C.TEXT_FAINT, bold=True)
+        T.text(surf, (list(self.atmos_chips.values())[0].rect.x, 3),    "ATMOSPHERE", 8, T.C.TEXT_FAINT, bold=True)
 
         for name, c in self.chips.items():
             c.draw(surf, selected=(name == self.preset))
@@ -591,12 +593,12 @@ class App:
         dest   = self._cam_dest()
         surf.blit(scaled, dest.topleft)
 
-        # Scanline overlay (CRT monitor texture)
+        # A restrained overlay keeps the viewport readable at projector distance.
         if (self._scanline_surf is None or
                 self._scanline_surf.get_size() != (dest.w, dest.h)):
             self._scanline_surf = pygame.Surface((dest.w, dest.h), pygame.SRCALPHA)
-            for yl in range(0, dest.h, 3):
-                pygame.draw.line(self._scanline_surf, (0, 0, 0, 28),
+            for yl in range(0, dest.h, 8):
+                pygame.draw.line(self._scanline_surf, (0, 0, 0, 8),
                                  (0, yl), (dest.w, yl), 1)
         surf.blit(self._scanline_surf, dest.topleft)
 
@@ -671,7 +673,8 @@ class App:
         surf.blit(ovl, r.topleft)
         pygame.draw.rect(surf, col, (r.x, r.y, 4, r.h))
         pygame.draw.line(surf, col, (r.x, r.y), (r.right, r.y), 1)
-        T.text(surf, (r.x + 12, r.centery), label, 10, col, bold=True, anchor="lc")
+        T.fit_text(surf, pygame.Rect(r.x + 10, r.y + 3, r.w - 20, r.h - 6),
+               label, 11, col, bold=True, padding=2)
 
         acq_t = self.perf.live_stats().get("acquisition_time_s")
         if acq_t:
@@ -982,8 +985,8 @@ class App:
 
     # ---------------------------------------------------------------- error graph
     def _draw_error_graph(self, surf, box):
-        T.text(surf, (box.x, box.y), "ANGULAR POINTING ERROR", 10, T.C.TEXT_DIM)
-        T.text(surf, (box.x + 194, box.y + 1), "deg", 7, T.C.TEXT_FAINT)
+        T.text(surf, (box.x, box.y), "ANGULAR POINTING ERROR", 11, T.C.TEXT_DIM, bold=True)
+        T.text(surf, (box.x + 194, box.y + 1), "deg", 9, T.C.TEXT_FAINT)
         T.text(surf, (box.right, box.y), "target < 0.0625°",
                7, T.C.TEXT_FAINT, anchor="tr")
 
@@ -1085,7 +1088,7 @@ class App:
     # ---------------------------------------------------------------- camera panel
     def _draw_camera_panel(self, surf, box):
         res = self.sim.last_result
-        T.text(surf, (box.x, box.y), "GIMBAL / ACTUATOR", 9, T.C.TEXT_FAINT)
+        T.text(surf, (box.x, box.y), "GIMBAL / ACTUATOR", 11, T.C.TEXT_DIM, bold=True)
         pygame.draw.line(surf, T.C.BORDER, (box.x, box.y + 13), (box.x + 220, box.y + 13), 1)
 
         y, x = box.y + 20, box.x + 10
@@ -1094,9 +1097,9 @@ class App:
             ("ELEVATION", f"{self.sim.gimbal.tilt:+.2f}°", T.C.CYAN),
         ]
         for lab, val, vcol in kpis:
-            T.text(surf, (x, y),      lab, 8,  T.C.TEXT_FAINT)
-            T.text(surf, (x, y + 11), val, 14, vcol, bold=True)
-            x += 180
+            T.text(surf, (x, y),      lab, 9,  T.C.TEXT_DIM, bold=True)
+            T.text(surf, (x, y + 11), val, 15, vcol, bold=True)
+            x += 140
 
         x = box.x + 10
         kpis2 = [
@@ -1104,19 +1107,19 @@ class App:
             ("MODE",   "COARSE PAT",                T.C.TEXT_DIM),
         ]
         for lab, val, vcol in kpis2:
-            T.text(surf, (x, y + 30),     lab, 8,  T.C.TEXT_FAINT)
-            T.text(surf, (x, y + 41),     val, 11, vcol, bold=False)
+            T.text(surf, (x, y + 30),     lab, 9,  T.C.TEXT_DIM, bold=True)
+            T.text(surf, (x, y + 41),     val, 12, vcol, bold=False)
             x += 180
 
         sp  = res.get("gimbal_sat_pan", 0.0)
         st_ = res.get("gimbal_sat_tilt", 0.0)
         sat = max(sp, st_)
         s_col = T.C.GREEN if sat <= 0.05 else (T.C.AMBER if sat < 0.5 else T.C.RED)
-        T.text(surf, (box.x + 10, y + 64), "GIMBAL SATURATION", 8, T.C.TEXT_FAINT)
+        T.text(surf, (box.x + 10, y + 64), "GIMBAL SATURATION", 9, T.C.TEXT_DIM, bold=True)
         T.text(surf, (box.x + 150, y + 64),
                f"P {sp*100:3.0f}%  T {st_*100:3.0f}%", 11, s_col, bold=(sat > 0.05))
 
-        self._draw_beam_strip(surf, pygame.Rect(box.right - 190, box.y + 10, 180, box.h - 14))
+        self._draw_beam_strip(surf, pygame.Rect(box.right - 140, box.y + 10, 130, box.h - 14))
 
     def _draw_beam_strip(self, surf, box):
         cx = box.centerx
@@ -1129,14 +1132,15 @@ class App:
                             [(cx-7, ay), (box.x+4, by), (box.right-4, by)])
         pygame.draw.line(surf, col, (cx, ay), (cx, by), 2)
         pygame.draw.rect(surf, T.C.CYAN, (cx-11, ay-9, 22, 11), 1)
-        T.text(surf, (cx, ay + 12), "SAT-A", 8, T.C.CYAN, bold=True, anchor="cc")
+        T.text(surf, (cx, ay + 12), "SAT-A", 9, T.C.CYAN, bold=True, anchor="cc")
         pygame.draw.circle(surf, T.C.RED, (cx, by), 7)
         pygame.draw.circle(surf, T.C.RED, (cx, by), 12, 1)
-        T.text(surf, (cx, by - 18), "SAT-B", 8, T.C.RED, bold=True, anchor="cc")
+        T.text(surf, (cx, by - 18), "SAT-B", 9, T.C.RED, bold=True, anchor="cc")
         mid_y = (ay + by) // 2
-        T.text(surf, (box.right - 4, mid_y - 9), "ERR", 7, T.C.TEXT_FAINT, anchor="tr")
-        T.text(surf, (box.right - 4, mid_y + 1), f"{err*1000:.1f} mdeg",
-               11, col, bold=True, anchor="tr")
+        T.text(surf, (box.right - 4, mid_y - 10), "POINT ERR", 8, T.C.TEXT_DIM,
+               bold=True, anchor="tr")
+        T.text(surf, (box.right - 4, mid_y + 2), f"{err*1000:.1f} mdeg",
+               12, col, bold=True, anchor="tr")
 
     # ================================================================ RIGHT PANEL
     def _draw_panel(self, surf):
@@ -1170,7 +1174,8 @@ class App:
         pygame.draw.rect(surf, col, (x + 1, y + 4, 4, h - 8), border_radius=2)
 
         # State name in large text
-        T.text(surf, (x + w // 2, y + 14), "TRACK STATE", 8, col, anchor="cc")
+        T.text(surf, (x + w // 2, y + 13), "TRACK STATE", 10, col,
+               bold=True, anchor="cc")
         # Large state text — scale down if long
         fs = 28 if len(st) <= 7 else (22 if len(st) <= 12 else 16)
         T.text(surf, (x + w // 2, y + 32), st, fs, col, bold=True, anchor="cc")
@@ -1181,17 +1186,15 @@ class App:
         arc_cy = y + 60
         T.arc_gauge(surf, (arc_cx, arc_cy), 28, conf, col, T.C.PANEL_3, width=5)
         T.text(surf, (arc_cx, arc_cy), f"{conf:.2f}", 11, col, bold=True, anchor="cc")
-        T.text(surf, (arc_cx, arc_cy + 34), "CONF", 7, T.C.TEXT_FAINT, anchor="cc")
-
         # Status / timing row
         stat_y = y + h - 20
         pygame.draw.line(surf, col, (x + 8, stat_y - 4), (x + w - 8, stat_y - 4), 1)
         run_col = T.C.AMBER if self.paused else col
         pygame.draw.circle(surf, run_col, (x + 14, stat_y + 4), 3)
         T.text(surf, (x + 20, stat_y),
-               "PAUSED" if self.paused else "RUNNING", 8, run_col)
+               "PAUSED" if self.paused else "RUNNING", 10, run_col, bold=True)
         T.text(surf, (x + w - 8, stat_y),
-               f"t = {res.get('t', 0.0):.1f}s", 8, T.C.TEXT_DIM, anchor="tr")
+             f"t = {res.get('t', 0.0):.1f}s", 10, T.C.TEXT_DIM, anchor="tr")
 
     # ── Mission ────────────────────────────────────────────────────────────────
     def _panel_mission(self, surf):
@@ -1216,10 +1219,12 @@ class App:
         yy  = y + 26
         col = T.C.GREEN if lock else T.C.STATE.get(st, T.C.CYAN)
         for lab, val in rows:
-            T.text(surf, (x + 12, yy),     lab, 9, T.C.TEXT_FAINT)
+            T.text(surf, (x + 12, yy), lab, 10, T.C.TEXT_DIM, bold=True)
             is_status = (lab == "Status")
-            T.text(surf, (x + 100, yy), val, 10 if is_status else 9,
-                   col if is_status else T.C.TEXT, bold=is_status)
+            value_size = 11 if is_status else 10
+            value_color = col if is_status else T.C.TEXT
+            T.text(surf, (x + 100, yy), val, value_size,
+                   value_color, bold=is_status)
             yy += 16
 
     # ── Performance ────────────────────────────────────────────────────────────
@@ -1239,7 +1244,7 @@ class App:
         err_r = pygame.Rect(x + 8, y + 26, w - 16, 44)
         pygame.draw.rect(surf, tuple(c // 8 for c in ec), err_r, border_radius=2)
         pygame.draw.rect(surf, tuple(c // 3 for c in ec), err_r, 1, border_radius=2)
-        T.text(surf, (x + 16, y + 28), "POINTING ERROR", 7, ec)
+        T.text(surf, (x + 16, y + 28), "POINTING ERROR", 9, ec, bold=True)
         T.text(surf, (x + 16, y + 38), f"{err*1000:6.1f}", 26, ec, bold=True)
         T.text(surf, (x + 16 + 120, y + 52), "m°", 9, ec)
 
@@ -1255,7 +1260,7 @@ class App:
         xx = x + 12
         col_w = (w - 24) // 3
         for lab, val, vc in cols_data:
-            T.text(surf, (xx, y + 78),  lab, 8,  T.C.TEXT_FAINT)
+            T.text(surf, (xx, y + 78),  lab, 9,  T.C.TEXT_DIM, bold=True)
             T.text(surf, (xx, y + 90),  val, 14, vc, bold=True)
             xx += col_w
 
