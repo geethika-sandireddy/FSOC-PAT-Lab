@@ -15,8 +15,8 @@ class C:
     BORDER_DIM = (18, 26, 44)
 
     TEXT       = (212, 228, 248)
-    TEXT_DIM   = (108, 144, 186)
-    TEXT_FAINT = (50, 70, 100)
+    TEXT_DIM   = (146, 181, 216)
+    TEXT_FAINT = (104, 132, 166)
 
     CYAN      = (0, 210, 255)
     CYAN_DIM  = (0, 96, 140)
@@ -60,6 +60,7 @@ class C:
 
 # ---------------------------------------------------------------- fonts
 def _font(size, bold=False):
+    size = max(9, int(round(size * 1.12)))
     return pygame.font.SysFont(
         "consolas,menlo,dejavusansmono,monospace", size, bold=bold)
 
@@ -95,6 +96,17 @@ def text(surf, pos, s, size=13, color=C.TEXT, bold=False, anchor="tl"):
     # anchor "tl", "tr", "tc" → y unchanged (top-aligned)
     surf.blit(img, (x, y))
     return r.w, r.h
+
+
+def fit_text(surf, rect, s, size=13, color=C.TEXT, bold=False,
+             padding=8, anchor="cc"):
+    """Render readable text that stays inside a compact UI rectangle."""
+    max_width = max(1, rect.w - padding * 2)
+    draw_size = size
+    while draw_size > 9 and font(draw_size, bold).size(s)[0] > max_width:
+        draw_size -= 1
+    text(surf, (rect.centerx, rect.centery), s, draw_size, color,
+         bold=bold, anchor=anchor)
 
 
 # ---------------------------------------------------------------- panels

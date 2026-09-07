@@ -59,15 +59,18 @@ class App:
     CAM_X0, CAM_X1 = CAM_X0, CAM_X1
     CAM_Y0, CAM_Y1 = CAM_Y0, CAM_Y1
 
-    def __init__(self, preset="EASY", seed=None, fullscreen=False,
+    def __init__(self, preset="EASY", seed=None, fullscreen=True,
                  platform_mode=None, atmosphere=None,
                  motion_type=None, target_shape=None, target_size=None,
                  num_targets=None, target_initial=None,
                  video_path=None, video_seed=None):
         pygame.init()
-        flags = pygame.FULLSCREEN | pygame.SCALED if fullscreen else 0
-        self.screen = pygame.display.set_mode((APP_W, APP_H),
-                                              flags=(flags if fullscreen else 0))
+        self.fullscreen = bool(fullscreen)
+        flags = pygame.FULLSCREEN if self.fullscreen else 0
+        self.screen = pygame.display.set_mode(
+            (0, 0) if self.fullscreen else (APP_W, APP_H), flags)
+        self.canvas = pygame.Surface((APP_W, APP_H)).convert()
+        self._display_rect = pygame.Rect(0, 0, APP_W, APP_H)
         pygame.display.set_caption(
             "FSOC-PAT Tactical Acquisition Console  ·  SIH 2026 PS 26169")
         self.clock = pygame.time.Clock()
@@ -218,12 +221,12 @@ class App:
                 elif ev.type == pygame.KEYDOWN:
                     running = self._key(ev.key)
                 elif ev.type == pygame.MOUSEBUTTONDOWN:
-                    self._mouse_down(ev.pos, ev.button)
+                    self._mouse_down(self._logical_mouse_pos(ev.pos), ev.button)
                 elif ev.type == pygame.MOUSEBUTTONUP:
                     for s in self.sliders.values():
                         s.dragging = False
                 elif ev.type == pygame.MOUSEMOTION:
-                    self._mouse_move(ev.pos, ev.buttons)
+                    self._mouse_move(self._logical_mouse_pos(ev.pos), ev.buttons)
 
             if not self.paused and not self.video_done:
                 res = self.sim.step()
@@ -258,10 +261,7 @@ class App:
         elif pygame.K_v == key:
             self.show_fov_grid = not self.show_fov_grid
         elif pygame.K_f == key:
-            try:
-                pygame.display.toggle_fullscreen()
-            except Exception:
-                pass
+            self._toggle_fullscreen()
         elif pygame.K_1 <= key <= pygame.K_5:
             name = config.PRESET_ORDER[key - pygame.K_1]
             self.preset = name
@@ -278,6 +278,34 @@ class App:
                 self.atmosphere = allowed[idx]
                 self._reset()
         return True
+
+    def _logical_mouse_pos(self, pos):
+        """Map a physical display coordinate into the logical UI canvas."""
+        if self._display_rect.w <= 0 or self._display_rect.h <= 0:
+            return pos
+        x = (pos[0] - self._display_rect.x) * APP_W / self._display_rect.w
+        y = (pos[1] - self._display_rect.y) * APP_H / self._display_rect.h
+        return int(x), int(y)
+
+    def _toggle_fullscreen(self):
+        self.fullscreen = not self.fullscreen
+        flags = pygame.FULLSCREEN if self.fullscreen else 0
+        self.screen = pygame.display.set_mode(
+            (0, 0) if self.fullscreen else (APP_W, APP_H), flags)
+        self._scanline_surf = None
+
+    def _present_canvas(self):
+        """Scale the fixed mission-console canvas into the current display."""
+        dw, dh = self.screen.get_size()
+        scale = min(dw / APP_W, dh / APP_H)
+        scaled_size = (max(1, int(APP_W * scale)), max(1, int(APP_H * scale)))
+        self._display_rect = pygame.Rect(
+            (dw - scaled_size[0]) // 2,
+            (dh - scaled_size[1]) // 2,
+            scaled_size[0], scaled_size[1])
+        self.screen.fill(T.C.BG)
+        scaled = pygame.transform.smoothscale(self.canvas, scaled_size)
+        self.screen.blit(scaled, self._display_rect.topleft)
 
     def _mouse_down(self, pos, button):
         for name, b in self.buttons.items():
@@ -429,7 +457,7 @@ class App:
 
     # ================================================================ DRAW
     def _draw(self):
-        s = self.screen
+        s = self.canvas
         s.fill(T.C.BG)
         # Subtle background grid
         self._draw_bg_grid(s)
@@ -438,6 +466,7 @@ class App:
         self._draw_panel(s)
         self._draw_bottom(s)
         self._draw_footer(s)
+        self._present_canvas()
 
     # ---------------------------------------------------------------- background grid
     def _draw_bg_grid(self, surf):
@@ -1371,7 +1400,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset",     default="EASY")
     ap.add_argument("--frames",     type=int, default=0)
-    ap.add_argument("--fullscreen", action="store_true")
+    ap.add_argument("--fullscreen", action="store_true", default=True,
+                    help="start in fullscreen (default)")
+    ap.add_argument("--windowed", action="store_false", dest="fullscreen",
+                    help="start in a 1600x900 window")
     ap.add_argument("--platform",   default=None,
                     choices=["SATELLITE_SATELLITE", "UAV_SATELLITE", "UAV_UAV"])
     ap.add_argument("--atmosphere", default=None,

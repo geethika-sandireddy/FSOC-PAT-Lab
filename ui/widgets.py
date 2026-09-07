@@ -64,9 +64,9 @@ def badge(surf, rect, s, color):
 
 # ------------------------------------------------------------------ slider
 class Slider:
-    TRACK_H = 5
-    KNOB_W  = 8
-    KNOB_H  = 16
+    TRACK_H = 7
+    KNOB_W  = 10
+    KNOB_H  = 20
 
     def __init__(self, rect, label, value=0, color=T.C.CYAN,
                  fmt="{:>3d}", enabled=True):
@@ -100,9 +100,9 @@ class Slider:
             self._draw_disabled(surf)
             return
         lx, ly = self.rect.x, self.rect.y - 10
-        T.text(surf, (lx, ly), self.label, 9, T.C.TEXT_DIM)
+        T.text(surf, (lx, ly), self.label, 10, T.C.TEXT_DIM, bold=True)
         val_str = value_text if value_text is not None else self.fmt.format(self.value)
-        T.text(surf, (self.rect.right, ly), val_str, 9, self.color,
+        T.text(surf, (self.rect.right, ly), val_str, 10, self.color,
                bold=True, anchor="tr")
         # track
         ty = self.rect.y + (self.rect.h - self.TRACK_H) // 2 + 6
@@ -129,7 +129,7 @@ class Slider:
 
     def _draw_disabled(self, surf, value_text=None):
         T.text(surf, (self.rect.x, self.rect.y - 10),
-               self.label + "  N/A", 9, T.C.TEXT_FAINT)
+             self.label + "  N/A", 10, T.C.TEXT_FAINT, bold=True)
         ty = self.rect.y + (self.rect.h - self.TRACK_H) // 2 + 6
         track = pygame.Rect(self.rect.x, ty, self.rect.w, self.TRACK_H)
         pygame.draw.rect(surf, T.C.PANEL_2, track)
@@ -159,8 +159,7 @@ class Button:
         pygame.draw.polygon(surf, brd, pts, 1)
         # top accent line
         pygame.draw.line(surf, col, (r.x + 1, r.y), (r.right - 7, r.y), 1)
-        T.text(surf, (r.centerx, r.centery), self.label, 9,
-               col, bold=True, anchor="cc")
+        T.fit_text(surf, r, self.label, 11, col, bold=True, padding=10)
 
 
 # ------------------------------------------------------------------ chip
@@ -178,8 +177,7 @@ class Chip:
         if not enabled:
             pygame.draw.rect(surf, T.C.BG, r)
             pygame.draw.rect(surf, T.C.BORDER_DIM, r, 1)
-            T.text(surf, (r.centerx, r.centery), self.label, 8,
-                   T.C.TEXT_FAINT, anchor="cc")
+            T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=5)
             return
         if selected:
             fill   = tuple(max(0, c // 5) for c in self.color)
@@ -196,8 +194,7 @@ class Chip:
             pygame.draw.line(surf, self.color,
                              (r.x + 1, r.bottom - 1),
                              (r.right - 1, r.bottom - 1), 2)
-        T.text(surf, (r.centerx, r.centery), self.label, 8,
-               tcol, bold=selected, anchor="cc")
+        T.fit_text(surf, r, self.label, 10, tcol, bold=selected, padding=5)
 
 
 def _clamp(v, lo, hi):
