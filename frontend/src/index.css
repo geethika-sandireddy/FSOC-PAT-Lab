@@ -1,0 +1,76 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap');
+@import 'tailwindcss';
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background-color: #070b14;
+  color: #dce3f0;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1a2340; border-radius: 2px; }
+
+.font-data { font-family: 'DM Mono', 'Courier New', monospace; }
+
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block; flex-shrink: 0;
+}
+.dot-locked   { background: #00d4aa; box-shadow: 0 0 6px #00d4aa80; }
+.dot-degraded { background: #5aeb96; box-shadow: 0 0 4px #5aeb9660; }
+.dot-warning  { background: #f0a500; box-shadow: 0 0 6px #f0a50080; }
+.dot-critical { background: #ff3c3c; box-shadow: 0 0 6px #ff3c3c80;
+  animation: pulse-crit 1.4s ease-in-out infinite; }
+.dot-coast    { background: #48dcff; box-shadow: 0 0 5px #48dcff70; }
+.dot-reacq    { background: #be82ff; box-shadow: 0 0 5px #be82ff70; }
+.dot-inactive { background: #3d4f6e; }
+
+@keyframes pulse-crit {
+  0%,100% { opacity:1; box-shadow: 0 0 6px #ff3c3c80; }
+  50%      { opacity:0.5; box-shadow: 0 0 14px #ff3c3ccc; }
+}
+
+.panel      { background: #0d1220; border: 1px solid #1a2340; }
+.panel-dark { background: #0a0f1c; border: 1px solid #131d30; }
+
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  background: transparent; cursor: pointer; width: 100%;
+}
+input[type="range"]::-webkit-slider-track {
+  background: #1a2340; height: 3px; border-radius: 1.5px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; margin-top: -5px;
+  background-color: #00d4aa; height: 13px; width: 13px;
+  border-radius: 50%; border: 2px solid #070b14; box-shadow: 0 0 5px #00d4aa50;
+}
+input[type="range"]:focus { outline: none; }
+
+.track-beam {
+  stroke-dasharray: 8 4;
+  animation: flow 0.8s linear infinite;
+}
+@keyframes flow {
+  to { stroke-dashoffset: -12; }
+}
+.track-beam-degraded {
+  stroke-dasharray: 5 6;
+  animation: flow-slow 2s ease-in-out infinite;
+}
+@keyframes flow-slow {
+  0%,100% { stroke-dashoffset: 0; opacity: 0.5; }
+  50% { stroke-dashoffset: -11; opacity: 1; }
+}
