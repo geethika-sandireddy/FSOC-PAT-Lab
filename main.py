@@ -417,13 +417,41 @@ class App:
         return pygame.Rect(x, y, dw, dh)
 
     def _draw_header(self, surf):
-        # top ribbon
-        pygame.draw.rect(surf, T.C.PANEL, (0, 0, APP_W, 48))
-        pygame.draw.line(surf, T.C.BORDER, (0, 47), (APP_W, 47), 1)
-        T.text(surf, (10, 8), "FSOC-PAT LAB", 15, T.C.CYAN, bold=True)
-        T.text(surf, (10, 26), "Coarse Alignment · Mobile FSOC Terminal", 10, T.C.TEXT_DIM)
-        T.text(surf, (APP_W - 12, 10), "PS 26169", 12, T.C.TEXT_FAINT, anchor="tr")
-        T.text(surf, (APP_W - 12, 26), "AI-Based Virtual Camera Tracking", 10, T.C.TEXT_FAINT, anchor="tr")
+        # --- layered header background ---
+        pygame.draw.rect(surf, T.C.BG, (0, 0, APP_W, 48))
+        pygame.draw.rect(surf, T.C.PANEL, (0, 0, APP_W, 46))
+        # cyan accent top stripe
+        pygame.draw.rect(surf, T.C.CYAN, (0, 0, APP_W, 2))
+        pygame.draw.line(surf, T.C.BORDER_B, (0, 47), (APP_W, 47), 1)
+
+        # title block
+        pygame.draw.rect(surf, T.C.PANEL_2, (0, 2, 175, 44))
+        pygame.draw.line(surf, T.C.BORDER_B, (175, 2), (175, 46), 1)
+        T.text(surf, (10, 7), "FSOC-PAT", 17, T.C.CYAN, bold=True)
+        T.text(surf, (10, 28), "MISSION CONTROL", 8, T.C.TEXT_DIM)
+
+        # live state badge
+        res = self.sim.last_result
+        st = res.get("state", "SEARCHING")
+        st_col = T.C.STATE.get(st, T.C.CYAN)
+        st_fill = T.C.STATE_FILL.get(st, (0, 30, 50))
+        badge_r = pygame.Rect(182, 8, 110, 30)
+        pygame.draw.rect(surf, st_fill, badge_r, border_radius=3)
+        pygame.draw.rect(surf, st_col, badge_r, 1, border_radius=3)
+        T.text(surf, (badge_r.centerx, badge_r.centery), st, 12, st_col,
+               bold=True, anchor="cc")
+
+        # mission elapsed time
+        elapsed = res.get("t", 0.0)
+        T.text(surf, (302, 5), "ELAPSED", 7, T.C.TEXT_FAINT)
+        T.text(surf, (302, 15), f"{elapsed:8.2f} s", 14, T.C.TEXT, bold=True)
+
+        # pointing error quick readout
+        err = res.get("pointing_err_deg", 0.0)
+        ec = T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG else (T.C.AMBER if err < 0.30 else T.C.RED)
+        T.text(surf, (400, 5), "POINT ERR", 7, T.C.TEXT_FAINT)
+        T.text(surf, (400, 15), f"{err * 1000:6.1f} mdeg", 14, ec, bold=True)
+
         # scenario chips - label sits on its own line above the chip row so
         # it never collides with the first chip's border/text
         first_chip_x = min(c.rect.x for c in self.chips.values())
@@ -441,7 +469,9 @@ class App:
         T.text(surf, (at0, 2), "ATMOSPHERE", 8, T.C.TEXT_FAINT)
         for name, c in self.atmos_chips.items():
             c.draw(surf, selected=(name == self.atmosphere))
-        # global mission status badge on the camera right edge is drawn in camera
+        # SIH label
+        T.text(surf, (APP_W - 12, 8), "SIH 2026", 11, T.C.TEXT_FAINT, anchor="tr")
+        T.text(surf, (APP_W - 12, 24), "PS 26169", 9, T.C.TEXT_FAINT, anchor="tr")
 
     def _draw_footer(self, surf):
         if self.video_mode:
@@ -544,10 +574,12 @@ class App:
             label, col = "BEACON LOST · RE-ACQUIRING", T.C.PURPLE
         else:
             label, col = "SEARCHING", T.C.AMBER
-        r = pygame.Rect(dest.x + 8, dest.bottom - 34, dest.w - 8, 26)
-        pygame.draw.rect(surf, (8, 12, 20), r)
-        pygame.draw.line(surf, col, (r.x, r.y), (r.x, r.bottom), 3)
-        T.text(surf, (r.x + 12, r.centery), label, 13, col, bold=True, anchor="cc")
+        r = pygame.Rect(dest.x + 8, dest.bottom - 38, dest.w - 8, 30)
+        fill = T.C.STATE_FILL.get(res["state"], (0, 20, 30))
+        pygame.draw.rect(surf, fill, r, border_radius=2)
+        pygame.draw.rect(surf, col, r, 1, border_radius=2)
+        pygame.draw.rect(surf, col, (r.x, r.y, 4, r.h), border_radius=1)
+        T.text(surf, (r.x + 14, r.centery), label, 13, col, bold=True, anchor="cc")
         # live pointing error, giant, bottom-right of the camera
         err = res["pointing_err_deg"]
         ec = T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG else \
@@ -599,15 +631,16 @@ class App:
         bp = self._est_pixel(self.sim.gimbal.pan, self.sim.gimbal.tilt)
         if bp is not None:
             bx, by = bp
-            pygame.draw.circle(cam, (120, 160, 200), (bx, by), 10, 1)
-            pygame.draw.line(cam, (120, 160, 200), (bx - 18, by), (bx - 6, by), 1)
-            pygame.draw.line(cam, (120, 160, 200), (bx + 6, by), (bx + 18, by), 1)
-            pygame.draw.line(cam, (120, 160, 200), (bx, by - 18), (bx, by - 6), 1)
-            pygame.draw.line(cam, (120, 160, 200), (bx, by + 6), (bx, by + 18), 1)
-            # when locked-on, the beacon label already sits right above this
-            # point - skip the boresight caption so the two don't overlap.
+            reticle_col = (80, 160, 220)
+            T.draw_glow(cam, (bx, by), 20, reticle_col, alpha=40)
+            pygame.draw.circle(cam, reticle_col, (bx, by), 12, 1)
+            pygame.draw.circle(cam, reticle_col, (bx, by), 4, 1)
+            pygame.draw.line(cam, reticle_col, (bx - 22, by), (bx - 14, by), 1)
+            pygame.draw.line(cam, reticle_col, (bx + 14, by), (bx + 22, by), 1)
+            pygame.draw.line(cam, reticle_col, (bx, by - 22), (bx, by - 14), 1)
+            pygame.draw.line(cam, reticle_col, (bx, by + 14), (bx, by + 22), 1)
             if _label_clear((bx, by)):
-                T.text(cam, (bx, by - 24), "OPTICAL BORESIGHT", 8, (120, 160, 200), anchor="cc")
+                T.text(cam, (bx, by - 28), "OPTICAL BORESIGHT", 8, reticle_col, anchor="cc")
 
         # ---- tracked / candidate overlays ----
         for i, c in enumerate(res.get("cand_list", [])):
@@ -617,16 +650,18 @@ class App:
             pygame.draw.rect(cam, col, box, 1)
         if assoc is not None and res["state"] in LOCKED_STATES:
             apx, apy = int(assoc.u), int(assoc.v)
-            # bright tracking ring + crosshair on the detected beacon
+            # bright tracking ring + glow on the detected beacon
             ring_col = T.C.GREEN if res["state"] == "LOCKED" else T.C.GREEN_DIM
+            T.draw_glow(cam, (apx, apy), 26, ring_col, alpha=70)
             pygame.draw.circle(cam, ring_col, (apx, apy), 14, 2)
-            pygame.draw.circle(cam, ring_col, (apx, apy), 18, 1)
-            _bracket(cam, (apx, apy), ring_col, 22, 2)
-            pygame.draw.line(cam, ring_col, (apx - 24, apy), (apx - 18, apy), 2)
-            pygame.draw.line(cam, ring_col, (apx + 18, apy), (apx + 24, apy), 2)
-            pygame.draw.line(cam, ring_col, (apx, apy - 24), (apx, apy - 18), 2)
-            pygame.draw.line(cam, ring_col, (apx, apy + 18), (apx, apy + 24), 2)
-            T.text(cam, (apx, apy - 28), "SAT-B BEACON", 9, ring_col, bold=True, anchor="cc")
+            pygame.draw.circle(cam, ring_col, (apx, apy), 20, 1)
+            pygame.draw.circle(cam, ring_col, (apx, apy), 26, 1)
+            _bracket(cam, (apx, apy), ring_col, 30, 2)
+            pygame.draw.line(cam, ring_col, (apx - 32, apy), (apx - 20, apy), 2)
+            pygame.draw.line(cam, ring_col, (apx + 20, apy), (apx + 32, apy), 2)
+            pygame.draw.line(cam, ring_col, (apx, apy - 32), (apx, apy - 20), 2)
+            pygame.draw.line(cam, ring_col, (apx, apy + 20), (apx, apy + 32), 2)
+            T.text(cam, (apx, apy - 36), "SAT-B BEACON", 9, ring_col, bold=True, anchor="cc")
         elif assoc is not None:
             _bracket(cam, (int(assoc.u), int(assoc.v)), T.C.GREEN, 13, 2)
         # if coasting (estimate exists but no associated blob), mark est LOS
@@ -670,13 +705,16 @@ class App:
 
         # ---- state badge + confidence ----
         st = res["state"]
-        col = T.C.STATE[st]
-        badge = pygame.Rect(10, 10, 110, 22)
-        pygame.draw.rect(cam, tuple(c // 6 for c in col), badge)
-        pygame.draw.rect(cam, col, badge, 1)
-        T.text(cam, (badge.centerx, badge.centery), st, 13, col, bold=True, anchor="cc")
-        W.hbar(cam, (10, 36, 110, 6), res["confidence"], T.C.STATE[st])
-        T.text(cam, (124, 36), "conf", 8, T.C.TEXT_FAINT)
+        col = T.C.STATE.get(st, T.C.CYAN)
+        fill = T.C.STATE_FILL.get(st, (0, 30, 50))
+        badge = pygame.Rect(10, 10, 130, 34)
+        pygame.draw.rect(cam, fill, badge, border_radius=3)
+        pygame.draw.rect(cam, col, badge, 2, border_radius=3)
+        T.draw_glow(cam, (badge.x + 3, badge.centery), 12, col, alpha=30)
+        T.text(cam, (badge.x + 10, badge.y + 5), "STATE", 7, col)
+        T.text(cam, (badge.centerx, badge.y + 19), st, 13, col, bold=True, anchor="cc")
+        W.hbar(cam, (10, 50, 130, 5), res["confidence"], col)
+        T.text(cam, (10, 58), f"CONF {res['confidence']:.2f}", 7, col)
 
         # ---- Phase 2 model-vision trust diagnostics (compact stack) ----
         # Part 3 renders the adaptive trust as a dual bar (VISION vs MODEL)
@@ -782,13 +820,22 @@ class App:
         series = [max(0.0, min(0.5, e)) for e in self.error_spark]
         n = len(series)
         if n > 1:
-            prev = None
+            pts = []
             for i, v in enumerate(series):
-                xx = plot.x + plot.w * i / (n - 1)
-                yy = plot.bottom - plot.h * (v / 0.5)
-                p = (int(xx), int(yy))
+                xx = int(plot.x + plot.w * i / (n - 1))
+                yy = int(plot.bottom - plot.h * (v / 0.5))
+                pts.append((xx, yy))
+            # filled area under curve
+            if len(pts) >= 2:
+                fill_pts = [pts[0]] + pts + [(pts[-1][0], plot.bottom), (pts[0][0], plot.bottom)]
+                area = pygame.Surface((plot.w, plot.h), pygame.SRCALPHA)
+                local = [(p[0] - plot.x, p[1] - plot.y) for p in fill_pts]
+                pygame.draw.polygon(area, (50, 240, 140, 30), local)
+                surf.blit(area, (plot.x, plot.y))
+            prev = None
+            for p in pts:
                 if prev is not None:
-                    pygame.draw.line(surf, T.C.GREEN, prev, p, 1)
+                    pygame.draw.line(surf, T.C.GREEN, prev, p, 2)
                 prev = p
         # disturbance events: mark track-loss (beacon invisible) in red
         if not self.sim.last_result["beacon_visible"]:
@@ -970,34 +1017,35 @@ class App:
 
     def _panel_performance(self, surf):
         x, y, w, h = 1288, 292, 304, 110
-        T.panel(surf, pygame.Rect(x, y, w, h))
-        T.text(surf, (x + 10, y + 6), "PAT PERFORMANCE", 10, T.C.TEXT_DIM)
         res = self.sim.last_result
         st = self.perf.live_stats()
         err = res["pointing_err_deg"]
-        ec = T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG else \
-             (T.C.AMBER if err < 0.30 else T.C.RED)
-        T.text(surf, (x + 12, y + 22), "POINTING ERROR", 8, T.C.TEXT_FAINT)
-        # the big readout gets the panel's full width to itself now - at
-        # font 26 it can run past 150px (e.g. "756.1 mdeg"), which used to
-        # print straight through the ACQ/RET/REACQ row beside it.
-        T.text(surf, (x + 12, y + 30), f"{err * 1000:6.1f} mdeg", 26, ec, bold=True)
+        ec = T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG else              (T.C.AMBER if err < 0.30 else T.C.RED)
+        T.panel(surf, pygame.Rect(x, y, w, h), accent=ec)
+        T.text(surf, (x + 14, y + 6), "PAT PERFORMANCE", 10, T.C.TEXT_DIM)
+        chip_r = pygame.Rect(x + 10, y + 20, w - 20, 36)
+        pygame.draw.rect(surf, tuple(c // 8 for c in ec), chip_r, border_radius=2)
+        pygame.draw.rect(surf, tuple(c // 3 for c in ec), chip_r, 1, border_radius=2)
+        T.text(surf, (x + 16, y + 22), "POINTING ERROR", 7, ec)
+        T.text(surf, (x + 16, y + 30), f"{err * 1000:6.1f} mdeg", 22, ec, bold=True)
         acq = st["acquisition_time_s"]
         acq_s = f"{acq:.2f}s" if acq else "--"
         reacq = st["last_reacq_s"]
         reacq_s = f"{reacq:.2f}s" if reacq else f"{st['reacquisition_count']}ev"
-        cols = [("ACQ", acq_s), ("RET", f"{st['retention_total_pct']:.1f}%"), ("REACQ", reacq_s)]
+        ret_pct = st["retention_total_pct"]
+        ret_col = T.C.GREEN if ret_pct >= 95 else (T.C.AMBER if ret_pct >= 80 else T.C.RED)
+        cols = [("ACQ", acq_s, T.C.CYAN), ("RET", f"{ret_pct:.1f}%", ret_col), ("REACQ", reacq_s, T.C.PURPLE)]
         xx = x + 12
-        for lab, val in cols:
-            T.text(surf, (xx, y + 66), lab, 8, T.C.TEXT_FAINT)
-            T.text(surf, (xx, y + 78), val, 14, T.C.TEXT, bold=True)
+        for lab, val, vc in cols:
+            T.text(surf, (xx, y + 62), lab, 8, T.C.TEXT_FAINT)
+            T.text(surf, (xx, y + 73), val, 14, vc, bold=True)
             xx += 92
         if self.show_diag:
             diag = (f"mean {st['mean_err_deg']*1000:.0f} · rms {st['rms_err_deg']*1000:.0f} "
                     f"· max {st['max_err_deg']*1000:.0f} mdeg · fps {st['fps']:.0f}")
             T.text(surf, (x + 12, y + 98), diag, 8, T.C.TEXT_FAINT)
         else:
-            T.text(surf, (x + 12, y + 90), "DIAGNOSTICS › (click)", 8, T.C.TEXT_FAINT)
+            T.text(surf, (x + 12, y + 98), "DIAGNOSTICS › (click)", 8, T.C.TEXT_FAINT)
 
     def _panel_comparison(self, surf):
         x, y, w, h = 1288, 408, 304, 158
