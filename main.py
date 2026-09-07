@@ -802,7 +802,7 @@ class App:
         tr = self.sim.tracker
 
         # Phase-2 trust bars: top-left, compact 2-row stack
-        tm = getattr(getattr(tr, "trust", None), None, None) or getattr(tr, "trust", None)
+        tm = getattr(tr, "trust", None)
         dy = 8
         if tm is not None:
             W.hbar(cam, (8, dy, 80, 4), tm.vision_trust, T.C.CYAN)
@@ -810,7 +810,7 @@ class App:
             dy += 7
             W.hbar(cam, (8, dy, 80, 4), tm.model_trust, T.C.PURPLE)
             T.text(cam, (92, dy - 1), f"MDL {tm.model_trust:.2f}", 7, (100, 70, 160))
-            sigma = getattr(getattr(tr, "unc", None), "display_sigma_px", None)
+            sigma = getattr(getattr(tr, "unc", None), "display_sigma_px", None)  # noqa
             if sigma is not None:
                 dy += 7
                 T.text(cam, (8, dy), f"σ {sigma:.1f}px", 7, (50, 70, 90))
