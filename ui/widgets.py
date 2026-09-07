@@ -1,14 +1,8 @@
 """
-ui/widgets.py
--------------
-Reusable in-panel controls: sliders, stat rows / KPI cards, sparkline,
-progress-ish bars, toggle buttons, preset chips.
-All drawing is immediate-mode on a pygame Surface (no retained state),
-except sliders which need hit-testing, handled via App.handle_event.
+ui/widgets.py  —  FSOC-PAT reusable controls v2
+Deep-space tactical style: angled tracks, glowing accents, arc gauges.
 """
-
 import pygame
-
 from ui import theme as T
 
 
@@ -20,8 +14,14 @@ def stat_row(surf, rect, label, value, value_color=T.C.TEXT, value_size=14,
            bold=True, anchor="tr")
 
 
+def stat_val(surf, x, y, label, value, val_color=T.C.CYAN,
+             lbl_size=8, val_size=22):
+    """Single large value with small label above."""
+    T.text(surf, (x, y), label, lbl_size, T.C.TEXT_FAINT)
+    T.text(surf, (x, y + lbl_size + 2), value, val_size, val_color, bold=True)
+
+
 def kpi_card(surf, rect, title, rows, sub=None):
-    """rect : pygame.Rect ; rows : dict label->(value_str, color)."""
     T.panel(surf, rect)
     pygame.draw.rect(surf, T.C.BORDER_B, (rect.x, rect.y, rect.w, 1))
     T.text(surf, (rect.x + 8, rect.y + 6), title, 9, T.C.TEXT_DIM)
@@ -34,14 +34,18 @@ def kpi_card(surf, rect, title, rows, sub=None):
 
 
 # ------------------------------------------------------------------ bars
-def hbar(surf, rect, frac, color, min_frac_color=None, label="", bg=T.C.PANEL_2):
-    """Horizontal value bar (0..1) with engineering tick marks."""
+def hbar(surf, rect, frac, color, label="", bg=T.C.PANEL_2):
     rect = pygame.Rect(rect)
     pygame.draw.rect(surf, bg, rect)
     w = int(round(rect.w * max(0.0, min(1.0, frac))))
     if w > 0:
-        pygame.draw.rect(surf, color, (rect.x, rect.y, w, rect.h))
-    # quarter tick marks
+        # gradient: dark fill + bright leading edge
+        fill = tuple(max(0, c // 2) for c in color)
+        pygame.draw.rect(surf, fill, (rect.x, rect.y, w, rect.h))
+        pygame.draw.line(surf, color,
+                         (rect.x + w - 1, rect.y),
+                         (rect.x + w - 1, rect.bottom - 1), 1)
+    # tick marks at quarters
     for t in (0.25, 0.5, 0.75):
         tx = rect.x + int(rect.w * t)
         pygame.draw.line(surf, T.C.PANEL_3,
@@ -54,46 +58,23 @@ def hbar(surf, rect, frac, color, min_frac_color=None, label="", bg=T.C.PANEL_2)
 def badge(surf, rect, s, color):
     pygame.draw.rect(surf, tuple(max(0, c // 6) for c in color), rect)
     pygame.draw.rect(surf, color, rect, 1)
-    T.text(surf, (rect.centerx, rect.centery), s, 14, color, bold=True, anchor="cc")
-
-
-# ------------------------------------------------------------------ gauge
-def state_gauge(surf, state):
-    return None
-
-
-# ------------------------------------------------------------------ sparkline
-def sparkline(surf, rect, series, color=T.C.CYAN, band=None, min_v=0.0, max_v=1.0):
-    """series : list[float].  band : optional (low, high) to shade a target band."""
-    if band:
-        band_r = pygame.Rect(rect.x, rect.y + int(rect.h * (band[1] / (max_v - min_v) or 1)),
-                             rect.w, max(1, int(rect.h * (band[1] - band[0]) / (max_v - min_v))))
-        pygame.draw.rect(surf, T.C.PANEL_2, band_r)
-    xs = [rect.x + rect.w * i / max(1, len(series) - 1) for i in range(len(series))]
-    pts = []
-    for x, v in zip(xs, series):
-        yy = rect.bottom - rect.h * (v - min_v) / (max_v - min_v)
-        pts.append((int(x), int(max(rect.top, min(rect.bottom, yy)))))
-    if len(pts) > 1:
-        pygame.draw.lines(surf, T.C.BORDER, False, pts, 1)
-        pygame.draw.lines(surf, color, False, pts, 2)
+    T.text(surf, (rect.centerx, rect.centery), s, 14, color,
+           bold=True, anchor="cc")
 
 
 # ------------------------------------------------------------------ slider
 class Slider:
-    """Drag-to-set 0..100 control."""
+    TRACK_H = 5
+    KNOB_W  = 8
+    KNOB_H  = 16
 
-    TRACK_H = 6
-    KNOB_W = 7
-    KNOB_H = 14
-
-    def __init__(self, rect, label, value=0, color=T.C.CYAN, fmt="{:>3d}",
-                 enabled=True):
-        self.rect = pygame.Rect(rect)
-        self.label = label
-        self.value = int(round(clampf(value, 0, 100)))
-        self.color = color
-        self.fmt = fmt
+    def __init__(self, rect, label, value=0, color=T.C.CYAN,
+                 fmt="{:>3d}", enabled=True):
+        self.rect    = pygame.Rect(rect)
+        self.label   = label
+        self.value   = int(round(_clamp(value, 0, 100)))
+        self.color   = color
+        self.fmt     = fmt
         self.enabled = enabled
         self.dragging = False
 
@@ -102,41 +83,38 @@ class Slider:
         return self.value / 100.0
 
     def set_frac(self, f):
-        self.value = int(round(clampf(f * 100.0, 0, 100)))
+        self.value = int(round(_clamp(f * 100.0, 0, 100)))
 
     def hit(self, pos):
-        return self.selected_enabled() and self.rect.collidepoint(pos)
+        return self.enabled and self.rect.collidepoint(pos)
 
     def selected_enabled(self):
         return self.enabled
 
     def drag_to(self, x):
-        if not self.enabled:
-            return
-        self.set_frac((x - self.rect.x) / self.rect.w)
+        if self.enabled:
+            self.set_frac((x - self.rect.x) / self.rect.w)
 
     def draw(self, surf, value_text=None):
         if not self.enabled:
-            self._draw_disabled(surf, value_text)
+            self._draw_disabled(surf)
             return
-        # label + value on same row
-        lx, ly = self.rect.x, self.rect.y - 8
+        lx, ly = self.rect.x, self.rect.y - 10
         T.text(surf, (lx, ly), self.label, 9, T.C.TEXT_DIM)
         val_str = value_text if value_text is not None else self.fmt.format(self.value)
-        T.text(surf, (self.rect.right, ly), val_str, 9, T.C.TEXT, bold=True, anchor="tr")
+        T.text(surf, (self.rect.right, ly), val_str, 9, self.color,
+               bold=True, anchor="tr")
         # track
         ty = self.rect.y + (self.rect.h - self.TRACK_H) // 2 + 6
         track = pygame.Rect(self.rect.x, ty, self.rect.w, self.TRACK_H)
         pygame.draw.rect(surf, T.C.PANEL_2, track)
         w = int(round(track.w * self.frac))
         if w:
-            # subtle gradient feel: slightly darker fill, bright front edge
-            pygame.draw.rect(surf, tuple(max(0, c // 2) for c in self.color),
-                             (track.x, track.y, w, track.h))
+            fill = tuple(max(0, c // 2) for c in self.color)
+            pygame.draw.rect(surf, fill, (track.x, track.y, w, track.h))
             pygame.draw.line(surf, self.color,
                              (track.x + w - 1, track.y),
-                             (track.x + w - 1, track.bottom - 1), 1)
-        # tick marks at 25 / 50 / 75
+                             (track.x + w - 1, track.bottom - 1), 2)
         for t in (0.25, 0.5, 0.75):
             tx = track.x + int(track.w * t)
             pygame.draw.line(surf, T.C.BORDER,
@@ -150,46 +128,45 @@ class Slider:
         pygame.draw.rect(surf, T.C.TEXT_DIM, knob, 1)
 
     def _draw_disabled(self, surf, value_text=None):
-        T.text(surf, (self.rect.x, self.rect.y - 8),
-               self.label + "  (N/A)", 9, T.C.TEXT_FAINT)
+        T.text(surf, (self.rect.x, self.rect.y - 10),
+               self.label + "  N/A", 9, T.C.TEXT_FAINT)
         ty = self.rect.y + (self.rect.h - self.TRACK_H) // 2 + 6
         track = pygame.Rect(self.rect.x, ty, self.rect.w, self.TRACK_H)
         pygame.draw.rect(surf, T.C.PANEL_2, track)
         pygame.draw.rect(surf, T.C.BORDER_DIM, track, 1)
-        T.text(surf, (self.rect.right, self.rect.y - 8),
-               "0", 9, T.C.TEXT_FAINT, anchor="tr")
 
 
 # ------------------------------------------------------------------ button
 class Button:
     def __init__(self, rect, label, color=T.C.CYAN, key=None):
-        self.rect = pygame.Rect(rect)
+        self.rect  = pygame.Rect(rect)
         self.label = label
         self.color = color
-        self.key = key
+        self.key   = key
 
     def hit(self, pos):
         return self.rect.collidepoint(pos)
 
     def draw(self, surf, active_color=None):
-        col = active_color or self.color
-        fill = tuple(max(0, c // 6) for c in col)
-        pygame.draw.rect(surf, fill, self.rect)
-        pygame.draw.rect(surf, tuple(max(0, c // 3) for c in col), self.rect, 1)
-        # accent top edge
-        pygame.draw.line(surf, col,
-                         (self.rect.x + 1, self.rect.y),
-                         (self.rect.right - 1, self.rect.y), 1)
-        T.text(surf, (self.rect.centerx, self.rect.centery), self.label, 10,
+        col  = active_color or self.color
+        fill = tuple(max(0, c // 7) for c in col)
+        brd  = tuple(max(0, c // 3) for c in col)
+        # angled top-right corner
+        r = self.rect
+        pts = [(r.x, r.y), (r.right - 6, r.y), (r.right, r.y + 6),
+               (r.right, r.bottom), (r.x, r.bottom)]
+        pygame.draw.polygon(surf, fill, pts)
+        pygame.draw.polygon(surf, brd, pts, 1)
+        # top accent line
+        pygame.draw.line(surf, col, (r.x + 1, r.y), (r.right - 7, r.y), 1)
+        T.text(surf, (r.centerx, r.centery), self.label, 9,
                col, bold=True, anchor="cc")
 
 
-# ------------------------------------------------------------------ chips
+# ------------------------------------------------------------------ chip
 class Chip:
-    """Preset selector chip."""
-
     def __init__(self, rect, label, color=T.C.CYAN):
-        self.rect = pygame.Rect(rect)
+        self.rect  = pygame.Rect(rect)
         self.label = label
         self.color = color
 
@@ -197,30 +174,36 @@ class Chip:
         return self.rect.collidepoint(pos)
 
     def draw(self, surf, selected=False, enabled=True):
+        r = self.rect
         if not enabled:
-            pygame.draw.rect(surf, T.C.BG, self.rect)
-            pygame.draw.rect(surf, T.C.BORDER_DIM, self.rect, 1)
-            T.text(surf, (self.rect.centerx, self.rect.centery),
-                   self.label, 9, T.C.TEXT_FAINT, anchor="cc")
+            pygame.draw.rect(surf, T.C.BG, r)
+            pygame.draw.rect(surf, T.C.BORDER_DIM, r, 1)
+            T.text(surf, (r.centerx, r.centery), self.label, 8,
+                   T.C.TEXT_FAINT, anchor="cc")
             return
         if selected:
-            fill = tuple(max(0, c // 4) for c in self.color)
+            fill   = tuple(max(0, c // 5) for c in self.color)
             border = self.color
-            text_col = self.color
+            tcol   = self.color
         else:
-            fill = T.C.BG
+            fill   = T.C.BG
             border = T.C.BORDER
-            text_col = T.C.TEXT_DIM
-        pygame.draw.rect(surf, fill, self.rect)
-        pygame.draw.rect(surf, border, self.rect, 1)
+            tcol   = T.C.TEXT_DIM
+        pygame.draw.rect(surf, fill, r)
+        pygame.draw.rect(surf, border, r, 1)
         if selected:
-            # accent top bar
+            # bright bottom bar instead of top (aerospace style: underline)
             pygame.draw.line(surf, self.color,
-                             (self.rect.x, self.rect.y),
-                             (self.rect.right - 1, self.rect.y), 2)
-        T.text(surf, (self.rect.centerx, self.rect.centery), self.label, 9,
-               text_col, bold=selected, anchor="cc")
+                             (r.x + 1, r.bottom - 1),
+                             (r.right - 1, r.bottom - 1), 2)
+        T.text(surf, (r.centerx, r.centery), self.label, 8,
+               tcol, bold=selected, anchor="cc")
 
 
-def clampf(v, lo, hi):
+def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
+
+
+# Keep legacy name for existing call sites
+def clampf(v, lo, hi):
+    return _clamp(v, lo, hi)
