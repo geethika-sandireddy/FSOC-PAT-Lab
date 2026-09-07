@@ -23,3 +23,6 @@ logs/classB*.mp4
 .DS_Store
 Thumbs.db
 *.swp
+
+# Allow built frontend to be opened without Node.js
+!frontend/dist/
