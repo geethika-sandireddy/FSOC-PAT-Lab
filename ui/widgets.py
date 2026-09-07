@@ -119,13 +119,13 @@ class Slider:
             tx = track.x + int(track.w * t)
             pygame.draw.line(surf, T.C.BORDER,
                              (tx, track.y), (tx, track.bottom), 1)
-        pygame.draw.rect(surf, T.C.BORDER_B, track, 1)
+        pygame.draw.rect(surf, T.C.BORDER, track, 1)
         # knob
         kx = track.x + w - self.KNOB_W // 2
         knob = pygame.Rect(kx, ty - (self.KNOB_H - self.TRACK_H) // 2,
                            self.KNOB_W, self.KNOB_H)
         pygame.draw.rect(surf, T.C.PANEL_3, knob)
-        pygame.draw.rect(surf, T.C.TEXT, knob, 1)
+        pygame.draw.rect(surf, T.C.TEXT_DIM, knob, 1)
 
     def _draw_disabled(self, surf, value_text=None):
         T.text(surf, (self.rect.x, self.rect.y - 10),
@@ -150,7 +150,7 @@ class Button:
     def draw(self, surf, active_color=None):
         col  = active_color or self.color
         fill = tuple(max(0, c // 7) for c in col)
-        brd  = tuple(max(0, c // 2) for c in col)
+        brd  = tuple(max(0, c // 3) for c in col)
         # angled top-right corner
         r = self.rect
         pts = [(r.x, r.y), (r.right - 6, r.y), (r.right, r.y + 6),
@@ -158,7 +158,7 @@ class Button:
         pygame.draw.polygon(surf, fill, pts)
         pygame.draw.polygon(surf, brd, pts, 1)
         # top accent line
-        pygame.draw.line(surf, col, (r.x + 1, r.y), (r.right - 7, r.y), 2)
+        pygame.draw.line(surf, col, (r.x + 1, r.y), (r.right - 7, r.y), 1)
         T.fit_text(surf, r, self.label, 11, col, bold=True, padding=10)
 
 
@@ -177,7 +177,7 @@ class Chip:
         if not enabled:
             pygame.draw.rect(surf, T.C.BG, r)
             pygame.draw.rect(surf, T.C.BORDER_DIM, r, 1)
-            T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=5)
+                        T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=5)
             return
         if selected:
             fill   = tuple(max(0, c // 5) for c in self.color)
