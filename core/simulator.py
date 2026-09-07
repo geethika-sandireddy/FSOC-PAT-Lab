@@ -91,6 +91,11 @@ class Simulator:
         self.frame = None
         # brightness history of the associated object (for the scope HUD)
         self.intensity_hist = deque(maxlen=240)
+        # structured PAT state-transition journal (event-only, one entry per
+        # state change - never per-frame): (t, from_state, to_state).  Drives
+        # the recovery timeline in the HUD and the scenario/recovery report;
+        # no computation reads it, so it cannot perturb the loop.
+        self.event_log = []
 
         # coarse pre-aim toward the ephemeris prediction
         paz, pel = self.eph.predict_az_el(0.0)
@@ -128,7 +133,10 @@ class Simulator:
 
         candidates = self.detector.detect(frame, basis, config.FOCAL_PX)
 
+        prev_state = self.tracker.state
         state, est_az, est_el, confidence = self.tracker.update(candidates, self.t, dt)
+        if state != prev_state:
+            self.event_log.append((self.t, prev_state, state))
         assoc = self.tracker.associated
         self.intensity_hist.append(assoc.peak if assoc is not None else None)
 
@@ -175,6 +183,8 @@ class Simulator:
                     dtilt < config.VFOV_DEG / 2.0 + 0.1),
             frame=frame,
             t=self.t,
+            gimbal_sat_pan=self.gimbal.pan_sat,
+            gimbal_sat_tilt=self.gimbal.tilt_sat,
         )
         return self.last_result
 
@@ -269,6 +279,7 @@ class VideoInputSimulator:
         self._was_locked = False
         self._false_lock_count = 0
         self.false_lock_events = 0
+        self.event_log = []          # (t, from_state, to_state); event-only
 
     @property
     def state(self):
@@ -302,8 +313,11 @@ class VideoInputSimulator:
         basis = self.gimbal.basis()          # identity: gimbal held at 0,0
         candidates = self.detector.detect(frame, basis, self.focal_px,
                                           cu=self.cu, cv=self.cv)
+        prev_state = self.tracker.state
         state, est_az, est_el, confidence = self.tracker.update(
             candidates, self.t, self.dt)
+        if state != prev_state:
+            self.event_log.append((self.t, prev_state, state))
         self.intensity_hist.append(
             self.tracker.associated.peak if self.tracker.associated else None)
 
@@ -416,6 +430,8 @@ class VideoInputSimulator:
             t=self.t,
             centroid_px=cent_px,
             centroid_err_px=cent_err_px,
+            gimbal_sat_pan=self.gimbal.pan_sat,
+            gimbal_sat_tilt=self.gimbal.tilt_sat,
             tracked_xy=(detected_cx, detected_cy) if detected_cx is not None
                         else None,
             truth_xy=(best[0], best[1]) if best is not None else None,

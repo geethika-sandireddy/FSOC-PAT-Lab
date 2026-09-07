@@ -18,9 +18,11 @@ Decision pipeline:
   3. Acquisition while SEARCHING: a candidate must clear the appearance bar
      AND sit in the (time-widening) ephemeris gate; it then forms a tentative
      track that must prove **spatial consistency** (same LOS for N frames)
-     and **modulation identity** (correlator score over a filled history)
-     before LOCKED is committed.  That combination makes false locks
-     essentially impossible.
+     and - when MODULATION_ENABLED - **modulation identity** (correlator score
+     over a filled history) before LOCKED is committed.  With modulation
+     disabled (or in video mode) the appearance-classifier threshold replaces
+     the modulation cross-check so tracking never depends on the beacon
+     signature.  That combination makes false locks essentially impossible.
   4. The estimator = ephemeris prior + leaky-absorbed bias: the control loop
      gets smooth feedforward plus a corrective term, so the residual boresight
      error stays a few hundredths of a degree.
@@ -61,6 +63,7 @@ class ModulationTrack:
 
     def __init__(self, win=config.MOD_CORREL_WIN):
         self.win = win
+        self.fps = config.FPS            # actual loop sample rate (60 live / 30 mp4)
         self.pxs = deque(maxlen=win)
         self.pys = deque(maxlen=win)
         self.values = deque(maxlen=win)
@@ -81,23 +84,25 @@ class ModulationTrack:
         self.areas.append(float(area) if area is not None else float(intensity))
         self.frames.append(int(frame_n))
 
-    @staticmethod
-    def _template_sign(frame_n, lag=0):
+    def _template_sign(self, frame_n, lag=0):
         # brightness lags the ideal clock by ~1 frame (PSF + pipeline latency);
-        # corr() tests a small lag set to stay phase-robust.
-        return 1.0 if (config.MODULATION_FREQ_HZ * (frame_n - lag) / config.FPS) % 1.0 < 0.5 \
+        # corr() tests a small lag set to stay phase-robust.  The template is
+        # anchored to the REAL sample rate (self.fps = 1/dt), so a 30 fps MP4
+        # pipeline acquires exactly as a 60 fps live loop does.
+        return 1.0 if (config.MODULATION_FREQ_HZ * (frame_n - lag) / self.fps) % 1.0 < 0.5 \
             else -1.0
 
     def corr(self):
-        """Best sign-agreement (over 0..2 frame lags) between de-meaned
-        brightness samples and the absolute-time modulation template."""
+        """Best sign-agreement (over 0..MODULATION_TOLERANCE_FRAMES frame lags)
+        between de-meaned brightness samples and the absolute-time modulation
+        template."""
         vals = self.values
         n = len(vals)
         if n < 12:
             return 0.0
         mean_v = sum(vals) / n
         best = 0.0
-        for lag in (0, 1, 2):
+        for lag in range(config.MODULATION_TOLERANCE_FRAMES + 1):
             agree = 0.0
             for v, f in zip(vals, self.frames):
                 sig = 1.0 if v > mean_v else -1.0
@@ -117,7 +122,7 @@ class ModulationTrack:
         new_v = max(0.0, float(intensity))
         new_mean = (sum(vals) + new_v) / (n + 1)
         best = 0.0
-        for lag in (0, 1, 2):
+        for lag in range(config.MODULATION_TOLERANCE_FRAMES + 1):
             agree = 0.0
             for v, f in zip(vals, self.frames):
                 sig = 1.0 if v > new_mean else -1.0
@@ -146,7 +151,7 @@ class ModulationTrack:
             return 0.0
         mean_a = sum(areas) / n
         best_agree, best_depth = 0.0, 0.0
-        for lag in (0, 1, 2):
+        for lag in range(config.MODULATION_TOLERANCE_FRAMES + 1):
             agree = 0.0
             hi, lo = [], []
             for a, f in zip(areas, self.frames):
@@ -168,7 +173,7 @@ class ModulationTrack:
         mean_a = (sum(areas) + new_a) / (n + 1)
         best_agree, best_depth = 0.0, 0.0
         n_ext = n + 1
-        for lag in (0, 1, 2):
+        for lag in range(config.MODULATION_TOLERANCE_FRAMES + 1):
             agree = 0.0
             hi, lo = [], []
             for a, f in zip(areas, self.frames):
@@ -191,10 +196,16 @@ class Tracker:
         # video_mode=True (Benchmark-2 MP4 bypass): an external video feeds the
         # coarse-pointing loop.  Its beacon has no known 15 Hz modulation clock,
         # so acquisition / lock-hold use appearance + temporal persistence
-        # confidence instead of the modulation correlator.  The strict
-        # modulation gate stays fully active in the synthetic scene mode.
+        # confidence instead of the modulation correlator.
         self.video_mode = video_mode
+        # Modulation identity signalling is configurable (MODULATION_ENABLED)
+        # AND never starves tracking: when it is off (or in video mode) the
+        # tracker acquires/locks with appearance + persistence + spatial
+        # consistency + SNR + ephemeris prior only.  use_modulation gates every
+        # modulation threshold, penalty and rejection rule in one place.
+        self.use_modulation = config.MODULATION_ENABLED and not video_mode
         self.gate_deg = gate_deg
+        self._dt = 0.0
         self.state = SEARCHING
         self.est_az = None
         self.est_el = None
@@ -225,6 +236,10 @@ class Tracker:
         self.trust = AdaptiveTrustManager()
         self.dist_level_est = 0.0      # tracker-derived disturbance condition (0-1)
         self.coast_mode = None         # last coasting mode (for GUI/metrics)
+        # Part 3 staged-reacquisition state: which recovery level (1..N) the
+        # tracker is on, and how long it has been actively REACQUIRING.
+        self.reacq_level = 1
+        self.reacq_time = 0.0
 
     # ------------------------------------------------------------------
     def reset(self, az, el):
@@ -250,6 +265,8 @@ class Tracker:
         self.trust = AdaptiveTrustManager()
         self.dist_level_est = 0.0
         self.coast_mode = None
+        self.reacq_level = 1
+        self.reacq_time = 0.0
 
     # ------------------------------------------------------------------
     def _prior_gate_deg(self, t):
@@ -257,9 +274,41 @@ class Tracker:
             return self.gate_deg * 1.2
         return min(2.2, 0.55 + 0.28 * math.sqrt(t))
 
+    @staticmethod
+    def _snr_reliability(snr):
+        """Bounded 0-1 measurement reliability from its SNR (the same shape the
+        trust manager uses in its vision fusion), floored at 0.5 so a
+        momentarily fading beacon is discounted but never catastrophically
+        de-ranked against a brighter static blob that merely sits closer to the
+        gate centre."""
+        return max(0.5, min(1.0, snr / (snr + 10.0)))
+
+    def _assoc_gate_deg(self):
+        """Uncertainty-aware association gate (synthetic mode, modulation on or
+        off alike, per config.py's documented effective_gate model):
+            base_gate
+            + ASSOC_UNCERTAINTY_FACTOR * internal sigma (px -> deg)
+            + ASSOC_LATENCY_MARGIN_FACTOR * predicted motion during gimbal latency
+        clamped to ASSOC_MAX_GATE_DEG.  Reads the INTERNAL (uncapped) sigma so
+        the HUD display cap can never gate loop behaviour.  Video mode keeps its
+        own wide field-facing gate without growth or clamping."""
+        if self.video_mode:
+            return self.gate_deg
+        gate = self.gate_deg
+        gate += config.ASSOC_UNCERTAINTY_FACTOR * (
+            self.unc.sigma_px / config.PIXELS_PER_DEG)
+        lat_s = config.GIMBAL_LATENCY_FRAMES * (getattr(self, "_dt", 0.0) or 0.0)
+        speed = math.hypot(getattr(self, "vel_az", 0.0) or 0.0,
+                           getattr(self, "vel_el", 0.0) or 0.0)
+        gate += config.ASSOC_LATENCY_MARGIN_FACTOR * lat_s * speed
+        return min(config.ASSOC_MAX_GATE_DEG, gate)
+
     def update(self, candidates, t, dt):
         """Returns (state, est_az, est_el, confidence)."""
         self._frame += 1
+        self._dt = dt
+        if dt > 0:
+            self.mod.fps = 1.0 / dt      # 60 live / 30 mp4: template clock
         prior_az, prior_el = self.eph.predict_az_el(t)
 
         for c in candidates:
@@ -273,10 +322,18 @@ class Tracker:
                 c.fusion_score *= config.PERSISTENCE_BOOST
             # a blob that actually blinks at the beacon's 15 Hz modulation is
             # overwhelmingly likely to BE the beacon: its own-track peak-mod
-            # score caps association/fusion against static beacon-like decoys.
+            # score lifts association against static beacon-like decoys.  Only
+            # while modulation identity is active - with modulation disabled a
+            # meaningless (noise-driven) track_mod must never prize a blob.
             tm = getattr(c, "track_mod", 0.0)
-            if tm >= 0.60:
+            if self.use_modulation and tm >= config.ASSOC_TRACK_MOD_MIN:
                 c.fusion_score *= 1.0 + config.MOD_ASSOC_K * (tm - 0.50)
+            # combined association / reliability score used to pick the winner
+            # among in-gate candidates while LOCKED/COASTING: the fused
+            # appearance x prior x persistence x modulation score, discounted by
+            # a bounded SNR reliability factor (a faint flickering blob cannot
+            # out-rank a brighter, more stable one).
+            c._assoc_score = c.fusion_score * self._snr_reliability(c.snr)
 
         has_track = self.est_az is not None and self.state in (LOCKED, COASTING,
                                                         DEGRADED_LOCK,
@@ -326,12 +383,19 @@ class Tracker:
                 # REACQUIRING in core/control.py).  Any object caught by the
                 # wider gate still has to pass the full _on_tracked
                 # appearance/modulation verification before LOCKED.
-                gate = self.gate_deg * (config.REACQ_GATE_MULT
-                                        if self.state == REACQUIRING else 1.0)
+                gate = self._assoc_gate_deg()
+                if self.state == REACQUIRING:
+                    # staged reacquisition: the association gate widens with the
+                    # current recovery LEVEL (1..N) around the predicted LOS.  A
+                    # widened gate never by-passes identity - _on_tracked still
+                    # runs the full appearance/modulation verification before
+                    # LOCKED is re-committed.
+                    gate *= config.REACQ_LEVEL_GATE_MULT[
+                        max(0, min(config.REACQ_LEVELS - 1, self.reacq_level - 1))]
                 for c in candidates:
                     d = math.hypot(c.los_az - self.est_az, c.los_el - self.est_el)
                     if d < gate:
-                        if best is None or c.fusion_score > best.fusion_score:
+                        if best is None or c._assoc_score > best._assoc_score:
                             best = c
             if best is not None:
                 self.last_candidate_age = 0.0
@@ -378,7 +442,8 @@ class Tracker:
         self.phase = CANDIDATE if self._tent_frames == 0 else ACQUIRING
         self._update_conf(c, p_az, p_el)
         self.trust.update(conf=self.conf, mod_score=0.0, snr=c.snr,
-                          dist_level=self.dist_level_est, visible=True)
+                          dist_level=self.dist_level_est, visible=True,
+                          mod_enabled=self.use_modulation)
 
         if self._tent_frames == 0:
             self._tent_az, self._tent_el = c.los_az, c.los_el
@@ -418,24 +483,40 @@ class Tracker:
         # enough temporally-consistent frames AND enough modulation samples
         need_samples = int(config.MOD_CORREL_WIN * 0.8)
         if self._tent_frames >= config.ACQUIRE_CONFIRM_FRAMES:
-            if not self.video_mode and len(self.mod.values) < need_samples:
-                # keep gathering evidence (spatial consistency already proven)
-                pass
+            if self.use_modulation:
+                if len(self.mod.values) < need_samples:
+                    # keep gathering evidence (spatial consistency already proven)
+                    pass
+                elif c.mod_score >= config.MOD_LOCK_THRESHOLD:
+                    self._commit(c.los_az, c.los_el, t)
+                    return self.state, self.est_az, self.est_el, c.mod_score
+                else:
+                    # modulation fails -> not the real beacon, start over
+                    self._reset_tentative()
             elif self.video_mode:
                 # external-video beacon: appearance + spatial consistency over
                 # ACQUIRE_CONFIRM_FRAMES is enough - no modulation clock to test
                 self._commit(c.los_az, c.los_el, t)
                 return self.state, self.est_az, self.est_el, max(0.5, c.ml_score)
-            elif c.mod_score >= config.MOD_LOCK_THRESHOLD:
-                self._commit(c.los_az, c.los_el, t)
-                return self.state, self.est_az, self.est_el, c.mod_score
             else:
-                # modulation fails -> not the real beacon, start over
-                self._tent_frames = 0
-                self._tent_az = self._tent_el = None
-                self._tent_id = None
-                self.mod.reset()
+                # synthetic beacon, modulation DISABLED: modulation cannot act as
+                # the decoy discriminator, so the appearance-classifier threshold
+                # (ML_LOCK_THRESHOLD) replaces it as the commit bar.  Spatial
+                # consistency was already proven over ACQUIRE_CONFIRM_FRAMES;
+                # no modulation logic runs and nothing is penalised for a
+                # missing modulation signature.
+                if c.ml_score >= config.ML_LOCK_THRESHOLD:
+                    self._commit(c.los_az, c.los_el, t)
+                    return self.state, self.est_az, self.est_el, max(0.5, c.ml_score)
+                # appearance insufficient -> start over
+                self._reset_tentative()
         return SEARCHING, self.est_az, self.est_el, self.confidence
+
+    def _reset_tentative(self):
+        self._tent_frames = 0
+        self._tent_az = self._tent_el = None
+        self._tent_id = None
+        self.mod.reset()
 
     def _on_tracked(self, c, t, dt, p_az, p_el):
         self.candidates_seen += 1
@@ -443,16 +524,26 @@ class Tracker:
         c.mod_score = self.mod.corr()
         # continuous modulation verification: a locked object that STOPPED
         # matching the beacon signature is a false lock -> drop back to search
-        # (video mode has no modulation clock, so it relies on the persistent,
-        # bright associated blob as the beacon identity).
-        if not self.video_mode and c.mod_score < config.MOD_SUSPECT_FLOOR:
+        # (modulation disabled / video mode have no modulation clock, so they
+        # rely on the persistent, bright associated blob as the beacon identity
+        # and no modulation-specific rejection rule executes).
+        if self.use_modulation and c.mod_score < config.MOD_SUSPECT_FLOOR:
             self._suspect += 1
             if self._suspect >= config.MOD_SUSPECT_DROP_FRAMES:
+                # sustained false lock: the locked object stopped matching the
+                # beacon signature -> drop back to a clean search.  Reset the
+                # whole recovery ladder so the next acquisition starts at a
+                # fresh LEVEL 1 coast/reacquire rather than inheriting stale
+                # stage state.
                 self._suspect = 0
                 self.mod.reset()
                 self.state = SEARCHING
+                self.phase = SEARCHING
                 self.search_angle = 0.0
                 self.search_radius = 0.0
+                self.coast_time = 0.0
+                self.reacq_level = 1
+                self.reacq_time = 0.0
                 return SEARCHING, self.est_az, self.est_el, self.confidence
         else:
             self._suspect = 0
@@ -460,10 +551,10 @@ class Tracker:
         # ---- Phase 2 confidence + trust (this is what the manager consumes) ----
         self._update_conf(c, p_az, p_el)
         mode = self.trust.update(conf=self.conf,
-                                 mod_score=(0.0 if self.video_mode
+                                 mod_score=(0.0 if not self.use_modulation
                                             else self.mod.corr_area()),
                                  snr=c.snr, dist_level=self.dist_level_est,
-                                 visible=True)
+                                 visible=True, mod_enabled=self.use_modulation)
         self.coast_mode = mode
         self.unc.observe(snr=c.snr,
                          centroid_residual_px=self._centroid_jitter_px(c),
@@ -579,7 +670,7 @@ class Tracker:
         #    knew about, a target agenda change -- collapses conf.prediction,
         #    model trust falls, and the AdaptiveTrustManager hands control to
         #    the camera (VISION_DOMINANT).
-        _lead_dt = 1.0 / config.FPS
+        _lead_dt = self._dt or (1.0 / config.FPS)
         if self.est_az is not None:
             _base_az, _base_el = self.est_az, self.est_el
         else:
@@ -608,14 +699,19 @@ class Tracker:
         self._prior_chase_rate = _chase
         _model_disagreement_deg = max(_unexplained_deg,
                                       config.TRUST_CHASE_K * _chase)
-        if self.video_mode:
+        if not self.use_modulation:
+            # modulation disabled / video mode: modulation carries no identity
+            # information, so the appearance evidence stands alone - no
+            # modulation contribution and no modulation penalty.
             identity_src = c.ml_score
         else:
             # Identity = AI appearance (the trained, verified classifier) fused
             # with the continuous 15 Hz modulation evidence.  Both are needed:
             # appearance alone can be fooled by a luminous decoy, modulation
             # alone can flicker under noise (corr_area dips on uniform patches).
-            identity_src = 0.6 * c.ml_score + 0.4 * self.mod.corr_area()
+            # FUSION_WEIGHT_* in config.py are the single source of truth.
+            identity_src = (config.FUSION_WEIGHT_ML * c.ml_score
+                            + config.FUSION_WEIGHT_MOD * self.mod.corr_area())
         self.conf.update(
             identity_src=identity_src,
             snr=c.snr,
@@ -625,7 +721,8 @@ class Tracker:
             model_conf=(0.25 if self.video_mode else 1.0),
             dist_level=self.dist_level_est,
             point_err_deg=self.point_err_deg if hasattr(self, "point_err_deg") else 0.0,
-            point_err_scale_deg=0.2)
+            point_err_scale_deg=0.2,
+            unc_sigma_px=self.unc.sigma_px)
         # derived disturbance condition for the trust manager (blind estimate)
         self.dist_level_est = max(
             0.0, min(1.0, 0.8 * (1.0 - self.conf.position)
@@ -642,37 +739,80 @@ class Tracker:
         self._jit_px = 0.6 * d_px + 0.4 * j
         return self._jit_px
 
+    def _coast_vel(self):
+        """Effective deg/s velocity used to extrapolate the fused estimate while
+        the beacon is unobserved (predictive coast).
+
+        The smoothed *tracked* velocity (vel_az/el) already moves the belief.
+        On top we add a small configurable forward lead scaled by the gimbal
+        transport delay (GIMBAL_LATENCY_FRAMES) so the camera keeps riding the
+        target's genuine slew instead of trailing it through the latency."""
+        vaz = self.vel_az or 0.0
+        vel = self.vel_el or 0.0
+        if config.COAST_LATENCY_LEAD:
+            lat_s = config.GIMBAL_LATENCY_FRAMES * (self._dt or (1.0 / config.FPS))
+        else:
+            lat_s = 0.0
+        lead = config.COAST_VELOCITY_LEAD_S + lat_s
+        return vaz * (1.0 + lead), vel * (1.0 + lead)
+
+    @staticmethod
+    def _reacq_level_for(t):
+        """Recovery LEVEL (1..N) active after `t` seconds of REACQUIRING, from
+        the cumulative per-level duration budgets (config.REACQ_LEVEL_DURATION_S)."""
+        cum = 0.0
+        for i, d in enumerate(config.REACQ_LEVEL_DURATION_S):
+            cum += d
+            if t < cum or i == config.REACQ_LEVELS - 1:
+                return i + 1
+        return config.REACQ_LEVELS
+
     def _on_miss(self, t, dt):
         if self.state in (LOCKED, DEGRADED_LOCK, COASTING, REACQUIRING):
+            # enter predictive coast on the first missed frame: without this the
+            # ladder has no way to progress LOCKED -> COASTING -> REACQUIRING
+            if self.state in (LOCKED, DEGRADED_LOCK):
+                self.state = COASTING
+                self.phase = COASTING
+                self.coast_time = 0.0
+                self.reacq_time = 0.0
             self.coast_time += dt
-            # prediction uncertainty grows while unobserved
+            # prediction uncertainty grows (correctly) uncapped while unobserved
             self.unc.coast(dt)
-            if self.coast_time > config.COAST_TIMEOUT_S:
+            caz, cel = self._coast_vel()
+            if self.state in (COASTING, REACQUIRING) and self.est_az is not None:
+                self.est_az += caz * dt
+                self.est_el += cel * dt
+
+            # staged reacquisition ladder: once uncertainty is past credible,
+            # escalate REACQUIRING LEVEL 1 -> 2 -> 3 (each a wider association
+            # gate + faster expanding-spiral growth) until the whole configurable
+            # ladder times out (~1 s) and the loop falls through to blind SEARCH.
+            if self.state == COASTING and self.unc.reacquire_threshold_reached():
+                self.state = REACQUIRING
+                self.phase = REACQUIRING
+                self.reacq_level = 1
+                self.reacq_time = 0.0
+                self.search_angle = 0.0
+                self.search_radius = 0.0
+            elif self.state == REACQUIRING:
+                self.reacq_time += dt
+                self.reacq_level = self._reacq_level_for(self.reacq_time)
+                if self.reacq_time > config.REACQ_TIMEOUT_S:
+                    self.state = SEARCHING
+                    self.phase = SEARCHING
+                    self.search_angle = 0.0
+                    self.search_radius = 0.0
+            elif self.state == COASTING:
+                self.phase = COASTING
+
+            # hard ceiling on any single coast/reacq leg (never allowed to ride
+            # a stale prediction indefinitely even if the ladder is generous)
+            if self.state == COASTING and self.coast_time > config.COAST_TIMEOUT_S:
                 self.state = SEARCHING
                 self.phase = SEARCHING
                 self.search_angle = 0.0
                 self.search_radius = 0.0
-            elif self.unc.reacquire_threshold_reached():
-                # uncertainty beyond credibility -> stop following the model,
-                # actively search (from the predicted position, expanding)
-                self.state = REACQUIRING
-                self.phase = REACQUIRING
-                # still ride the last known motion: freezing the prediction
-                # here would let the (still-moving) beacon drift out of the
-                # association gate before it becomes visible again.  REACQUIRING
-                # differs from COASTING by the widened association gate below,
-                # not by throwing away the velocity lead.
-                if self.est_az is not None:
-                    self.est_az += self.vel_az * dt
-                    self.est_el += self.vel_el * dt
-            else:
-                # predictive coast: extrapolate the estimate with the smoothed
-                # velocity so the gimbal keeps riding the last known motion
-                if self.est_az is not None:
-                    self.est_az += self.vel_az * dt
-                    self.est_el += self.vel_el * dt
-                self.state = COASTING
-                self.phase = COASTING
             self.coast_mode = self.trust.update_coast(False, self.unc)
         else:
             self.phase = SEARCHING
@@ -688,7 +828,13 @@ class Tracker:
 
     # ------------------------------------------------------------------
     def search_point(self, t, dt):
-        rate = config.SEARCH_GROWTH_DEG_S
+        speed_scale = 1.0
+        if self.state == REACQUIRING:
+            # each reacquisition LEVEL sweeps faster, so a beacon missed by the
+            # tight early gate is hunted with a progressively wider/faster spiral
+            speed_scale = config.REACQ_LEVEL_SEARCH_SPEED[
+                max(0, min(config.REACQ_LEVELS - 1, self.reacq_level - 1))]
+        rate = config.SEARCH_GROWTH_DEG_S * speed_scale
         self.search_angle += rate * dt * 2.2
         self.search_radius = min(config.SEARCH_MAX_RADIUS_DEG,
                                  self.search_radius + rate * dt * 0.5)

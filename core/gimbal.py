@@ -38,6 +38,13 @@ class Gimbal:
         self.tilt = 0.0
         self.v_pan = 0.0
         self.v_tilt = 0.0
+        # Part 3 actuator-saturation observability: 0..1 fraction of how close
+        # the realized servo is to its physical limits this frame (rate and/or
+        # accel).  ~1.0 means the camera is being commanded faster than it can
+        # physically slew (the "camera can't keep up" condition); telemetry-only,
+        # never fed back into the loop.
+        self.pan_sat = 0.0
+        self.tilt_sat = 0.0
         self._latency = deque()      # (frame_index, pan, tilt)
         self._n = 0                  # frame counter for latency FIFO
 
@@ -79,14 +86,16 @@ class Gimbal:
         stabilization loop rejects a configurable fraction.
         """
         # --- realized attitude slews toward the active setpoint ---
-        vel_p, pan = self._follow(self.pan_cmd, self.pan, self.v_pan,
+        vel_p, pan, sp = self._follow(self.pan_cmd, self.pan, self.v_pan,
                                   config.GIMBAL_MAX_SLEW_DEG_S,
                                   config.GIMBAL_ACCEL_DEG_S2, dt, self.vp_ff)
         self.pan, self.v_pan = pan, vel_p
-        vel_t, tilt = self._follow(self.tilt_cmd, self.tilt, self.v_tilt,
+        self.pan_sat = sp
+        vel_t, tilt, st = self._follow(self.tilt_cmd, self.tilt, self.v_tilt,
                                    config.GIMBAL_MAX_TILT_DEG_S,
                                    config.GIMBAL_ACCEL_DEG_S2, dt, self.vt_ff)
         self.tilt, self.v_tilt = tilt, vel_t
+        self.tilt_sat = st
 
         # --- realized attitude: command + platform disturbance, stabilized ---
         d_pan, d_tilt = disturbance.platform_disturbance(dt)
@@ -103,13 +112,17 @@ class Gimbal:
         clamped, position integrated.  The feedforward term cancels the
         steady-state lag a plain PD servo exhibits when tracking a moving
         target (err ~ (kd/kp)*v), so the boresight rides ON the target
-        instead of trailing it.
-        """
+        instead of trailing it.  Returns (velocity, new_pos, saturation)
+        where saturation in [0,1] measures how near the physical rate/accel
+        limit the servo is operating this frame."""
         err = cmd - now
         a = config.GIMBAL_SERVO_KP * err - config.GIMBAL_SERVO_KD * (vel - vel_ff)
+        a_raw = a
         a = max(-accmax, min(accmax, a))
         v = min(velmax, max(-velmax, vel + a * dt))
-        return v, now + v * dt
+        sat = max(abs(a_raw) / max(accmax, 1e-9),
+                  abs(vel + a * dt) / max(velmax, 1e-9))
+        return v, now + v * dt, min(1.0, sat)
 
     # ---------------- Helpers ----------------
     def basis(self):

@@ -56,6 +56,8 @@ class PerformanceTracker:
         self.state_time = {}
         self.trust_samples = []    # (vision_trust, model_trust) per tracked frame
         self.unc_samples = []      # display (HUD-capped) sigma_px per frame
+        self.sat_samples = []      # (pan_sat, tilt_sat) per frame (0..1 each)
+        self.sat_frames = 0        # frames where either axis is rate-limited
 
     # ------------------------------------------------------------------
     def record_frame(self, sim):
@@ -88,6 +90,15 @@ class PerformanceTracker:
             # HUD/evaluator actually reads; the loop's internal value remains
             # unbounded and is what drives the REACQ escalation.
             self.unc_samples.append(trk.unc.display_sigma_px)
+
+        # actuator-saturation telemetry (Part 3): how close the gimbal servo is
+        # to its physical slew/accel limit this frame (0..1 per axis).
+        gm = sim.gimbal
+        dur = getattr(gm, "pan_sat", 0.0) or 0.0
+        dtl = getattr(gm, "tilt_sat", 0.0) or 0.0
+        self.sat_samples.append((dur, dtl))
+        if dur >= 0.999 or dtl >= 0.999:
+            self.sat_frames += 1
 
         sim_t = float(r.get("t", 0.0))
         if visible:
@@ -157,6 +168,9 @@ class PerformanceTracker:
         mean_vision_trust = (sum(v for v, _ in self.trust_samples) / nt) if nt else None
         mean_model_trust = (sum(m for _, m in self.trust_samples) / nt) if nt else None
         nu = len(self.unc_samples)
+        ns = len(self.sat_samples)
+        mean_sat = (sum(max(s[0], s[1]) for s in self.sat_samples) / ns) if ns else None
+        max_sat = (max(max(s[0], s[1]) for s in self.sat_samples)) if ns else None
         return dict(
             fps=self.last_tick,
             mean_err_deg=mean_err,
@@ -180,6 +194,9 @@ class PerformanceTracker:
             mean_model_trust_pct=mean_model_trust * 100 if mean_model_trust is not None else None,
             mean_uncertainty_px=(sum(self.unc_samples) / nu) if nu else None,
             max_uncertainty_px=max(self.unc_samples) if nu else None,
+            mean_saturation_pct=mean_sat * 100 if mean_sat is not None else None,
+            max_saturation_pct=max_sat * 100 if max_sat is not None else None,
+            saturation_frames=self.sat_frames,
             path="",
         )
 
@@ -227,6 +244,10 @@ class PerformanceTracker:
                         if stats["mean_uncertainty_px"] is not None else "n/a"])
             w.writerow(["max_uncertainty_px", round(stats["max_uncertainty_px"], 2)
                         if stats["max_uncertainty_px"] is not None else "n/a"])
+            w.writerow(["max_gimbal_saturation_pct",
+                        round(stats["max_saturation_pct"], 1)
+                        if stats["max_saturation_pct"] is not None else "n/a"])
+            w.writerow(["gimbal_saturation_frames", self.sat_frames])
             w.writerow(["states", {k: round(v / max(1, self.frame_count) * 100, 1)
                                    for k, v in self.state_time.items()}])
             return path

@@ -44,11 +44,15 @@ class ConfidenceState:
     # ------------------------------------------------------------------
     def update(self, *, identity_src, snr, centroid_residual_px,
                pred_residual_deg, pred_scale_deg, model_conf, dist_level,
-               point_err_deg, point_err_scale_deg):
+               point_err_deg, point_err_scale_deg, unc_sigma_px=None):
         """Refresh all confidence values from this frame's signals.
 
         All arguments are raw, un-normalised measurements; normalisation to
-        0-1 happens here, with physically-motivated saturations.
+        0-1 happens here, with physically-motivated saturations.  `unc_sigma_px`
+        (the tracker's INTERNAL position uncertainty, uncapped) folds into the
+        position confidence so confidence is *uncertainty-aware*: as the belief
+        grows less certain the reported position confidence drops toward zero at
+        the credibility/reacquisition line.
         """
         # Identity: appearance (identity_src, 0-1) is the base; the object's
         # own 15 Hz modulation (if known) reinforces it quadratically.
@@ -62,6 +66,14 @@ class ConfidenceState:
         snr_c = max(0.0, min(1.0, snr / (snr + 3.0)))          # snr 20 -> 0.87
         stab_c = max(0.0, min(1.0, 1.0 - self._centroid_rms_px / 6.0))
         self.position = 0.7 * snr_c + 0.3 * stab_c
+        # uncertainty-aware penalty: internal sigma past the nominal base pulls
+        # position confidence down, reaching zero at the credibility line
+        if unc_sigma_px is not None:
+            unc_span = max(1e-9, config.REACQUIRE_UNCERTAINTY_PX
+                           - config.UNCERTAINTY_BASE_PX)
+            unc_frac = max(0.0, (unc_sigma_px - config.UNCERTAINTY_BASE_PX)
+                           / unc_span)
+            self.position = min(self.position, 1.0 - min(1.0, unc_frac))
 
         # Prediction: residual between model prior and observation, scaled by
         # the residual scale and suppressed by the disturbance level.  A target

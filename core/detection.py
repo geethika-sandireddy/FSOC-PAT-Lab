@@ -91,7 +91,7 @@ class DetectionEngine:
                 tr["hist"].append((self._frame, cand.peak, cand.area))
                 cand.track_id = tr["id"]
                 cand.track_age = tr["age"]
-                cand.track_mod = self._track_mod_corr(tr["hist"])
+                self._assign_mod_score(cand, tr["hist"])
                 return
             # true new object
             self._track_seq += 1
@@ -109,14 +109,15 @@ class DetectionEngine:
             self._tracks.append(dict(
                 id=self._track_seq, az=cand.los_az, el=cand.los_el,
                 age=1, miss=0, claimed=True, hist=hist))
-        cand.track_mod = self._track_mod_corr(self._tracks[best_i]["hist"] if best_i >= 0
-                                              else self._tracks[-1]["hist"])
+        self._assign_mod_score(cand, self._tracks[best_i]["hist"] if best_i >= 0
+                               else self._tracks[-1]["hist"])
 
     @staticmethod
     def _track_mod_corr(hist):
         """Sign-agreement of a track's PEAK brightness history against the
-        known 15 Hz beacon square-wave template, best of 0..2 frame lags
-        (phase robust).  A beacon track agrees strongly; a static distractor
+        known 15 Hz beacon square-wave template, best of 0..N frame lags where
+        N = MODULATION_TOLERANCE_FRAMES (phase robust; default N=2 preserves the
+        legacy 0..2 set).  A beacon track agrees strongly; a static distractor
         / noise blob wanders around 0.5.  Returns 0.0 until enough samples
         have accumulated on one persistent blob track."""
         n = len(hist)
@@ -126,7 +127,7 @@ class DetectionEngine:
         frames = [v[0] for v in hist]
         mean_v = sum(vals) / n
         best = 0.0
-        for lag in (0, 1, 2):
+        for lag in range(config.MODULATION_TOLERANCE_FRAMES + 1):
             agree = 0.0
             for v, f in zip(vals, frames):
                 sig = 1.0 if v > mean_v else -1.0
@@ -135,6 +136,15 @@ class DetectionEngine:
             if c > best:
                 best = c
         return best
+
+    @staticmethod
+    def _assign_mod_score(cand, hist):
+        """Self-score how well a persistent blob track blinks at the beacon's
+        modulation frequency.  With MODULATION_ENABLED=False no modulation is
+        executed at all (the beacon is steady) and the score stays neutral 0.0
+        so tracking never leans on a meaningless signature."""
+        cand.track_mod = (DetectionEngine._track_mod_corr(hist)
+                          if config.MODULATION_ENABLED else 0.0)
 
     def _prune_tracks(self):
         """Age out tracks that have gone unseen for longer than TOL frames."""

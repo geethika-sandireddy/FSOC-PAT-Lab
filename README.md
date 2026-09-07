@@ -184,18 +184,21 @@ vs "how much do I believe the ephemeris model"* — and makes it visible.
   quiet links, rising past the 18 px re-acquire line under occlusions/fades.
   Inner tracking uses the *internal*, uncapped σ; the on-screen readout is
   capped at 24 px so a handling panel stays readable under SEVERE conditions.
-- **Reachable re-acquisition** (`core/tracking.py`) — while the beacon is lost
-  the old path is extrapolated, the gimbal is aimed at that lane, and the
-  association gate opens 2×: recovery is **REACQUIRING**, not a blind
-  SEARCHING sweep. Scripted as a live demo (`--inject recover`).
+- **Reachable, staged re-acquisition** (`core/tracking.py`) — on the first
+  missed frame the tracker enters **predictive COAST** (smoothed velocity +
+  lead/latency terms keep the gimbal walking), escalates through a 3-LEVEL
+  **REACQUIRING** ladder (gate multiplier `[1.0, 2.2, 4.0]`, faster sweeps,
+  ≈ 0.86 s total) when uncertainty crosses the 18 px credibility line, and
+  falls through to a blind SEARCHING sweep after the 1.0 s ladder timeout —
+  recovery is never a frozen lane. Scripted as a live demo (`--inject recover`).
 - **Adaptive trust** (`core/trust.py`) — mode-driven vision share:
   `VISION_DOMINANT` 0.85, `MODEL_DOMINANT` 0.30, `BALANCED` 0.4–0.6; hysteresis
   debounce; keeps the point when the prior jumps (Section on stress scenario).
-- **Scenario runs** — `--scenario none|wrongprior|dynamic|truststory` in
-  `metrics/stress_test.py`: a 0.35° ephemeris prior step + drag + random walk
+- **Scenario runs** — `--scenario none|wrongprior|dynamic|truststory|saturation`
+  in `metrics/stress_test.py`: a 0.35° ephemeris prior step + drag + random walk
   is re-baselined transparently (100% retention on EASY/HARD/ADVERSARIAL,
-  ≤ 1 false lock) and the trust pair visibly rebalances (SEVERE/ADVERSARIAL
-  shift MODEL_DOMINANT → BALANCED). The `truststory` vignette stages the one
+  `saturation` swaps in a fast 8 °/s orbit that pins the 5 °/s slew limiter and
+  exercises the gimbal-saturation telemetry). The `truststory` vignette stages the one
   failure model a leaky-absorbed bias *cannot* hide from — a beacon burn off
   its own ephemeris: the bias must chase at `acc·(t−7)`°/s, the model-honesty
   residual stays above the VISION margin, and **VISION_DOMINANT holds the

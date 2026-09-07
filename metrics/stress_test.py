@@ -79,6 +79,30 @@ class _PhasedManoeuvreOrbit:
         return self.inner.range_km(t)
 
 
+class _FastBeaconOrbit:
+    """Camera-can't-keep-up scenario (Part 3, Sec 11): a beacon whose angular
+    slew rate exceeds the gimbal's physical GIMBAL_MAX_SLEW_DEG_S cap.
+
+    az = 4.0*sin(2.0 t)  -> peak los rate = A*w = 8 deg/s > the 5 deg/s slew
+    cap, so the servo saturates (pan_sat/tilt_sat -> 1.0) and the residual
+    pointing error truthfully reflects the actuator limit rather than the
+    tracker.  The ephemeris prior is generated from this same fast orbit, so
+    the model is *correct* - the headroom loss is purely physical.
+    """
+    def __init__(self):
+        self._az_amp = 4.0
+        self._el_amp = 3.0
+        self._w = 2.0
+        self._range_base = 1000.0
+        self._range_var = 220.0
+        self._range_omega = 0.04
+    def relative_los_az_el(self, t):
+        return (self._az_amp * math.sin(self._w * t),
+                self._el_amp * math.sin(self._w * t * 0.8))
+    def range_km(self, t):
+        return self._range_base + self._range_var * math.sin(self._range_omega * t)
+
+
 # Trust-story vision-degradation band (phase B): the measurement is degraded
 # while the ephemeris is truthful, so the manager must smooth through it in
 # MODEL_DOMINANT (matching the dynamic-scenario fade recipe).
@@ -94,12 +118,20 @@ TRUSTSTORY_NOMINAL = dict(beacon_fade=10, sensor_noise=10, vibration=8,
 
 def run_trial(preset, seed, frames, dt=1.0 / config.FPS, scenario=None):
     from core.simulator import Simulator
+    from core.orbital import EphemerisModel
     from core.tracking import LOCKED, DEGRADED_LOCK
     from metrics.performance import PerformanceTracker
 
     sim = Simulator(preset_name=preset, seed=seed, dt=dt)
     perf = PerformanceTracker()
     _burn_t1 = config.TRUSTSTORY_BURN_T1
+
+    # --- Part 3, Sec 11: camera-can't-keep-up.  Replace the (slow) preset
+    # orbit with the fast-beacon orbit so the gimbal genuinely saturates. ---
+    if scenario == "saturation":
+        sim.scene.beacon.orbit = _FastBeaconOrbit()
+        sim.tracker.eph = EphemerisModel(sim.scene.beacon.orbit, seed=seed)
+        sim.eph = sim.tracker.eph
 
     # --- Phase 2 scenario hooks -------------------------------------------
     # wrongprior: the MotionModel drifts (ephemeris de facto corrupted), a
@@ -280,10 +312,12 @@ def main():
                     help="first seed (seeds = base .. base+trials-1, default 0)")
     ap.add_argument("--presets", default=",".join(config.PRESET_ORDER))
     ap.add_argument("--scenario", default="none",
-                    choices=("none", "wrongprior", "dynamic", "truststory"),
+                    choices=("none", "wrongprior", "dynamic", "truststory",
+                             "saturation"),
                     help="stress scenario "
                          "(none = canonical, wrongprior/dynamic = Phase 2, "
-                         "truststory = Phase 1 trust-manager vignette)")
+                         "truststory = Phase 1 trust-manager vignette, "
+                         "saturation = camera-can't-keep-up actuator limit)")
     ap.add_argument("--tag", default=None,
                     help="filename suffix (e.g. --tag v2 -> *_v2.csv/json)")
     ap.add_argument("--burn-t1", type=float, default=None,

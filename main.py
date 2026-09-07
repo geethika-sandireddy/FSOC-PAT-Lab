@@ -678,7 +678,10 @@ class App:
         W.hbar(cam, (10, 36, 110, 6), res["confidence"], T.C.STATE[st])
         T.text(cam, (124, 36), "conf", 8, T.C.TEXT_FAINT)
 
-        # ---- Phase 2: model-vision trust diagnostics (compact stack) ----
+        # ---- Phase 2 model-vision trust diagnostics (compact stack) ----
+        # Part 3 renders the adaptive trust as a dual bar (VISION vs MODEL)
+        # plus the live internal uncertainty and operating mode, and the phase /
+        # derived-disturbance readout below it.
         tr = self.sim.tracker
         cf = getattr(tr, "conf", None)
         if cf is not None:
@@ -689,12 +692,18 @@ class App:
                    8, T.C.TEXT_FAINT)
             tm = getattr(tr, "trust", None)
             if tm is not None:
-                T.text(cam, (10, 60),
-                       f"VL {tm.vision_trust:.2f}  ML {tm.model_trust:.2f}  "
-                       f"sigma {getattr(tr.unc, 'display_sigma_px', 0.0):.1f}px  "
-                       f"[{tm.mode}]",
+                # VISION-trust bar (cyan) and MODEL-trust bar (purple), each
+                # 0..1, with the current operating mode at the right edge
+                W.hbar(cam, (10, 58, 92, 5), tm.vision_trust, T.C.CYAN)
+                T.text(cam, (106, 55), f"VL {tm.vision_trust:.2f}",
                        8, T.C.TEXT_FAINT)
-            T.text(cam, (10, 72),
+                W.hbar(cam, (10, 66, 92, 5), tm.model_trust, T.C.PURPLE)
+                T.text(cam, (106, 63), f"ML {tm.model_trust:.2f}",
+                       8, T.C.TEXT_FAINT)
+                T.text(cam, (10, 74),
+                       f"sigma {getattr(tr.unc, 'display_sigma_px', 0.0):.1f}px  "
+                       f"[{tm.mode}]", 8, T.C.TEXT_FAINT)
+            T.text(cam, (10, 86),
                    f"ph {getattr(tr, 'phase', res['state'])}  "
                    f"dist {getattr(tr, 'dist_level_est', 0.0):.2f}",
                    8, T.C.TEXT_FAINT)
@@ -784,6 +793,44 @@ class App:
         # disturbance events: mark track-loss (beacon invisible) in red
         if not self.sim.last_result["beacon_visible"]:
             pygame.draw.rect(surf, (60, 20, 20), (plot.right - 3, plot.y, 3, plot.h))
+        # Part 3: mission state rails from the event journal (event_log).
+        self._draw_state_timeline(surf, plot)
+
+    def _draw_state_timeline(self, surf, plot):
+        """Horizontal rails of PAT state colour across the tracking window.
+
+        Each run spans the recorded [t0, t1) from sim.event_log in its
+        state colour (COAST/REACQ/LOCK/DEGRADED/LOST).  A dim cyan run is
+        the predictive-coast span, so the operator sees *why* the error is
+        flat even with no anchor blob.
+        """
+        tmax = max(0.001, self.sim.last_result.get("t", 0.0))
+        ev = list(getattr(self.sim, "event_log", ()))
+        y = plot.bottom - 8
+        band = pygame.Rect(plot.x, y, plot.w, 7)
+        pygame.draw.rect(surf, T.C.BG, band)
+        runs = []
+        if ev:
+            runs.append((0.0, ev[0][0], ev[0][1]))
+            for i, e in enumerate(ev):
+                t1 = ev[i + 1][0] if i + 1 < len(ev) else tmax
+                if t1 > e[0]:
+                    runs.append((e[0], t1, e[2]))
+        else:
+            runs.append((0.0, tmax, getattr(self.sim.tracker, "state", "SEARCHING")))
+        for t0, t1, st in runs:
+            x0 = plot.x + plot.w * (t0 / tmax)
+            x1 = plot.x + plot.w * (min(t1, tmax) / tmax)
+            if x1 <= x0:
+                continue
+            col = T.C.STATE.get(st, T.C.STATE["SEARCHING"])
+            if st == "COASTING":
+                col = T.C.STATE["REACQUIRING"]
+            if st == "SEARCHING":
+                col = T.C.AMBER_DIM
+            pygame.draw.rect(surf, col, (int(x0), y, int(x1 - x0), 7))
+        pygame.draw.rect(surf, T.C.BORDER, band, 1)
+        T.text(surf, (plot.x, y - 9), "STATE", 7, T.C.TEXT_FAINT)
 
     def _draw_camera_panel(self, surf, box):
         res = self.sim.last_result

@@ -74,6 +74,16 @@ BEACON_GLOW_MULT = 3.2               # glow extends this many core radii
 MODULATION_FREQ_HZ = 15.0            # beacon amplitude modulation (blinking)
 MODULATION_BRIGHT = 252              # bright phase of the modulation
 MODULATION_DIM = 118                 # dim phase (still detectable -> robust)
+# Modulation is an *implementation/design choice* for the simulated designated
+# beacon signature - it is NOT an ISRO requirement.  When MODULATION_ENABLED is
+# False the tracker still acquires/locks via the non-modulation evidence
+# (appearance + persistence + spatial consistency + SNR + ephemeris prior) and
+# all modulation checks are inert (no threshold, no penalty, no rejection).
+MODULATION_ENABLED = True
+# Phase tolerance of the 15 Hz sign-agreement correlators: best-of-(0..N) frame
+# lags, kept exactly as the legacy hardcoded 0..2 set at the default of 2
+# (phase-robust to the ~1 frame pipeline latency).
+MODULATION_TOLERANCE_FRAMES = 2
 
 # Per-run randomized ambiguity: the system is GIVEN a coarse ephemeris
 # prediction (this PS's central premise) with a bias that grows with time
@@ -127,10 +137,12 @@ PERSISTENCE_BOOST = 1.35             # acquisition fusion multiplier for age>=2 
 MOD_ASSOC_K = 1.6                    # how strongly a blob's own 15 Hz modulation
                                      # score lifts its association/fusion score
                                      # (beacon blinks -> wins over static decoys)
-ASSOC_TRACK_MOD_MIN = 0.55           # when ANY candidate's own-track area
-                                     # modulation clears this, association AND
-                                     # lock commit are restricted to the modulated
-                                     # set - static decoys hard-excluded
+ASSOC_TRACK_MOD_MIN = 0.55           # when a candidate's own-track area
+                                     # modulation clears this, the association /
+                                     # fusion boost (MOD_ASSOC_K, applied only
+                                     # while modulation identity is active) kicks
+                                     # in - the modulated beacon wins over static
+                                     # decoys that sit around 0.5
 
 # ---------------------------------------------------------------------------
 # Estimation / tracking state machine
@@ -139,6 +151,17 @@ ACQUIRE_CONFIRM_FRAMES = 3           # temporal confirmation before lock
 ACQUIRE_CONSISTENCY_PX = 14
 COAST_TIMEOUT_S = 0.45               # lost frames before entering SEARCH
 ASSOC_GATE_DEG = 0.30                # candidate->track association gate
+# Uncertainty-aware association gate (synthetic mode, modulation on or off):
+#    effective_gate = base_gate
+#                   + ASSOC_UNCERTAINTY_FACTOR * sigma_px (-> deg)
+#                   + ASSOC_LATENCY_MARGIN_FACTOR * motion during gimbal latency
+# clamped to ASSOC_MAX_GATE_DEG.  Uses the INTERNAL uncertainty estimator (the
+# HUD display cap must never gate loop behaviour).  Video mode keeps its own
+# wide field-facing gate and is not clamped here.
+ASSOC_UNCERTAINTY_FACTOR = 0.5       # gate grows with internal sigma (px)
+ASSOC_LATENCY_MARGIN_FACTOR = 1.0    # gate grows with predicted motion over the
+                                     # GIMBAL_LATENCY_FRAMES delay (deg)
+ASSOC_MAX_GATE_DEG = 0.6             # hard clamp of the effective gate (deg)
 MOD_CORREL_WIN = 18                  # frames of intensity history for modulation ID
 MOD_LOCK_THRESHOLD = 0.62            # correlation for beacon-lock commit (true:~0.95, decoy:<0.55)
 MOD_SUSPECT_FLOOR = 0.58             # locked object below this modulation corr for
@@ -195,11 +218,42 @@ REACQUIRE_UNCERTAINTY_PX = 18.0      # uncertainty above this -> active reacquis
 # a long outage cannot render a silly bar.  Reacquisition logic always reads
 # the internal value, so this cap never gates behaviour.
 UNCERTAINTY_DISPLAY_PX_CAP = 24.0
-# Association gate multiplier while in REACQUIRING: the "gate widens" while an
-# ambiguous re-observation is sought near the predicted LOS (control.py comment
-# for REACQUIRING).  Buffer, never a blind reset - _on_tracked still runs the
-# full appearance/modulation verification before re-committing LOCKED.
-REACQ_GATE_MULT = 2.0
+
+# ---------------------------------------------------------------------------
+# Predictive coast & staged reacquisition (PART 3)
+# ---------------------------------------------------------------------------
+# Predictive coast is a forward extrapolation of the last fused estimate:
+#     x_pred = x + v * dt   (velocity lead over the estimate's smoothing time
+#                            constant, plus the extra GIMBAL_LATENCY_FRAMES of
+#                            transport delay so the camera keeps leading the
+#                            beacon through a feedforward latency).
+# It is only valid for a bounded horizon - past that the (correctly) growing,
+# uncapped internal uncertainty means the belief is no longer trustworthy, so
+# the tracker must escalate.  All are tunables; COAST_TIMEOUT_S (above) is the
+# hard ceiling on any single predictive-coast leg.
+COAST_VELOCITY_LEAD_S = 0.10        # deg/s velocity lead applied on top of the
+                                    # estimate's own smoothing lag
+COAST_LATENCY_LEAD = True           # add GIMBAL_LATENCY_FRAMES of transport
+                                    # delay to the predictive lead
+# Staged reacquisition ladder.  Once a lock is lost and BEACON becomes
+# REACQUIRING, the recovery is a deterministic LEVEL 1 -> 2 -> 3 escalation,
+# each with its own configurable association-gate multiplier (radii around the
+# last LOS) and a per-level duration budget.  The gate widens while the ridge
+# of the (already grown) internal uncertainty is respected, so on a fast or
+# manoeuvring target the beacon links back at the first level that is wide
+# enough - never an immediate blind sweep.  Only after the FULL ladder times
+# out (~1.0 s) does the loop fall through to blind SEARCHING.  A re-observation
+# at any level still runs the full appearance/modulation verification before
+# LOCKED is re-committed (a widened gate never by-passes identity).
+REACQ_LEVEL_GATE_MULT = [1.0, 2.2, 4.0]        # per-level assoc-gate multiplier
+REACQ_LEVEL_DURATION_S = [0.30, 0.30, 0.26]    # per-level budget (sum ~0.86 s)
+REACQ_LEVEL_SEARCH_SPEED = [0.20, 0.45, 1.0]   # expanding-spiral growth scale
+REACQ_TIMEOUT_S = 1.0                          # hard cap on the whole ladder
+REACQ_LEVELS = len(REACQ_LEVEL_GATE_MULT)      # 3 (LEVEL 1..3)
+# Association gate multiplier while in REACQUIRING: replaced by the staged
+# per-level multipliers (REACQ_LEVEL_GATE_MULT above, Part 3) so the gate widens
+# with the recovery ladder instead of being a single fixed widen.
+# (Kept for documentation/history only.)
 # Model-honesty conversion: how strongly the filter's bias-CHASE RATE (deg/s)
 # counts as a prediction residual (deg).  A healthy ephemeris needs only tiny,
 # slow bias corrections; a corrupted prior or an unmodelled manoeuvre forces

@@ -101,6 +101,8 @@ The main camera/FOV view fills the majority of the screen and shows:
 - **Tracking reticle + ring**: Green ring + crosshair placed on the **locked** SAT-B beacon
 - **Synth-ephemeris prior marker**: Dashed amber diamond showing where the propagator predicts SAT-B should be (yellow = predicted)
 - **PAT state stepper** (top overlay): `PREDICT → POINT → SEARCH → TRACK → LOCK` with the active stage highlighted; shows `PREDICTIVE COAST` or `SEARCHING / LOST` on loss
+- **Trust stack** (left, top): compact **VISION-trust** (cyan) and **MODEL-trust** (purple) bars (0–1) from the adaptive model-trust estimator, with live internal `sigma …px` and operating mode (`[MODEL_DOMINANT]` / `[VISION_DOMINANT]` / `[BALANCED]`), plus the phase and derived-disturbance readout
+- **STATE timeline** (bottom of the error graph): colour rails of the PAT state journal (`COASTING`/`REACQUIRING`/`LOCKED`/`DEGRADED_LOCK`/`LOST`) so the operator sees *why* the error trace behaves the way it does
 - **FOV / beacon story banner** (bottom overlay): `OUTSIDE FOV → ACQUISITION WINDOW → BEACON ACQUIRED · LOCKED`
 - **POINTING ERROR** (hero, bottom-right): the live boresight error in **millidegrees (mdeg)** in large type, colour-coded (green < 0.10°, amber < 0.30°, red otherwise)
 
@@ -352,7 +354,7 @@ All output is saved to the `logs/` directory:
 
 - `stress_test_summary.csv` / `benchmark_summary.json`: canonical benchmark
   results (one row per preset); `_scenario` suffixed variants for
-  `wrongprior` / `dynamic` / `truststory` runs
+  `wrongprior` / `dynamic` / `truststory` / `saturation` runs
 - `phase2_trust_summary*.json`: trust/uncertainty telemetry, including the
   per-phase mode story for `truststory`
 - `run_*.csv`: Per-frame performance logs from GUI sessions
@@ -360,7 +362,7 @@ All output is saved to the `logs/` directory:
 
 ### CSV Format
 
-Performance logs include columns: `frame, state, est_err_deg, truth_az, truth_el, est_az, est_el, confidence, beacon_visible, fps`.
+Performance logs include columns: `frame, state, est_err_deg, truth_az, truth_el, est_az, est_el, confidence, beacon_visible, fps` plus, when the run recorded them, the actuator-observability columns `mean_saturation_pct, max_saturation_pct, saturation_frames` (gimbal pan/tilt clipping against the 5 °/s slew limiter).
 
 ---
 

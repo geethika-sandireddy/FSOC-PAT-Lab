@@ -170,7 +170,7 @@ Once both spatial consistency (3 frames) AND modulation correlation ≥ 0.62 are
 
 ### 6.4 COASTING
 
-If no candidate is detected (e.g., during obstacle occlusion), the tracker enters COASTING mode, extrapolating the boresight from the orbital prior while holding the bias constant. Coasting is time-limited (`COAST_TIMEOUT_S`); while unobserved the internal position uncertainty grows quadratically with the tuned coast constants (`UNCERTAINTY_COAST_GROW_S`, `UNCERTAINTY_COAST_GROW2_S` — the growth is slow near the beacon, faster the farther the coast strays, so mis-aging a healthy link does not inflate sigma). If the beacon is re-detected the lock resumes; if the internal uncertainty crosses the credibility line (`REACQUIRE_UNCERTAINTY_PX = 18 px`) the tracker escalates to REACQUIRING; if the coast timeout expires first, the tracker reverts to SEARCHING. The *telemetry* sigma shown in the HUD and benchmark tables is a separate, capped display channel (`UNCERTAINTY_DISPLAY_PX_CAP = 24 px`); the internal estimator keeps the true (uncapped) uncertainty so the re-acquire trigger is never sandbagged by the readout.
+If no candidate is detected (e.g., during obstacle occlusion), the tracker enters COASTING mode on the first missed frame, extrapolating the boresight from the last smoothed barycentric velocity with a small predictive lead (`COAST_VELOCITY_LEAD_S = 0.10` s) plus the servo transport-delay compensation (`COAST_LATENCY_LEAD`, `GIMBAL_LATENCY_FRAMES`), so the gimbal keeps riding the beacon's last known motion instead of freezing. Coasting is separately time-limited (`COAST_TIMEOUT_S`); while unobserved the internal position uncertainty grows quadratically with the tuned coast constants (`UNCERTAINTY_COAST_GROW_S`, `UNCERTAINTY_COAST_GROW2_S` — the growth is slow near the beacon, faster the farther the coast strays, so mis-aging a healthy link does not inflate sigma). If the beacon is re-detected the lock resumes; if the internal uncertainty crosses the credibility line (`REACQUIRE_UNCERTAINTY_PX = 18 px`) the tracker escalates to the staged REACQUIRING ladder (§6.6); if the coast-leg timeout expires first, the tracker reverts to SEARCHING. The *telemetry* sigma shown in the HUD and benchmark tables is a separate, capped display channel (`UNCERTAINTY_DISPLAY_PX_CAP = 24 px`); the internal estimator keeps the true (uncapped) uncertainty so the re-acquire trigger is never sandbagged by the readout.
 
 While **SEARCHING**, the same coast-growth model runs on the uncertainty channel, so confidence (and any partial track state) is carried across a search, and a fresh lock starts from a genuinely informed prior rather than reset sigma.
 
@@ -178,9 +178,26 @@ While **SEARCHING**, the same coast-growth model runs on the uncertainty channel
 
 Phase 2 banding: while a track is held, composite confidence ≥ 0.70 keeps the state LOCKED, whereas confidence in the 0.55–0.70 band holds the same target as **DEGRADED_LOCK** (weak signal — the estimator already smooths it; control keeps full pointing authority). Below 0.55 the suspect-floor / coast machinery owns the transition out of the lock.
 
-### 6.6 REACQUIRING
+### 6.6 REACQUIRING (staged, time-limited ladder)
 
-When coast uncertainty exceeds the 18 px credibility line the tracker stops blindly following a dead model. It enters **REACQUIRING**: the gimbal points at the estimate wrapped to the *latest extrapolated* ephemeris position (a lane that keeps walking rather than freezing), an expanding search sweeps around it until the beacon is re-detected and the lock is re-established (or the coast timeout reverts to SEARCHING). The re-acquisition association gate is opened to 2× the nominal prior lane (`REACQ_GATE_MULT = 2.0`) for REACQUIRING only, so a beacon that has drifted under the coast gets accepted back sooner; LOCKED association keeps the tight nominal gate. Sequence 9.5.1 shows the end-to-end recovery path firing in real time.
+When coast uncertainty exceeds the 18 px credibility line the tracker stops blindly following a dead model. It enters **REACQUIRING**: the gimbal points at the estimate wrapped to the *latest extrapolated* ephemeris position (a lane that keeps walking rather than freezing), and an expanding search sweeps around it until the beacon is re-detected. The re-acquisition association gate is progressively widened and the spiral sweep sped up in three configured **LEVELs** (`REACQ_LEVEL_GATE_MULT = [1.0, 2.2, 4.0]`, `REACQ_LEVEL_SEARCH_SPEED = [0.20, 0.45, 1.0]`), each with a per-level time budget (`REACQ_LEVEL_DURATION_S = [0.30, 0.30, 0.26] s`, total ≈ 0.86 s). A level only widens the *association* gate / sweep rate — the candidate must still pass full appearance + modulation verification in `_on_tracked` before LOCKED is re-committed, so a widened gate never by-passes identity. The whole ladder is hard-capped by `REACQ_TIMEOUT_S = 1.0` s, after which the loop falls through to a clean blind SEARCH (fresh acquisition state, uncertainty still carried). LOCKED/DEGRADED_LOCK association keeps the tight nominal gate. Sequence 9.5.1 shows the end-to-end recovery path firing in real time.
+
+A note on **mixing old and new limits**: the legacy single-shot `COAST_TIMEOUT_S` ceiling now applies only to the COAST leg; once the ladder is entered, `REACQ_TIMEOUT_S` owns the total reacquisition budget. This is intentional — a global `COAST_TIMEOUT_S` check across REACQUIRING would truncate the ladder inside its first level (the old `REACQ_GATE_MULT = 2.0` single-gate design is superseded by the staged `REACQ_LEVEL_GATE_MULT` list).
+
+**Predictive coast**: the coast/re-acquire estimate is extrapolated with the smoothed tracked velocity plus `COAST_VELOCITY_LEAD_S` and, when `COAST_LATENCY_LEAD`, the servo latency frames — so the estimate and therefore the gimbal keep walking at the beacon's last true rate rather than standing still while unobserved.
+
+### 6.7 Part 3 hardening and observability
+
+The recovery path and its reporting were hardened (all tunables in `config.py`):
+
+- **Predictive coast entry**: `_on_miss` explicitly transitions `LOCKED/DEGRADED_LOCK → COASTING` on the first missed frame, so the ladder always progresses *LOCKED → COASTING → REACQUIRING → SEARCHING* and the velocity-lead never "freezes" a stale prediction.
+- **Staged ladder, no shadowing**: the `COAST_TIMEOUT_S` legacy ceiling applies only to the COAST leg; the REACQUIRING ladder is owned by its own `REACQ_TIMEOUT_S` budget. (Found & fixed by smoke test S03/S04: a global ceiling used to truncate the ladder inside LEVEL 1.)
+- **Uncertainty-aware confidence** (`core/confidence.py`): the internal, uncapped position sigma folds into position confidence — `position = min(position, 1 − (σ − BASE)/(REACQ_PX − BASE))` — so confidence reaches 0 exactly at the credibility line rather than reporting inflated certainty while re-acquisition is imminent.
+- **Gimbal saturation observability** (`core/gimbal.py` + both simulators + `PerformanceTracker`): per-frame `pan_sat`/`tilt_sat` (0–1) derived from raw-vs-clamped acceleration/rate, surfaced in `last_result`, aggregated to `mean/max saturation %`, `sat_frames` and a `saturation_frames` CSV column. Nothing is modified in the loop; it is pure measurement.
+- **Structured recovery journal** (`sim.event_log`): an event-only `(t, from_state, to_state)` list drives the new HUD *STATE* timeline rails (coloured runs from the journal) and the recovery report; no computation reads it, so it cannot perturb the loop.
+- **Sample-rate-robust modulation template** (§7.2): the correlator template advances by `MODULATION_FREQ_HZ / fps` with `fps = 1/dt`, so a 30 fps MP4 pipeline acquires exactly like the 60 fps live loop (regression in live mode excluded; verified by smoke S08 and the 30 fps MP4 bypass run).
+
+The lightweight dependency-free suite `tests/smoke_test.py` locks all of the above (S01–S08) and runs in under a minute.
 
 ---
 
@@ -203,6 +220,8 @@ return max(corr_0, corr_1, corr_2)
 ```
 
 Since the true pipeline latency is approximately 1 frame (PSF rendering + sensor readout), one of the three lags always aligns with the true modulation phase. This raises the minimum correlation for the true beacon from ~0.50 (pre-fix) to ≥0.78 (post-fix) across all presets, while decoy correlations remain ≤0.56.
+
+The template is anchored to the loop's **real** sample rate (`self.fps = 1/dt`), not a hard-coded 60 fps: in Benchmark-2 MP4 mode the video drives the closed loop at 30 fps and the modulation phase must advance by `MODULATION_FREQ_HZ / fps = 0.5` per frame, not `0.25`. This keeps acquisition phase-correct at both 60 fps (live) and 30 fps (MP4), verified by the 30 Hz smoke test (S08) and the MP4 bypass run.
 
 ### 7.3 Correlation Metric
 

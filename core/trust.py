@@ -53,7 +53,8 @@ class AdaptiveTrustManager:
     def _snr_norm(snr):
         return min(1.0, snr / (snr + 10.0))
 
-    def update(self, *, conf, mod_score, snr, dist_level, visible):
+    def update(self, *, conf, mod_score, snr, dist_level, visible,
+               mod_enabled=True):
         self.samples += 1
 
         identity = conf.identity if visible else 0.0
@@ -61,10 +62,16 @@ class AdaptiveTrustManager:
         snr_n = self._snr_norm(snr) if visible else 0.0
         centroid_stab = conf.position if visible else 0.0
 
-        wv = (config.TRUST_VISION_W_ML + config.TRUST_VISION_W_MOD
+        # When modulation identity is unavailable (MODULATION_ENABLED=False or
+        # video mode) its vision-fusion weight is dropped and the remaining
+        # evidence (AI appearance, SNR, centroid stability) is renormalised by
+        # the reduced weight sum - an absent beacon signature neither drags
+        # vision_trust down nor claims a share it cannot substantiate.
+        w_mod = config.TRUST_VISION_W_MOD if mod_enabled else 0.0
+        wv = (config.TRUST_VISION_W_ML + w_mod
               + config.TRUST_VISION_W_SNR + config.TRUST_VISION_W_CENTROID)
         vision = (config.TRUST_VISION_W_ML * identity
-                  + config.TRUST_VISION_W_MOD * mod_n
+                  + w_mod * mod_n
                   + config.TRUST_VISION_W_SNR * snr_n
                   + config.TRUST_VISION_W_CENTROID * centroid_stab) / wv
 
