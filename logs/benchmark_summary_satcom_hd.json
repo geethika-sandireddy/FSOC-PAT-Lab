@@ -1,0 +1,52 @@
+{
+  "commit": "91b4a2a",
+  "generated": "2026-09-07 14:31:54",
+  "presets": [
+    "EASY",
+    "MODERATE"
+  ],
+  "seeds": [
+    0
+  ],
+  "frames_per_trial": 480,
+  "scenario": "satcom",
+  "camera_resolution": "640x480",
+  "fov_deg": "4.0x3.0",
+  "pixels_per_deg": 160.0,
+  "gimbal_slew_deg_s": 5.0,
+  "gimbal_tilt_deg_s": 5.0,
+  "results": [
+    {
+      "preset": "EASY",
+      "acq_min": 0.2333333333333333,
+      "acq_max": 0.2333333333333333,
+      "ret_min": 74.51820128479658,
+      "ret_max": 74.51820128479658,
+      "est_mean_min": 0.001042395668165116,
+      "est_mean_max": 0.001042395668165116,
+      "est_p95_max": 0.001817598272432191,
+      "point_mean_min": 0.1844266357395417,
+      "point_mean_max": 0.1844266357395417,
+      "strike_max": 0,
+      "false_lock_total": 0,
+      "fps_min": 22.193337788327703,
+      "fps_max": 22.193337788327703
+    },
+    {
+      "preset": "MODERATE",
+      "acq_min": 0.2333333333333333,
+      "acq_max": 0.2333333333333333,
+      "ret_min": 91.00642398286938,
+      "ret_max": 91.00642398286938,
+      "est_mean_min": 0.011639028809488314,
+      "est_mean_max": 0.011639028809488314,
+      "est_p95_max": 0.003621856239204905,
+      "point_mean_min": 0.13976486378955116,
+      "point_mean_max": 0.13976486378955116,
+      "strike_max": 0,
+      "false_lock_total": 0,
+      "fps_min": 21.808330182563076,
+      "fps_max": 21.808330182563076
+    }
+  ]
+}

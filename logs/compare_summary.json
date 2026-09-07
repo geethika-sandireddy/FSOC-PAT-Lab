@@ -1,0 +1,98 @@
+{
+  "meta": {
+    "trials": 1,
+    "seconds": 6.0
+  },
+  "results": {
+    "EASY": {
+      "baseline": {
+        "acq": 0.016666666666666666,
+        "mean_deg": 0.04518805857244903,
+        "rms_deg": 0.10635425702109076,
+        "ret_pct": 100.0,
+        "false_locks": 0,
+        "reacq_s": NaN
+      },
+      "adaptive": {
+        "acq": 0.2333333333333333,
+        "mean_deg": 0.029666819589568176,
+        "rms_deg": 0.060259916217903504,
+        "ret_pct": 96.38888888888889,
+        "false_locks": 0,
+        "reacq_s": NaN
+      }
+    },
+    "MODERATE": {
+      "baseline": {
+        "acq": 0.016666666666666666,
+        "mean_deg": 0.17906871099665223,
+        "rms_deg": 0.19193193151785057,
+        "ret_pct": 100.0,
+        "false_locks": 0,
+        "reacq_s": NaN
+      },
+      "adaptive": {
+        "acq": 0.2333333333333333,
+        "mean_deg": 0.02862844299726037,
+        "rms_deg": 0.0585070958790926,
+        "ret_pct": 96.38888888888889,
+        "false_locks": 0,
+        "reacq_s": NaN
+      }
+    },
+    "HARD": {
+      "baseline": {
+        "acq": 0.016666666666666666,
+        "mean_deg": 0.17429689592800968,
+        "rms_deg": 0.19356252157591844,
+        "ret_pct": 100.0,
+        "false_locks": 4,
+        "reacq_s": NaN
+      },
+      "adaptive": {
+        "acq": 0.2333333333333333,
+        "mean_deg": 0.037427589799930897,
+        "rms_deg": 0.07027921021391267,
+        "ret_pct": 96.38888888888889,
+        "false_locks": 0,
+        "reacq_s": NaN
+      }
+    },
+    "SEVERE": {
+      "baseline": {
+        "acq": 0.016666666666666666,
+        "mean_deg": 0.32674301292034336,
+        "rms_deg": 0.345829723255608,
+        "ret_pct": 100.0,
+        "false_locks": 7,
+        "reacq_s": NaN
+      },
+      "adaptive": {
+        "acq": 0.6000000000000002,
+        "mean_deg": 0.29782809894668255,
+        "rms_deg": 0.3291010499534848,
+        "ret_pct": 81.94444444444444,
+        "false_locks": 1,
+        "reacq_s": 0.4999999999999951
+      }
+    },
+    "ADVERSARIAL": {
+      "baseline": {
+        "acq": 0.016666666666666666,
+        "mean_deg": 0.32875263523614495,
+        "rms_deg": 0.334428735522322,
+        "ret_pct": 100.0,
+        "false_locks": 9,
+        "reacq_s": NaN
+      },
+      "adaptive": {
+        "acq": 0.2333333333333333,
+        "mean_deg": 0.06292486714538477,
+        "rms_deg": 0.08291624375649193,
+        "ret_pct": 96.38888888888889,
+        "false_locks": 0,
+        "reacq_s": NaN
+      }
+    }
+  }
+}

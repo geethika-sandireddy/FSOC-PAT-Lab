@@ -57,6 +57,7 @@ def run_bypass(input_path, output_path=None, verbose=True):
         width=sim.video_w,
         height=sim.video_h,
         total_frames=total_frames,
+        processing_time_s=wall,
         acquisition_time_s=sim.acquisition_time_s,
         retention_total_pct=(locked / total_frames * 100) if total_frames else 0.0,
         centroid_mean_px=float(np.mean(errs)) if errs.size else 0.0,
@@ -98,6 +99,9 @@ def run_bypass(input_path, output_path=None, verbose=True):
               + (f"  (mean {stats['mean_reacq_s']:.3f}s)"
                  if stats["mean_reacq_s"] else ""))
         print(f"  False locks:             {stats['false_lock_events']}")
+        print(f"  Processing time:        {wall:.2f}s wall")
+        print(f"  Actuator:               PTZ bypassed in video mode - gimbal")
+        print(f"                          static (saturation n/a)")
         print(f"{'='*60}")
 
     if output_path is None:
@@ -112,7 +116,9 @@ def run_bypass(input_path, output_path=None, verbose=True):
         w.writerow(["video_fps", round(sim.video_fps, 2)])
         w.writerow(["total_frames", total_frames])
         w.writerow(["processing_fps", round(stats["fps"], 2)])
+        w.writerow(["processing_time_s", round(wall, 3)])
         w.writerow(["ground_truth_used", "yes" if truth_csv else "no"])
+        w.writerow(["actuator_saturation", "n/a (PTZ bypassed; gimbal static)"])
         w.writerow(["acquisition_time_s",
                     round(stats["acquisition_time_s"], 3)
                     if stats["acquisition_time_s"] else "never_locked"])

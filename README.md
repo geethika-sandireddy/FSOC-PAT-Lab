@@ -38,6 +38,15 @@ python -m metrics.mp4_bypass -i path/to/video.mp4
 # Generate a synthetic benchmark video with selectable noise (gaussian / salt_pepper / poisson)
 python -m metrics.synthetic_video --out logs/classB.mp4 --noise gaussian,salt_pepper
 
+# SAT-to-SAT space link: vacuum-path stress scenario (scripted LOS outage inside an 8s run)
+python -m metrics.stress_test --scenario satcom --trials 1 --frames 480
+
+# Deterministic recovery story with a CSV timeline for the judging panel
+python -m metrics.scenario_demo --inject recover --platform SATELLITE_SATELLITE --fps 60 --out recovery.csv
+
+# Produce the recovery story at the 30 Hz sensor rate (same deterministic story)
+python -m metrics.scenario_demo --inject recover --platform SATELLITE_SATELLITE --fps 30 --out recovery30.csv
+
 # Train the ML classifier (pre-trained weights baked in)
 python -m ai.train_classifier
 ```
@@ -83,8 +92,10 @@ main.py                    Mission console GUI (pygame-ce 2.5.8)
 ├── ai/classifier.py       Baked logistic-regression weights; single-scenario snapshot
 ├── ai/train_classifier.py Whole-seed train/val/test training (no frame leakage)
 ├── metrics/performance.py CSV logging, live stats (acquisition, retention, error, reacquisition, false-lock)
-├── metrics/stress_test.py Multi-trial headless benchmark harness (canonical sweep + wrongprior/dynamic/truststory scenarios)
-├── metrics/scenario_demo.py Scripted acquire/lose/coast/reacquire recovery demo --inject recover|occlude|fade
+├── metrics/stress_test.py Multi-trial headless benchmark harness (canonical sweep + wrongprior/dynamic/truststory/saturation/satcom scenarios)
+├── metrics/scenario_demo.py Scripted acquire/lose/coast/reacquire recovery demo --inject recover|occlude|fade (+ recovery CSV timeline)
+├── metrics/compare_trackers.py Baseline-vs-adaptive A/B (identical seeds, shared platform physics → logs/compare_summary.json)
+├── metrics/mp4_bypass.py  Benchmark-2 MP4 bypass (processing time + actuator line per run)
 └── config.py              All tunables, difficulty presets, servo parameters
 ```
 
@@ -166,7 +177,46 @@ sub-2 px error, no false locks, and instant (< 0.15 s) acquisition:
 The bypass is resolution/codec/framerate agnostic (errors are measured in the
 video's own pixel plane). Non-repo clips were also checked — 1280×720 @ 25 fps
 (Gaussian + salt-and-pepper) and a 640×480 poisson-noise clip (XVID container):
-mean 1.22 px / 0.53 px, 0 false locks, 0 re-acquisitions.
+mean 1.22 px / 0.53 px, 0 false locks, 0 re-acquisitions. Every MP4 run also
+reports **processing time** (wall clock) and an explicit **actuator** line
+(`n/a (PTZ bypassed; gimbal static)` in video mode, since the coarse-pointing
+servo is bypassed when frames are grader-supplied).
+
+---
+
+## Scenario Awareness (FSOC link semantics)
+
+The disturbance model is **link-aware**: a SAT-to-SAT terminal pair flies a
+vacuum space path where atmospheric weather does not exist, while UAV-SAT and
+UAV-UAV links keep the full weather engine.
+
+- `core/platforms.py` is the single source of truth: `atmosphere_allowed()`
+  returns `False` for `SATELLITE_SATELLITE` (with `ATMOSPHERIC_BLOCKED_REASON`
+  and human-readable `disturbance_kind_label()`).
+- SAT-SAT runs force the backend atmosphere to `CLEAR`, gate the weather
+  chips (dim box + strike-X + "###" placeholders in the UI), disable the
+  turbulence slider, and set the mission panel **Path** row to
+  `SPACE-PATH (weather off)`. Allowing haze/fog/rain on a space link is
+  impossible from both the CLI and the GUI.
+- UAV-SAT / UAV-UAV (and no platform) behave exactly as before — weather,
+  turbulence slider and all atmospheric conditions are selectable.
+- Validated by smoke tests `S09`/`S10` (gating + accidental-apply prevention).
+
+---
+
+## Automated Tests
+
+`python -m tests.smoke_test` — 13 deterministic, no-network, no-GPU tests
+(completed in < 1 minute; `S13` adds an explicit 60 Hz `dt` case):
+
+| ID | Test |
+|----|------|
+| S01–S08 | Lock, transitions, coast/reacquire timeout, REACQ ladder, no false lock, uncertainty-aware confidence, gimbal-saturation telemetry, MP4-rate `dt` |
+| S09 | Scenario-aware atmosphere gating (SAT-SAT blocks & forces CLEAR; UAV-SAT/UAV-UAV allow) |
+| S10 | Disabled atmosphere is never applied to a space link (no NaN, no energy injection) |
+| S11 | Recovery state sequence: LOCKED → DEGRADED_LOCK → COASTING → REACQUIRING → LOCKED after a scripted LOS blank |
+| S12 | Actuator limits reachable: a too-fast orbit pins the slew limiter (`gimbal_sat_pan > 0.5`) |
+| S13 | Explicit 60 Hz `dt` (1/60) runs without error |
 
 ---
 

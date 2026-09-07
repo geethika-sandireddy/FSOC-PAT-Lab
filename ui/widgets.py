@@ -82,12 +82,14 @@ class Slider:
     handle_event returns 'changed' bool; GUI polls .value after events.
     """
 
-    def __init__(self, rect, label, value=0, color=T.C.CYAN, fmt="{:>3d}"):
+    def __init__(self, rect, label, value=0, color=T.C.CYAN, fmt="{:>3d}",
+                 enabled=True):
         self.rect = pygame.Rect(rect)
         self.label = label
         self.value = int(round(clampf(value, 0, 100)))
         self.color = color
         self.fmt = fmt
+        self.enabled = enabled
         self.dragging = False
 
     @property
@@ -98,12 +100,21 @@ class Slider:
         self.value = int(round(clampf(f * 100.0, 0, 100)))
 
     def hit(self, pos):
-        return self.rect.collidepoint(pos)
+        return self.selected_enabled() and self.rect.collidepoint(pos)
+
+    def selected_enabled(self):
+        """Hit-testing honours the scenario gate: a disabled slider is inert."""
+        return self.enabled
 
     def drag_to(self, x):
+        if not self.enabled:
+            return
         self.set_frac((x - self.rect.x) / self.rect.w)
 
     def draw(self, surf, value_text=None):
+        if not self.enabled:
+            self._draw_disabled(surf, value_text)
+            return
         T.text(surf, (self.rect.x, self.rect.y - 6), self.label, 11, T.C.TEXT_DIM)
         track = pygame.Rect(self.rect.x, self.rect.y + 14, self.rect.w, 8)
         pygame.draw.rect(surf, T.C.PANEL_2, track)
@@ -116,6 +127,15 @@ class Slider:
         T.text(surf, (track.right, track.y - 5),
                value_text if value_text is not None else self.fmt.format(self.value),
                11, T.C.TEXT, anchor="tr")
+
+    def _draw_disabled(self, surf, value_text=None):
+        T.text(surf, (self.rect.x, self.rect.y - 6),
+               self.label + "  (atmosphere off)", 10, T.C.TEXT_FAINT)
+        track = pygame.Rect(self.rect.x, self.rect.y + 14, self.rect.w, 8)
+        pygame.draw.rect(surf, T.C.PANEL_2, track)
+        pygame.draw.rect(surf, T.C.BORDER_DIM, track, 1)
+        T.text(surf, (track.right, track.y - 5),
+               "0", 11, T.C.TEXT_FAINT, anchor="tr")
 
 
 # ------------------------------------------------------------------ button
@@ -149,7 +169,18 @@ class Chip:
     def hit(self, pos):
         return self.rect.collidepoint(pos)
 
-    def draw(self, surf, selected=False):
+    def draw(self, surf, selected=False, enabled=True):
+        if not enabled:
+            # classic "disabled" treatment: dim box, faint label + strike-X
+            pygame.draw.rect(surf, T.C.PANEL_2, self.rect)
+            pygame.draw.rect(surf, T.C.BORDER_DIM, self.rect, 1)
+            x, y, w, h = self.rect
+            col = T.C.TEXT_FAINT
+            pygame.draw.line(surf, col, (x + 4, y + 4), (x + w - 5, y + h - 5), 1)
+            pygame.draw.line(surf, col, (x + w - 5, y + 4), (x + 4, y + h - 5), 1)
+            T.text(surf, (self.rect.centerx, self.rect.centery),
+                   self.label, 10, T.C.TEXT_FAINT, anchor="c")
+            return
         col = self.color if selected else T.C.TEXT_DIM
         fill = tuple(max(0, c // 3) for c in self.color) if selected else T.C.PANEL_2
         pygame.draw.rect(surf, fill, self.rect)

@@ -103,6 +103,26 @@ class _FastBeaconOrbit:
         return self._range_base + self._range_var * math.sin(self._range_omega * t)
 
 
+class _SpaceStressOrbit:
+    """Combined space-path stress (Part 3, Sec 12 / Sec 4 of the hardening
+    pass): the primary SAT-SAT benchmark.  Fast angular motion whose peak LOS
+    rate stays just inside the gimbal slew budget (~4 deg/s < the 5 deg/s
+    cap) so the *target motion + jitter + fading* - not the actuator - is the
+    challenge; a scripted LOS outage inside the scenario forces the recovered
+    coast -> reacquisition -> re-lock path.  No atmospheric content.
+    """
+    def __init__(self):
+        self._azm = 2.0
+        self._elm = 1.2
+        self._w = 1.4
+        self._range = 1000.0
+    def relative_los_az_el(self, t):
+        return (self._azm * math.sin(self._w * t) + 0.28 * math.sin(3.0 * self._w * t),
+                self._elm * math.sin(0.7 * self._w * t) + 0.20 * math.sin(2.3 * self._w * t))
+    def range_km(self, t):
+        return self._range
+
+
 # Trust-story vision-degradation band (phase B): the measurement is degraded
 # while the ephemeris is truthful, so the manager must smooth through it in
 # MODEL_DOMINANT (matching the dynamic-scenario fade recipe).
@@ -194,14 +214,38 @@ def run_trial(preset, seed, frames, dt=1.0 / config.FPS, scenario=None):
         _eph_upload_t = _burn_t1
         _eph_upload_done = False
 
+    # --- Part 3, Sec 12: the primary SAT-SAT stress benchmark -------------
+    # Only space-path disturbances are physical on a vacuum link: fast
+    # angular motion, reaction-wheel jitter (vibration), thermal sensor
+    # noise, station-keeping slews (jerk) and beacon intensity fading.
+    # Turbulence is explicitly zeroed (no atmosphere) and no atmosphere
+    # engine condition is requested.  A scripted LOS outage in [6.0, 6.6) s
+    # forces the COASTING -> REACQUIRING (ladder) -> LOCKED recovery path.
+    if scenario == "satcom":
+        sim.scene.beacon.orbit = _SpaceStressOrbit()
+        sim.tracker.eph = EphemerisModel(sim.scene.beacon.orbit, seed=seed)
+        sim.eph = sim.tracker.eph
+        sim.disturbance.turbulence = 0
+        sim.disturbance.vibration = 30
+        sim.disturbance.sensor_noise = 25
+        sim.disturbance.jerk_prob = 4
+        sim.disturbance.beacon_fade = 40
+
     post_ret_locked = post_ret_visible = 0
     first_visible_lock = False
     mode_hist = {}
     phase_hist = {ph: {} for ph in ("A", "B", "C", "D")}
     mode_transitions = []
     _prev_mode = None
+    _satcom_orig_int = sim.scene.beacon.intensity
 
     for fi in range(frames):
+        # satcom scripted LOS outage: [6.0, 6.6) s of true blank -> the
+        # tracker must coast, run the reacquisition ladder and re-lock when
+        # the beacon returns.
+        if scenario == "satcom":
+            sim.scene.beacon.intensity = (lambda _t: 0.0) if 6.0 <= sim.t < 6.6 \
+                else _satcom_orig_int
         # dynamic: a mid-run "solar storm" ramps every disturbance 10x
         if scenario == "dynamic" and sim.t == 7.5:
             sim.disturbance.turbulence = 80
@@ -313,11 +357,13 @@ def main():
     ap.add_argument("--presets", default=",".join(config.PRESET_ORDER))
     ap.add_argument("--scenario", default="none",
                     choices=("none", "wrongprior", "dynamic", "truststory",
-                             "saturation"),
+                             "saturation", "satcom"),
                     help="stress scenario "
                          "(none = canonical, wrongprior/dynamic = Phase 2, "
                          "truststory = Phase 1 trust-manager vignette, "
-                         "saturation = camera-can't-keep-up actuator limit)")
+                         "saturation = camera-can't-keep-up actuator limit, "
+                         "satcom = primary SAT-SAT space-path stress + "
+                         "scripted LOS outage)")
     ap.add_argument("--tag", default=None,
                     help="filename suffix (e.g. --tag v2 -> *_v2.csv/json)")
     ap.add_argument("--burn-t1", type=float, default=None,

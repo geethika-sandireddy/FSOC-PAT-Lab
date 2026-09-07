@@ -32,6 +32,7 @@ import numpy as np
 import config
 from core.simulator import Simulator
 from core.geometry import azel_unit, sd_angle_deg, project_point_into_camera
+from core.platforms import atmosphere_allowed, disturbance_kind_label
 from metrics.performance import PerformanceTracker
 from ui import theme as T
 from ui import widgets as W
@@ -65,6 +66,9 @@ class App:
         self.preset = preset
         self.platform_mode = platform_mode or "SATELLITE_SATELLITE"
         self.atmosphere = atmosphere or "CLEAR"
+        from core.platforms import atmosphere_allowed
+        if not atmosphere_allowed(self.platform_mode) and self.atmosphere != "CLEAR":
+            self.atmosphere = "CLEAR"
         self.motion_override = motion_type
         self.shape_override = target_shape
         self.size_override = target_size
@@ -103,7 +107,8 @@ class App:
         self.error_spark = deque(maxlen=1800)
         self.sliders = {
             "turbulence": W.Slider((1296, 600, 282, 22), "TURBULENCE",
-                                   self.sim.preset.get("turbulence", 0), T.C.PURPLE),
+                                   self.sim.preset.get("turbulence", 0), T.C.PURPLE,
+                                   enabled=atmosphere_allowed(self.platform_mode)),
             "vibration": W.Slider((1296, 628, 282, 22), "VIBRATION",
                                   self.sim.preset.get("vibration", 0), T.C.AMBER),
             "sensor_noise": W.Slider((1296, 656, 282, 22), "SENSOR NOISE",
@@ -149,13 +154,43 @@ class App:
         self._ret = pygame.Rect(0, 0, CAM_W, CAM_H)
 
     # ------------------------------------------------------------------
+    def _atmosphere_allowed(self):
+        from core.platforms import atmosphere_allowed
+        return atmosphere_allowed(self.platform_mode)
+
+    def _platform_label(self):
+        return {"SATELLITE_SATELLITE": "SAT-SAT",
+                "UAV_SATELLITE": "UAV-SAT",
+                "UAV_UAV": "UAV-UAV"}.get(self.platform_mode, self.platform_mode)
+
+    def _platform_atm_default(self):
+        from core.platforms import PLATFORM_MODES
+        pm = PLATFORM_MODES.get(self.platform_mode, {})
+        return pm.get("atmosphere", "CLEAR")
+
+    def _select_platform(self, pm):
+        """Switch platform mode, re-deriving the atmosphere so the scenario
+        gate is respected immediately (SAT-SAT drops to CLEAR; a UAV link
+        picks up the platform's own default weather)."""
+        self.platform_mode = pm
+        from core.platforms import atmosphere_allowed
+        if not atmosphere_allowed(pm):
+            self.atmosphere = "CLEAR"
+        elif self.atmosphere == "CLEAR":
+            self.atmosphere = self._platform_atm_default()
+        self.sliders["turbulence"].enabled = atmosphere_allowed(pm)
+        self._reset()
+
     def sync_sliders(self):
         for key, s in self.sliders.items():
             s.value = self.sim.disturbance.__getattribute__(key)
 
     def apply_sliders(self):
         d = self.sim.disturbance
-        d.turbulence = int(self.sliders["turbulence"].value)
+        if self.sliders["turbulence"].enabled:
+            d.turbulence = int(self.sliders["turbulence"].value)
+        else:
+            d.turbulence = 0
         d.vibration = int(self.sliders["vibration"].value)
         d.sensor_noise = int(self.sliders["sensor_noise"].value)
         d.jerk_prob = int(self.sliders["jerk_prob"].value)
@@ -224,13 +259,13 @@ class App:
         elif pygame.K_6 <= key <= pygame.K_8:
             pm = list(self.platform_chips.keys())[key - pygame.K_6]
             if pm != self.platform_mode:
-                self.platform_mode = pm
-                self._reset()
+                self._select_platform(pm)
         elif pygame.K_a == key:
-            names = list(self.atmos_chips.keys())
-            idx = (names.index(self.atmosphere) + 1) % len(names)
-            self.atmosphere = names[idx]
-            self._reset()
+            allowed = [n for n in self.atmos_chips if n == "CLEAR" or self._atmosphere_allowed()]
+            if allowed:
+                idx = (allowed.index(self.atmosphere) + 1) % len(allowed)
+                self.atmosphere = allowed[idx]
+                self._reset()
         return True
 
     def _mouse_down(self, pos, button):
@@ -259,11 +294,12 @@ class App:
                 return
         for name, c in self.platform_chips.items():
             if button == 1 and c.hit(pos):
-                self.platform_mode = name
-                self._reset()
+                self._select_platform(name)
                 return
         for name, c in self.atmos_chips.items():
             if button == 1 and c.hit(pos):
+                if not self._atmosphere_allowed() and name != "CLEAR":
+                    return
                 self.atmosphere = name
                 self._reset()
                 return
@@ -464,15 +500,16 @@ class App:
         for name, c in self.platform_chips.items():
             sel = (name == self.platform_mode)
             c.draw(surf, selected=sel)
-        # atmosphere chips
+        # atmosphere chips - on the SAT-SAT (vacuum) link the weather chips
+        # render disabled (strike-X) so judges immediately see the gating.
         at0 = min(c.rect.x for c in self.atmos_chips.values())
         T.text(surf, (at0, 2), "ATMOSPHERE", 8, T.C.TEXT_FAINT)
         for name, c in self.atmos_chips.items():
-            c.draw(surf, selected=(name == self.atmosphere))
+            enabled = (name == "CLEAR" or self._atmosphere_allowed())
+            c.draw(surf, selected=(name == self.atmosphere), enabled=enabled)
         # SIH label
         T.text(surf, (APP_W - 12, 8), "SIH 2026", 11, T.C.TEXT_FAINT, anchor="tr")
         T.text(surf, (APP_W - 12, 24), "PS 26169", 9, T.C.TEXT_FAINT, anchor="tr")
-
     def _draw_footer(self, surf):
         if self.video_mode:
             T.text(surf, (8, APP_H - 16),
@@ -715,6 +752,12 @@ class App:
         T.text(cam, (badge.centerx, badge.y + 19), st, 13, col, bold=True, anchor="cc")
         W.hbar(cam, (10, 50, 130, 5), res["confidence"], col)
         T.text(cam, (10, 58), f"CONF {res['confidence']:.2f}", 7, col)
+        # TOP hierarchy line: scenario · platform · FPS (right of the badge)
+        fps = self.clock.get_fps()
+        T.text(cam, (150, 14), f"{self.preset} · {self._platform_label()}",
+               8, T.C.TEXT_DIM)
+        T.text(cam, (150, 26), f"{fps:.0f} FPS",
+               10, T.C.GREEN if fps >= 25 else T.C.AMBER, bold=True)
 
         # ---- Phase 2 model-vision trust diagnostics (compact stack) ----
         # Part 3 renders the adaptive trust as a dual bar (VISION vs MODEL)
@@ -899,6 +942,16 @@ class App:
         # slew / latency row
         T.text(surf, (box.x + 14, y + 52), "If tracking, gimbal is slewed to keep B in FOV", 9, T.C.TEXT_FAINT)
 
+        # actuator saturation readout (0..1 per axis) - physical-limits honesty:
+        # when SAT > 0 the target motion exceeds the gimbal slew capability, so
+        # a residual pointing error there is an actuator limit, not a tracker bug.
+        sp, st_ = res.get("gimbal_sat_pan", 0.0), res.get("gimbal_sat_tilt", 0.0)
+        sat = max(sp, st_)
+        s_col = T.C.GREEN if sat <= 0.05 else (T.C.AMBER if sat < 0.5 else T.C.RED)
+        T.text(surf, (box.x + 14, y + 66), "GIMBAL SATURATION", 9, T.C.TEXT_FAINT)
+        T.text(surf, (box.x + 150, y + 66), f"P {sp * 100:3.0f}%  T {st_ * 100:3.0f}%",
+               11, s_col, bold=(sat > 0.05))
+
         # ---- A -> beam -> B alignment mini-diagram (right of the numbers) ----
         self._draw_beam_strip(surf, pygame.Rect(box.right - 220, box.y + 22, 208, box.h - 30))
 
@@ -971,13 +1024,11 @@ class App:
                        bold=(lab == "Status"))
                 yy += 16
             return
-        pm_label = {"SATELLITE_SATELLITE": "SAT-SAT",
-                    "UAV_SATELLITE": "UAV-SAT", "UAV_UAV": "UAV-UAV"}.get(
-                        self.platform_mode, self.platform_mode)
         rows = [
-            ("Observer", "SAT-A"),
-            ("Target", "SAT-B  (optical beacon)"),
-            ("Link", pm_label + "  ·  " + (self.atmosphere or "CLEAR")),
+            ("Scenario", self.preset),
+            ("Link", self._platform_label() + "  ·  " + (self.atmosphere or "CLEAR")),
+            ("Path", disturbance_kind_label(self.platform_mode)
+                     + ("  (weather off)" if not self._atmosphere_allowed() else "")),
             ("Status", "TRACKING" if st in LOCKED_STATES else
                        ("SEARCH" if st == "SEARCHING" else "COAST")),
         ]
@@ -985,7 +1036,9 @@ class App:
         col = T.C.GREEN if lock else T.C.STATE[st]
         for lab, val in rows:
             T.text(surf, (x + 12, yy), lab, 10, T.C.TEXT_FAINT)
-            T.text(surf, (x + 96, yy), val, 11, col if lab == "Status" else T.C.TEXT, bold=(lab == "Status"))
+            on = T.C.GREEN_DIM if lab == "Path" and not self._atmosphere_allowed() \
+                else (col if lab == "Status" else T.C.TEXT)
+            T.text(surf, (x + 96, yy), val, 10, on, bold=(lab == "Status"))
             yy += 14
 
     def _panel_geometry(self, surf):
@@ -1094,7 +1147,14 @@ class App:
     def _panel_disturbances(self, surf):
         x, y, w, h = 1288, 572, 304, 172
         T.panel(surf, pygame.Rect(x, y, w, h))
-        T.text(surf, (x + 10, y + 6), "DISTURBANCES  (active scenario)", 9, T.C.TEXT_DIM)
+        kind = disturbance_kind_label(self.platform_mode)
+        T.text(surf, (x + 10, y + 6), f"DISTURBANCES · {kind}",
+               9, T.C.TEXT_DIM)
+        note = ("weather blocked · vacuum path"
+                if not self._atmosphere_allowed()
+                else "weather engine active")
+        T.text(surf, (x + w - 10, y + 6), note, 8,
+               T.C.TEXT_FAINT, anchor="tr")
         for key, s in self.sliders.items():
             s.draw(surf)
             unit = config.DISTURBANCE_UNITS.get(key, (None, ""))[1]

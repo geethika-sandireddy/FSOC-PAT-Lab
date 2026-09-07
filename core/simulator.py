@@ -75,9 +75,17 @@ class Simulator:
         self.disturbance.noise_types = preset.get("noise_types",
                                                    pm.get("noise_types", ["gaussian"]) if pm
                                                    else ["gaussian"])
-        # Atmospheric condition engine
+        # Atmospheric condition engine.  Scenario gate: a space-to-space
+        # link (SAT-SAT) has no terrestrial atmosphere, so its atmosphere is
+        # hard-forced to CLEAR even if a condition was requested through the
+        # backend/config - a disabled disturbance can never be applied
+        # accidentally.  UAV-SAT / UAV-UAV keep the full weather engine.
+        from core.platforms import atmosphere_allowed
+        self.atmosphere_allowed = atmosphere_allowed(platform_mode)
         from core.atmosphere import AtmosphereEngine
         atm = atmosphere or (pm.get("atmosphere", "CLEAR") if pm else "CLEAR")
+        if not self.atmosphere_allowed and atm != "CLEAR":
+            atm = "CLEAR"
         self.atmosphere = AtmosphereEngine(condition=atm, seed=seed)
         self.atmosphere_name = atm
         self.detector = DetectionEngine()
@@ -117,6 +125,22 @@ class Simulator:
         return self.tracker.state == LOCKED
 
     # ------------------------------------------------------------------
+    def set_atmosphere(self, condition):
+        """Request an atmosphere condition.  Respects the scenario gate: on a
+        space-to-space link any non-CLEAR condition is ignored (the vacuum
+        path has no weather) and the engine stays CLEAR.
+
+        Returns the condition actually active after the call.
+        """
+        if not self.atmosphere_allowed:
+            self.atmosphere_name = "CLEAR"
+            self.atmosphere.condition = "CLEAR"
+            return self.atmosphere_name
+        self.atmosphere_name = condition
+        self.atmosphere.condition = condition
+        return self.atmosphere_name
+
+    # ------------------------------------------------------------------
     def step(self):
         """Advance one simulation frame.  Returns a dict of measurements the
         caller turns into metrics or HUD + the (possibly disturbed) frame."""
@@ -127,8 +151,10 @@ class Simulator:
         basis = self.gimbal.basis()
         frame = self.sensor.render(self.scene, self.gimbal, config.FOCAL_PX,
                                    disturbance=self.disturbance, dt=dt)
-        # Apply atmospheric condition effects (haze, fog, rain, low light)
-        if self.atmosphere_name != "CLEAR":
+        # Apply atmospheric condition effects (haze, fog, rain, low light).
+        # Double gate: condition != CLEAR AND the scenario physically allows
+        # an atmosphere (a space link can never inherit one).
+        if self.atmosphere_allowed and self.atmosphere_name != "CLEAR":
             frame = self.atmosphere.apply(frame)
 
         candidates = self.detector.detect(frame, basis, config.FOCAL_PX)

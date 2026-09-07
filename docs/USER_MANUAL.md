@@ -43,6 +43,23 @@ python main.py
 
 The mission-console GUI opens in an 1600×900 window with a dark aerospace theme.
 
+### Selecting the FSOC scenario (platform + weather)
+
+Click the green platform chips in the header to switch between **SAT-SAT**,
+**UAV-SAT** and **UAV-UAV**, then pick a weather chip (**CLEAR / HAZE / FOG /
+RAIN / LOW_LIGHT**). The disturbance engine is **link-aware**:
+
+- **SAT-SAT** is a vacuum space path — weather chips are disabled (dim + strike-X,
+  displayed as `###`), and the turbulence slider turns off with an
+  "(atmosphere off)" hint. Any weather condition is forced back to `CLEAR`.
+- **UAV-SAT** / **UAV-UAV** are atmospheric links — all weather plus the
+  turbulence slider remain fully selectable.
+
+The mission panel shows a **Path** row — `SPACE-PATH (weather off)` on a
+SAT-SAT link, `ATMOSPHERIC-LINK` otherwise — so the physically-correct
+scenario is visible at a glance for the judges. The same rules apply from the
+command line (`--platform`, `--atmosphere`).
+
 ### GUI Layout
 
 ```
@@ -312,12 +329,25 @@ REACQUIRING → LOCKED` (about 0.4 s coast to re-acquire). `--inject fade`
 (progressive beacon fade) and `--inject occlude` (a real obstacle, blanking
 signal for ~4 s) demonstrate the same machinery with one lever each.
 
+For a judging panel the same story is fully deterministic and portable:
+
+```
+python -m metrics.scenario_demo --inject recover --platform SATELLITE_SATELLITE --fps 60 --seed 1 --out recovery60.csv
+python -m metrics.scenario_demo --inject recover --platform SATELLITE_SATELLITE --fps 30 --seed 1 --out recovery30.csv
+```
+
+The console prints the initials-acquisition time, the REACQ-ladder level
+actually reached, and `DEMONSTRATED` only if the exact subsequence ran, and
+whether recovery was DIRECT (no SEARCHING sweep inside the blank window);
+`--out` writes a CSV timeline of state/event transitions for the record.
+
 ### 8.2 Stress scenarios (headless benchmark)
 
 ```
 python -m metrics.stress_test --scenario wrongprior --trials 3
 python -m metrics.stress_test --scenario dynamic   --trials 3
 python -m metrics.stress_test --scenario truststory --trials 3
+python -m metrics.stress_test --scenario satcom --trials 1 --frames 480
 ```
 
 - `wrongprior` — a corrupted ephemeris (drag + recalibration steps + random
@@ -331,6 +361,11 @@ python -m metrics.stress_test --scenario truststory --trials 3
   phase D state-vector heal back to `BALANCED/MODEL`). Per-phase mode
   percentages and the live mode timeline land in the `_truststory` files
   under `logs/`.
+- `satcom` — the SAT-to-SAT space-link stress: a fast relative orbit
+  (≈ 4 °/s peak, inside the 5 °/s slew cap) with **space-only** disturbances
+  (no turbulence) and a scripted LOS outage `[6.0, 6.6) s` per run, exercising
+  coast → reacquire on a vacuum path. Evidence lands in
+  `logs/stress_test_summary_satcom_*.csv`.
 
 Optional last two CLI flags on stress runs: `--tag NAME` appends a filename
 suffix, and `--burn-t1 SEC` (truststory only) moves the burn-end time.
@@ -354,7 +389,7 @@ All output is saved to the `logs/` directory:
 
 - `stress_test_summary.csv` / `benchmark_summary.json`: canonical benchmark
   results (one row per preset); `_scenario` suffixed variants for
-  `wrongprior` / `dynamic` / `truststory` / `saturation` runs
+  `wrongprior` / `dynamic` / `truststory` / `saturation` / `satcom` runs
 - `phase2_trust_summary*.json`: trust/uncertainty telemetry, including the
   per-phase mode story for `truststory`
 - `run_*.csv`: Per-frame performance logs from GUI sessions
@@ -362,7 +397,7 @@ All output is saved to the `logs/` directory:
 
 ### CSV Format
 
-Performance logs include columns: `frame, state, est_err_deg, truth_az, truth_el, est_az, est_el, confidence, beacon_visible, fps` plus, when the run recorded them, the actuator-observability columns `mean_saturation_pct, max_saturation_pct, saturation_frames` (gimbal pan/tilt clipping against the 5 °/s slew limiter).
+Performance logs include columns: `frame, state, est_err_deg, truth_az, truth_el, est_az, est_el, confidence, beacon_visible, fps` plus, when the run recorded them, the actuator-observability columns `mean_saturation_pct, max_saturation_pct, saturation_frames` (gimbal pan/tilt clipping against the 5 °/s slew limiter). MP4 bypass reports (`metrics/mp4_bypass.py`) add `processing_time_s` (wall clock) and an `actuator_saturation` value of `n/a (PTZ bypassed; gimbal static)` because the coarse-pointing servo is bypassed in video mode.
 
 ---
 

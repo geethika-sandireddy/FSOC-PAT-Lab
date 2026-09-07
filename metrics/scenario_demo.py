@@ -68,8 +68,9 @@ DEGRADE_LEVELS = dict(beacon_fade=65, sensor_noise=65, vibration=30, turbulence=
 
 
 def run_scenario(preset, inject="fade", hold_s=4.0, total_s=30.0,
-                 inject_at_s=10.0):
-    sim = Simulator(preset_name=preset, seed=1)
+                 inject_at_s=10.0, platform=None, fps=None, seed=1):
+    sim = Simulator(preset_name=preset, seed=seed, platform_mode=platform,
+                    **({"dt": 1.0 / fps} if fps else {}))
     dt = sim.dt
     frames = int(total_s / dt)
     sim.t = 0.0
@@ -152,7 +153,8 @@ def run_scenario(preset, inject="fade", hold_s=4.0, total_s=30.0,
 
 
 def run_recovery_story(preset="MODERATE", total_s=14.0, inject_at_s=8.0,
-                       degrade_s=1.2, blank_s=0.42):
+                       degrade_s=1.2, blank_s=0.42, platform=None, fps=None,
+                       seed=1, out_path=None):
     """LOCKED -> DEGRADED_LOCK -> COASTING -> REACQUIRING -> LOCKED.
 
     Timeline, all deterministic (seed=1, scripted injects):
@@ -169,7 +171,8 @@ def run_recovery_story(preset="MODERATE", total_s=14.0, inject_at_s=8.0,
                                               velocity extrapolation re-locks
                                               DIRECTLY (no SEARCHING)
     """
-    sim = Simulator(preset_name=preset, seed=1)
+    sim = Simulator(preset_name=preset, seed=seed, platform_mode=platform,
+                    **({"dt": 1.0 / fps} if fps else {}))
     sim.t = 0.0
     frames = int(total_s / sim.dt)
 
@@ -184,6 +187,8 @@ def run_recovery_story(preset="MODERATE", total_s=14.0, inject_at_s=8.0,
     blank_at = None
     reacq_enter = None
     recover_at = None       # first LOCKED after blank began
+    max_reacq_level = 0
+    _orig_dist = {k: getattr(sim.disturbance, k) for k in DEGRADE_LEVELS}
 
     for i in range(frames):
         t = sim.t
@@ -205,8 +210,8 @@ def run_recovery_story(preset="MODERATE", total_s=14.0, inject_at_s=8.0,
         elif blank_on and not blank_done and t >= inject_at_s + degrade_s + blank_s:
             blank_done = True
             sim.scene.obstacles.remove(occluder)
-            sim.disturbance.beacon_fade = 0
-            sim.disturbance.sensor_noise = 10
+            for _k, _v in _orig_dist.items():
+                setattr(sim.disturbance, _k, _v)
             event_log.append((t, "LOS restored"))
 
         r = sim.step()
@@ -218,15 +223,19 @@ def run_recovery_story(preset="MODERATE", total_s=14.0, inject_at_s=8.0,
                 acq_t = sim.t
             if st == "REACQUIRING" and reacq_enter is None and blank_on:
                 reacq_enter = sim.t
+            if st == "REACQUIRING":
+                max_reacq_level = max(max_reacq_level, sim.tracker.reacq_level)
             if st == "LOCKED" and blank_at is not None and recover_at is None \
                     and sim.t > blank_at:
                 recover_at = sim.t
             last_state = st
 
     # ---- print the story ----
-    print(f"RECOVERY STORY: {preset} · degrade @ {inject_at_s:.1f}s"
-          f" ({degrade_s:.1f}s) · LOS blank @ {inject_at_s + degrade_s:.1f}s"
-          f" ({blank_s:.2f}s)")
+    plat = platform or "DEFAULT"
+    rate = fps if fps else int(round(1.0 / sim.dt))
+    print(f"RECOVERY STORY: {preset} · platform={plat} @ {rate} fps")
+    print(f"degrade @ {inject_at_s:.1f}s ({degrade_s:.1f}s)"
+          f" · LOS blank @ {inject_at_s + degrade_s:.1f}s ({blank_s:.2f}s)")
     print("state timeline (t -> state):")
     for t, st in state_seq:
         print(f"   {t:7.2f}s   {st}")
@@ -245,24 +254,63 @@ def run_recovery_story(preset="MODERATE", total_s=14.0, inject_at_s=8.0,
     if reacq_enter is not None:
         print(f"REACQUIRING @      : {reacq_enter:6.2f}s"
               f"  (+{reacq_enter - blank_at:.2f}s after blank)")
+        # staged ladder: which recovery LEVEL the expanded search reached
+        gmult = config.REACQ_LEVEL_GATE_MULT[max(0, min(
+            config.REACQ_LEVELS - 1, max_reacq_level - 1))]
+        print(f"REACQ ladder       : LEVEL {max_reacq_level}/"
+              f"{config.REACQ_LEVELS} reached "
+              f"(gate mult x{gmult}, budget ")
+        print(f"                     "
+              f"{' + '.join(f'{d:.2f}s' for d in config.REACQ_LEVEL_DURATION_S)}"
+              f", total cap {config.REACQ_TIMEOUT_S}s)")
     if recover_at is not None and blank_at is not None:
         print(f"RE-LOCKED @        : {recover_at:6.2f}s"
               f"  (+{recover_at - blank_at:.2f}s blank-to-recover)")
-        # the whole point: recovered via REACQ without a SEARCH sweep
-        i_reacq = next((i for i, (_, s) in enumerate(state_seq)
-                        if s == "REACQUIRING"), None)
-        searched = i_reacq is not None and any(
-            s == "SEARCHING" for _, s in state_seq[i_reacq:])
+        # the whole point: recovered via REACQ without falling to a blind
+        # SEARCH sweep before the blank was removed.  Scoped to the blank
+        # window [reacq_enter, recover_at], so later un-scripted events do
+        # not blur this first recovery verdict.
+        searched = any(
+            s == "SEARCHING" for _, s in state_seq
+            if (reacq_enter if reacq_enter is not None else 0.0) < _ < recover_at)
         print(("REACQ path        : DIRECT (widened REACQ gate + velocity "
                "extrapolation)" if not searched
                else "REACQ path        : fell through to SEARCHING"))
     else:
         print("recovery           : not re-locked before end of run")
+
+    # verify the required LOCKED -> DEGRADED_LOCK -> COASTING -> REACQUIRING
+    # -> LOCKED path occurred in-order (states generated by the real tracker,
+    # scripted only via the disturbance timeline)
+    def _is_subseq(seq, sub):
+        it = iter(seq)
+        return all(x in it for x in sub)
+
+    seq = [s for _, s in state_seq]
+    required = ["LOCKED", "DEGRADED_LOCK", "COASTING", "REACQUIRING", "LOCKED"]
+    if _is_subseq(seq, required):
+        print("recovery path      : DEMONSTRATED [LOCKED -> DEGRADED_LOCK -> "
+              "COASTING -> REACQUIRING -> LOCKED]")
+    else:
+        print("recovery path      : NOT FULLY SEEN "
+              f"({[s for s in required if s not in seq]} missing)")
     print()
+
+    if out_path:
+        import csv
+        with open(out_path, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["t_s", "kind", "value"])
+            for t, st in state_seq:
+                w.writerow([f"{t:.4f}", "state", st])
+            for t, lab in event_log:
+                w.writerow([f"{t:.4f}", "event", lab])
+        print(f"timeline (state+events, t_s) -> {out_path}")
 
     locked = sum(1 for _, st in state_seq if st == "LOCKED")
     return dict(acq=acq_t, blank_at=blank_at, reacq=reacq_enter,
-                recover=recover_at, states=len(state_seq),
+                recover=recover_at, stats=len(state_seq),
+                max_reacq_level=max_reacq_level,
                 locked_phases=locked, deg_phases=n_deg)
 
 
@@ -274,14 +322,26 @@ def main():
     ap.add_argument("--inject-at", type=float, default=8.0)
     ap.add_argument("--hold", type=float, default=4.0)
     ap.add_argument("--total", type=float, default=30.0)
+    ap.add_argument("--platform", default="SATELLITE_SATELLITE",
+                    help="PS 26169 platform mode (primary SAT-SAT by default)")
+    ap.add_argument("--fps", type=int, default=None,
+                    help="simulation frame rate (default config.FPS; try 30 "
+                         "to prove sample-rate robustness)")
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--out", default=None,
+                    help="optional CSV to record the state/event timeline "
+                         "(t_s, kind, value) for the report/PPT")
     args = ap.parse_args()
 
     if args.inject == "recover":
         run_recovery_story(args.preset, total_s=args.total,
-                           inject_at_s=args.inject_at)
+                           inject_at_s=args.inject_at,
+                           platform=args.platform, fps=args.fps,
+                           seed=args.seed, out_path=args.out)
     else:
         run_scenario(args.preset, args.inject, hold_s=args.hold,
-                     total_s=args.total, inject_at_s=args.inject_at)
+                     total_s=args.total, inject_at_s=args.inject_at,
+                     platform=args.platform, fps=args.fps, seed=args.seed)
 
 
 if __name__ == "__main__":

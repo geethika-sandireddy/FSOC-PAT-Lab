@@ -19,8 +19,18 @@ Checks (Part 2 regression + Part 3-8 new behaviour):
   S06  Uncertainty-aware confidence: position confidence is penalised toward
        zero as sigma grows toward the REACQUIRE line.
   S07  Gimbal saturation observability: pan/tilt saturation (0..1) reported.
-  S08  FPS robustness: 30 Hz video-rate tracking (dt = 1/30) still acquires
-       and locks without NaN or ZeroDivision.
+S08  FPS robustness: 30 Hz video-rate tracking (dt = 1/30) still acquires
+        and locks without NaN or ZeroDivision.
+   S09  Scenario-aware atmosphere gating: SAT-SAT blocks weather (backend
+        forces CLEAR even when a condition is requested); UAV-SAT / UAV-UAV
+        keep the weather engine.
+   S10  A disabled (space-link) atmosphere can never be applied - neither by
+        the constructor nor by set_atmosphere - and UAV links apply it.
+   S11  Deterministic recovery sequence: a scripted LOS blank produces
+        LOCKED -> COASTING -> REACQUIRING -> LOCKED from the real tracker.
+   S12  Actuator saturation: a target faster than the gimbal slew cap
+        genuinely saturates (honest physical-limit telemetry).
+   S13  Explicit 60 Hz frame rate still acquires and locks.
 """
 
 import math
@@ -197,6 +207,110 @@ def t08_video_rate_dt():
         f"30 Hz path {st} (S08)"
 
 
+def t09_scenario_atmosphere_gating():
+    from core.platforms import atmosphere_allowed
+    # SAT-SAT is a vacuum optical path: weather is not physical there.
+    assert not atmosphere_allowed("SATELLITE_SATELLITE"), "SAT-SAT must block weather (S09)"
+    # UAV links DO carry the atmosphere.
+    assert atmosphere_allowed("UAV_SATELLITE"), "UAV-SAT must allow weather (S09)"
+    assert atmosphere_allowed("UAV_UAV"), "UAV-UAV must allow weather (S09)"
+    assert atmosphere_allowed(None), "unconstrained runs keep legacy behaviour (S09)"
+    # backend: requesting weather on a space link is neutralised to CLEAR.
+    sim = Simulator(preset_name="EASY", seed=1,
+                    platform_mode="SATELLITE_SATELLITE", atmosphere="FOG")
+    assert sim.atmosphere_name == "CLEAR", \
+        f"SAT-SAT must force CLEAR, got {sim.atmosphere_name} (S09)"
+    assert not sim.atmosphere_allowed
+    # backend: UAV links honour the requested weather.
+    s2 = Simulator(preset_name="EASY", seed=1,
+                   platform_mode="UAV_SATELLITE", atmosphere="RAIN")
+    assert s2.atmosphere_name == "RAIN", f"UAV-SAT kept {s2.atmosphere_name}? (S09)"
+    assert s2.atmosphere_allowed
+    s3 = Simulator(preset_name="EASY", seed=1,
+                   platform_mode="UAV_UAV", atmosphere="HAZE")
+    assert s3.atmosphere_name == "HAZE" and s3.atmosphere_allowed, \
+        f"UAV-UAV kept {s3.atmosphere_name}? (S09)"
+
+
+def t10_disabled_atmosphere_not_applied():
+    # the setter path must be inert on a space link too (can't accidentally
+    # turn the weather engine on through code/configuration).
+    sim = Simulator(preset_name="EASY", seed=1,
+                    platform_mode="SATELLITE_SATELLITE")
+    assert sim.set_atmosphere("FOG") == "CLEAR", "set_atmosphere ignored gate (S10)"
+    assert sim.atmosphere_name == "CLEAR", "space link leaked a condition (S10)"
+    for _ in range(60):
+        r = sim.step()
+        assert not math.isnan(r["pointing_err_deg"]), "NaN on vacuous run (S10)"
+    assert sim.tracker.state == "LOCKED", \
+        f"SAT-SAT vacuums run not locked: {sim.tracker.state} (S10)"
+    # atmospheric link applies its weather normally.
+    s2 = Simulator(preset_name="EASY", seed=2,
+                   platform_mode="UAV_UAV", atmosphere="FOG")
+    assert s2.atmosphere_name == "FOG"
+    for _ in range(20):
+        r = s2.step()
+        assert not math.isnan(r["pointing_err_deg"]), "NaN under FOG (S10)"
+
+
+def t11_recovery_state_sequence():
+    """Deterministic LOCKED -> COASTING -> REACQUIRING -> LOCKED recovery
+    with a true (scripted) LOS blank, driven by the real tracker states."""
+    sim = Simulator(preset_name="EASY", seed=1)
+    sim.t = 0.0
+    for _ in range(int(5.0 / sim.dt)):       # acquire cleanly
+        sim.step()
+    assert sim.tracker.state == "LOCKED", \
+        f"precondition LOCKED failed: {sim.tracker.state} (S11)"
+    orig = sim.scene.beacon.intensity
+    sim.scene.beacon.intensity = lambda _t: 0.0
+    for _ in range(int(1.0 / sim.dt)):       # overstresses coast + ladder
+        sim.step()
+    sim.scene.beacon.intensity = orig
+    for _ in range(int(3.0 / sim.dt)):       # let the widened gate re-catch it
+        sim.step()
+    ev = [e[2] for e in getattr(sim, "event_log", ())]
+    i_lost = ev.index("COASTING")
+    i_reacq = ev.index("REACQUIRING") if "REACQUIRING" in ev else -1
+    i_lock = ev.index("LOCKED", ev.index("REACQUIRING") if "REACQUIRING" in ev else 0)
+    assert "COASTING" in ev and "REACQUIRING" in ev, \
+        f"recovery states not reached: {ev} (S11)"
+    assert i_reacq > i_lost, f"COAST before REACQ ordered wrong: {ev} (S11)"
+    assert ev[-1] == "LOCKED", f"did not return to LOCKED: {ev} (S11)"
+    assert i_lock > i_reacq, f"RE-LOCK must follow REACQ: {ev} (S11)"
+
+
+class _TooFastOrbit:
+    """Target angular speed above the gimbal slew cap -> honest saturation."""
+    def __init__(self):
+        self._range = 1000.0
+    def relative_los_az_el(self, t):
+        return (4.0 * math.sin(2.0 * t), 2.5 * math.sin(1.6 * t))
+    def range_km(self, t):
+        return self._range
+
+
+def t12_saturation_limit_reached():
+    from core.orbital import EphemerisModel
+    sim = Simulator(preset_name="EASY", seed=1)
+    sim.scene.beacon.orbit = _TooFastOrbit()
+    sim.tracker.eph = EphemerisModel(sim.scene.beacon.orbit, seed=1)
+    sim.eph = sim.tracker.eph
+    max_sat = 0.0
+    for _ in range(150):
+        sim.step()
+        max_sat = max(max_sat, sim.last_result["gimbal_sat_pan"])
+    assert max_sat > 0.5, \
+        f"faster-than-slew target must saturate the gimbal, max {max_sat:.2f} (S12)"
+
+
+def t13_fps_60_works():
+    sim = _run("EASY", 150, dt=1.0 / 60.0)
+    assert sim.tracker.state == "LOCKED", f"60 Hz sim not locked (S13)"
+    st = [ev[2] for ev in getattr(sim, "event_log", ())]
+    assert st[-1] == "LOCKED", f"60 Hz path {st} (S13)"
+
+
 TESTS = [
     ("S01  easy_preset_locks_beacon", t01_easy_lock),
     ("S02  clean_single_transition", t02_clean_single_transition),
@@ -206,6 +320,11 @@ TESTS = [
     ("S06  unc_aware_confidence", t06_unc_aware_confidence),
     ("S07  saturation_telemetry", t07_saturation_telemetry),
     ("S08  video_rate_dt", t08_video_rate_dt),
+    ("S09  scenario_atmosphere_gating", t09_scenario_atmosphere_gating),
+    ("S10  disabled_atmosphere_not_applied", t10_disabled_atmosphere_not_applied),
+    ("S11  recovery_state_sequence", t11_recovery_state_sequence),
+    ("S12  saturation_limit_reached", t12_saturation_limit_reached),
+    ("S13  fps_60_works", t13_fps_60_works),
 ]
 
 

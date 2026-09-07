@@ -16,6 +16,7 @@ class C:
     PANEL_3  = (24, 32, 50)           # raised card surface
     BORDER   = (38, 50, 72)
     BORDER_B = (60, 80, 110)          # bright border / divider
+    BORDER_DIM = (32, 40, 56)         # dim divider (disabled widgets)
 
     TEXT       = (215, 225, 240)
     TEXT_DIM   = (130, 145, 168)

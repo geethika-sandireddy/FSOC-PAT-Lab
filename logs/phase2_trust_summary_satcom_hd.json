@@ -1,0 +1,57 @@
+{
+  "commit": "91b4a2a",
+  "generated": "2026-09-07 14:31:54",
+  "scenario": "satcom",
+  "rows": {
+    "EASY": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 58.5475982925182,
+        "trust_model_mean_pct": 91.54125875519641,
+        "uncertainty_mean_px": 7.7204332705075585,
+        "uncertainty_max_px": 24.0,
+        "trust_modes": {
+          "BALANCED": 10,
+          "MODEL_DOMINANT": 338
+        },
+        "trust_phases": {
+          "A": {
+            "BALANCED": 4,
+            "MODEL_DOMINANT": 96
+          },
+          "B": {
+            "MODEL_DOMINANT": 100
+          }
+        },
+        "mode_transitions": []
+      }
+    ],
+    "MODERATE": [
+      {
+        "seed": 0,
+        "trust_vision_mean_pct": 57.38561078830262,
+        "trust_model_mean_pct": 90.04538963218354,
+        "uncertainty_mean_px": 3.3158906783595303,
+        "uncertainty_max_px": 24.0,
+        "trust_modes": {
+          "BALANCED": 21,
+          "MODEL_DOMINANT": 404
+        },
+        "trust_phases": {
+          "A": {
+            "BALANCED": 4,
+            "MODEL_DOMINANT": 96
+          },
+          "B": {
+            "MODEL_DOMINANT": 92,
+            "BALANCED": 8
+          },
+          "C": {
+            "MODEL_DOMINANT": 100
+          }
+        },
+        "mode_transitions": []
+      }
+    ]
+  }
+}
