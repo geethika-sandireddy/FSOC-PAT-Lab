@@ -6,45 +6,49 @@ import pygame
 
 
 class C:
-    BG       = (2, 4, 10)
-    PANEL    = (8, 13, 26)
-    PANEL_2  = (14, 22, 42)
-    PANEL_3  = (22, 34, 60)
-    BORDER   = (28, 44, 72)
-    BORDER_B = (48, 76, 118)
-    BORDER_DIM = (18, 26, 44)
+    BG       = (3, 7, 18)        # #030712 deep aerospace black
+    BG_DARK  = (2, 4, 10)
+    PANEL    = (8, 14, 28)       # #080e1c panel base
+    PANEL_2  = (12, 20, 38)      # #0c1426 card container
+    PANEL_3  = (18, 28, 52)      # #121c34 highlight panel
+    CARD_BG  = (10, 18, 34)
+    BORDER   = (24, 42, 72)      # subtle border
+    BORDER_B = (0, 212, 255, 60) # cyan accent border
+    BORDER_DIM = (18, 28, 48)
 
-    TEXT       = (212, 228, 248)
-    TEXT_DIM   = (146, 181, 216)
-    TEXT_FAINT = (104, 132, 166)
+    TEXT       = (238, 246, 255) # bright crisp white
+    TEXT_DIM   = (168, 198, 232) # high-contrast secondary label
+    TEXT_FAINT = (120, 150, 185) # clear tertiary/units
 
-    CYAN      = (0, 210, 255)
-    CYAN_DIM  = (0, 96, 140)
-    CYAN_FILL = (0, 28, 54)
-    GREEN     = (0, 255, 100)
-    GREEN_DIM = (0, 160, 64)
-    GREEN_FILL= (0, 44, 20)
-    AMBER     = (255, 178, 0)
-    AMBER_DIM = (160, 100, 0)
-    AMBER_FILL= (54, 36, 0)
-    RED       = (255, 46, 46)
-    RED_DIM   = (138, 22, 22)
-    RED_FILL  = (58, 8, 8)
-    PURPLE    = (162, 80, 255)
-    PURPLE_DIM= (80, 38, 142)
-    PURPLE_FILL=(34, 14, 66)
-    TEAL      = (0, 200, 180)
+    CYAN       = (0, 212, 170)   # #00d4aa tactical cyan
+    CYAN_ELEC  = (0, 212, 255)   # #00d4ff electric cyan
+    CYAN_DIM   = (0, 96, 140)
+    CYAN_FILL  = (0, 28, 54)
+    GREEN      = (0, 255, 136)   # #00ff88 emerald lock
+    GREEN_DIM  = (0, 160, 64)
+    GREEN_FILL = (0, 44, 20)
+    AMBER      = (255, 178, 0)   # #ffb200 amber warning
+    AMBER_DIM  = (160, 100, 0)
+    AMBER_FILL = (54, 36, 0)
+    RED        = (255, 68, 68)   # #ff4444 critical red
+    RED_DIM    = (138, 22, 22)
+    RED_FILL   = (58, 8, 8)
+    PURPLE     = (168, 85, 247)  # #a855f7 purple
+    PURPLE_DIM = (80, 38, 142)
+    PURPLE_FILL= (34, 14, 66)
+    TEAL       = (0, 200, 180)
+    ORANGE     = (249, 115, 22)  # #f97316
 
-    GRID = (16, 28, 48)
+    GRID = (14, 24, 44)
 
     STATE = {
         "SEARCHING":    (255, 178, 0),
-        "TENTATIVE":    (0, 210, 255),
+        "TENTATIVE":    (0, 212, 255),
         "COASTING":     (0, 196, 240),
-        "LOCKED":       (0, 255, 100),
+        "LOCKED":       (0, 255, 136),
         "DEGRADED_LOCK":(0, 180, 68),
-        "REACQUIRING":  (162, 80, 255),
-        "LOST":         (255, 46, 46),
+        "REACQUIRING":  (168, 85, 247),
+        "LOST":         (255, 68, 68),
     }
 
     STATE_FILL = {
@@ -60,7 +64,8 @@ class C:
 
 # ---------------------------------------------------------------- fonts
 def _font(size, bold=False):
-    size = max(9, int(round(size * 1.12)))
+    # Enforce minimum size of 10 and clean scaling so no text is microscopic
+    size = max(10, int(round(size * 1.15)))
     return pygame.font.SysFont(
         "consolas,menlo,dejavusansmono,monospace", size, bold=bold)
 
@@ -138,10 +143,10 @@ def angled_panel(surf, rect, fill=C.PANEL, border=C.BORDER, cut=12, accent=None)
 # ---------------------------------------------------------------- section header
 def section_hdr(surf, x, y, label, color=C.CYAN, panel_w=None):
     """Accent tick + section label + optional full-width underline."""
-    pygame.draw.rect(surf, color, (x, y, 3, 14), border_radius=1)
-    text(surf, (x + 8, y), label, 9, C.TEXT_DIM)
+    pygame.draw.rect(surf, color, (x, y, 4, 16), border_radius=1)
+    text(surf, (x + 10, y - 1), label, 12, C.TEXT_DIM, bold=True)
     if panel_w:
-        pygame.draw.line(surf, C.BORDER, (x, y + 16), (x + panel_w, y + 16), 1)
+        pygame.draw.line(surf, C.BORDER, (x, y + 20), (x + panel_w, y + 20), 1)
 
 
 # ---------------------------------------------------------------- glow + pulse
@@ -195,8 +200,8 @@ def arc_gauge(surf, center, radius, frac, color, bg=C.PANEL_3, width=5):
 
 # ---------------------------------------------------------------- legacy helpers
 def hdr(surf, label, rect, color=C.CYAN):
-    pygame.draw.rect(surf, color, (rect.x, rect.y, 3, rect.h))
-    text(surf, (rect.x + 9, rect.y + rect.h // 2 - 7), label, 11, C.TEXT_DIM)
+    pygame.draw.rect(surf, color, (rect.x, rect.y, 4, rect.h))
+    text(surf, (rect.x + 10, rect.y + rect.h // 2 - 8), label, 13, C.TEXT_DIM, bold=True)
 
 
 def state_badge(surf, rect, state_label, state_str):
@@ -204,12 +209,85 @@ def state_badge(surf, rect, state_label, state_str):
     fill = C.STATE_FILL.get(state_str, (0, 30, 50))
     pygame.draw.rect(surf, fill, rect, border_radius=3)
     pygame.draw.rect(surf, col, rect, 1, border_radius=3)
-    text(surf, (rect.centerx, rect.centery - 8), state_label, 8, C.TEXT_FAINT,
+    text(surf, (rect.centerx, rect.centery - 10), state_label, 10, C.TEXT_FAINT,
          anchor="cc")
-    text(surf, (rect.centerx, rect.centery + 4), state_str, 12, col, bold=True,
+    text(surf, (rect.centerx, rect.centery + 4), state_str, 14, col, bold=True,
          anchor="cc")
 
 
-def kpi_row(surf, x, y, label, value, val_color=C.TEXT, size_val=16):
-    text(surf, (x, y), label, 8, C.TEXT_FAINT)
-    text(surf, (x, y + 10), value, size_val, val_color, bold=True)
+def kpi_row(surf, x, y, label, value, val_color=C.TEXT, size_val=18):
+    text(surf, (x, y), label, 11, C.TEXT_FAINT)
+    text(surf, (x, y + 14), value, size_val, val_color, bold=True)
+
+
+# ---------------------------------------------------------------- SpaceX cards & gauges
+def card(surf, rect, fill=C.CARD_BG, border=C.BORDER, radius=4, accent=None):
+    rect = pygame.Rect(rect)
+    pygame.draw.rect(surf, fill, rect, border_radius=radius)
+    pygame.draw.rect(surf, border, rect, 1, border_radius=radius)
+    if accent:
+        pygame.draw.rect(surf, accent, (rect.x, rect.y, 4, rect.h), border_top_left_radius=radius, border_bottom_left_radius=radius)
+
+
+def section_title(surf, x, y, title, accent=C.CYAN_ELEC):
+    pygame.draw.rect(surf, accent, (x, y + 1, 4, 16), border_radius=1)
+    text(surf, (x + 10, y - 1), title, 13, C.TEXT_DIM, bold=True)
+
+
+def draw_metric_card(surf, rect, label, value, unit="", sub="", color=C.CYAN_ELEC, warn=False):
+    rect = pygame.Rect(rect)
+    border_col = C.RED if warn else C.BORDER
+    card(surf, rect, fill=C.PANEL_2, border=border_col)
+    text(surf, (rect.x + 12, rect.y + 7), label.upper(), 10, C.TEXT_FAINT, bold=True)
+    vw, vh = text(surf, (rect.x + 12, rect.y + 22), value, 20, color, bold=True)
+    if unit:
+        text(surf, (rect.x + 16 + vw, rect.y + 28), unit, 11, C.TEXT_DIM)
+    if sub:
+        text(surf, (rect.x + 12, rect.y + 48), sub, 10, C.TEXT_FAINT)
+
+
+def draw_circular_arc_gauge(surf, cx, cy, radius, pct, color=C.CYAN_ELEC, label="", stroke=6):
+    """Circular arc gauge with center value and bottom label matching Figma Image 5."""
+    # Background circle arc (240 degrees, open at bottom)
+    start_deg = 150
+    sweep_deg = 240
+    total_segs = 48
+    segs = max(1, int(round(clamp(pct / 100.0, 0.0, 1.0) * total_segs)))
+
+    def _pt(deg, r):
+        rad = math.radians(deg)
+        return (cx + r * math.cos(rad), cy + r * math.sin(rad))
+
+    # Dark background arc
+    for i in range(total_segs):
+        p1 = _pt(start_deg + sweep_deg * i / total_segs, radius)
+        p2 = _pt(start_deg + sweep_deg * (i + 1) / total_segs, radius)
+        pygame.draw.line(surf, C.PANEL_3, p1, p2, stroke)
+
+    # Active glowing arc
+    for i in range(segs):
+        p1 = _pt(start_deg + sweep_deg * i / total_segs, radius)
+        p2 = _pt(start_deg + sweep_deg * (i + 1) / total_segs, radius)
+        pygame.draw.line(surf, color, p1, p2, stroke)
+
+    # Center percentage
+    text(surf, (cx, cy - 2), f"{int(round(pct))}%", 20, color, bold=True, anchor="cc")
+    # Bottom label
+    if label:
+        text(surf, (cx, cy + radius + 14), label, 10, C.TEXT_FAINT, bold=True, anchor="cc")
+
+
+def draw_hbar_labelled(surf, rect, frac, color, label, val_str="", bg=C.PANEL):
+    rect = pygame.Rect(rect)
+    text(surf, (rect.x, rect.y - 14), label, 11, C.TEXT_DIM)
+    if val_str:
+        text(surf, (rect.right, rect.y - 14), val_str, 11, color, bold=True, anchor="tr")
+    pygame.draw.rect(surf, bg, rect, border_radius=2)
+    w = int(round(rect.w * clamp(frac, 0.0, 1.0)))
+    if w > 0:
+        pygame.draw.rect(surf, color, (rect.x, rect.y, w, rect.h), border_radius=2)
+    pygame.draw.rect(surf, C.BORDER, rect, 1, border_radius=2)
+
+
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))

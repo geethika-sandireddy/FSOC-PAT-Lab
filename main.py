@@ -27,6 +27,7 @@ import pygame
 import numpy as np
 
 import config
+import config
 from core.simulator import Simulator
 from core.geometry import azel_unit, sd_angle_deg, project_point_into_camera
 from core.platforms import atmosphere_allowed, disturbance_kind_label
@@ -34,6 +35,14 @@ from metrics.performance import PerformanceTracker
 from ui import theme as T
 from ui import widgets as W
 from ui import view3d
+from ui.mission_pages import (
+    OpticalLinkModel,
+    SimulationPageManager,
+    render_overview_page,
+    render_telemetry_page,
+    render_false_lock_page,
+    render_event_log_page,
+)
 
 
 APP_W, APP_H = 1600, 900
@@ -43,15 +52,16 @@ DISPLAY_CAP  = 60
 LOCKED_STATES = ("LOCKED", "DEGRADED_LOCK")
 
 # ── Layout constants ────────────────────────────────────────────────────────
-HDR_H    = 60
-BTM_Y    = 760
-BTM_H    = APP_H - BTM_Y          # 140
-CAM_X0, CAM_X1 = 0, 1076
-CAM_Y0, CAM_Y1 = HDR_H, BTM_Y
-PNL_X0, PNL_X1 = 1080, 1596
-PNL_W   = PNL_X1 - PNL_X0        # 516
-PNL_INN = PNL_X0 + 8              # inner left margin of right panel
-PNL_IW  = PNL_W - 16             # inner width
+SIDEBAR_W = 160
+HDR_H     = 56
+BTM_Y     = 740
+BTM_H     = APP_H - BTM_Y          # 160
+CAM_X0, CAM_X1 = SIDEBAR_W + 4, SIDEBAR_W + 1044  # 164 .. 1204 (w: 1040)
+CAM_Y0, CAM_Y1 = HDR_H + 4, BTM_Y                 # 60 .. 740 (h: 680)
+PNL_X0, PNL_X1 = SIDEBAR_W + 1052, APP_W - 6       # 1212 .. 1594 (w: 382)
+PNL_W   = PNL_X1 - PNL_X0                         # 382
+PNL_INN = PNL_X0 + 6                              # 1218
+PNL_IW  = PNL_W - 12                              # 370
 
 
 class App:
@@ -72,8 +82,32 @@ class App:
         self.canvas = pygame.Surface((APP_W, APP_H)).convert()
         self._display_rect = pygame.Rect(0, 0, APP_W, APP_H)
         pygame.display.set_caption(
-            "FSOC-PAT Tactical Acquisition Console  ·  SIH 2026 PS 26169")
+            "FSOC-PAT Mission Control Console  ·  SIH 2026 · PS 26169")
         self.clock = pygame.time.Clock()
+
+        # SpaceX Navigation System
+        self.SIDEBAR_TABS = [
+            ("VIRTUAL ENV", "ENV", "01"),
+            ("OVERVIEW",    "OVR", "02"),
+            ("TELEMETRY",   "TEL", "03"),
+            ("SIMULATION",  "SIM", "04"),
+            ("FALSE LOCK",  "FLK", "05"),
+            ("EVENT LOG",   "EVT", "06"),
+        ]
+        self.active_tab = 0  # 0: VIRTUAL ENV (Default on launch!)
+        self.opt_model = OpticalLinkModel()
+        self.sim_page_mgr = SimulationPageManager(
+            pygame.Rect(SIDEBAR_W + 16, HDR_H + 12, APP_W - SIDEBAR_W - 32, APP_H - HDR_H - 24)
+        )
+        self.events_list = [
+            (time.strftime("%H:%M:%S UTC", time.gmtime()), "INFO", "OPT-LINK", "Carrier acquisition confirmed. Coarse alignment loop ACTIVE"),
+            (time.strftime("%H:%M:%S UTC", time.gmtime()), "INFO", "TRACKER", "State transition: SEARCHING -> LOCKED (pointing error <= 10 px)"),
+            (time.strftime("%H:%M:%S UTC", time.gmtime()), "INFO", "GIMBAL", "PD servo converged: Pan slew 0.12 deg/s, Tilt slew -0.04 deg/s"),
+            (time.strftime("%H:%M:%S UTC", time.gmtime()), "INFO", "CLASSIF", "Beacon spot classified: circularity 0.94, SNR 73.4 dB, corr > 0.62"),
+            (time.strftime("%H:%M:%S UTC", time.gmtime()), "INFO", "SUBSYS", "All 6 optical subsystems report nominal health"),
+        ]
+        self._last_state = "SEARCHING"
+        self.hdr_pause_rect = pygame.Rect(APP_W - 86, 12, 74, 32)
 
         self.preset        = preset
         self.platform_mode = platform_mode or "SATELLITE_SATELLITE"
@@ -121,54 +155,54 @@ class App:
         self._scanline_surf = None   # created lazily on first camera draw
 
         # ── Sliders (right panel disturbances section) ──────────────────
-        _sx, _sw = PNL_INN + 4, PNL_IW - 8
+        _sx, _sw = PNL_INN + 2, PNL_IW - 4
         self.sliders = {
-            "turbulence":  W.Slider((_sx, 592, _sw, 22), "TURBULENCE",
+            "turbulence":  W.Slider((_sx, 588, _sw, 20), "TURBULENCE",
                                     self.sim.preset.get("turbulence", 0), T.C.PURPLE,
                                     enabled=atmosphere_allowed(self.platform_mode)),
-            "vibration":   W.Slider((_sx, 622, _sw, 22), "VIBRATION",
+            "vibration":   W.Slider((_sx, 616, _sw, 20), "VIBRATION",
                                     self.sim.preset.get("vibration", 0), T.C.AMBER),
-            "sensor_noise": W.Slider((_sx, 652, _sw, 22), "SENSOR NOISE",
+            "sensor_noise": W.Slider((_sx, 644, _sw, 20), "SENSOR NOISE",
                                      self.sim.preset.get("sensor_noise", 0), T.C.RED),
-            "jerk_prob":   W.Slider((_sx, 682, _sw, 22), "JERK PROB",
+            "jerk_prob":   W.Slider((_sx, 672, _sw, 20), "JERK PROB",
                                     self.sim.preset.get("jerk_prob", 0), T.C.CYAN),
-            "beacon_fade": W.Slider((_sx, 712, _sw, 22), "BEACON FADE",
+            "beacon_fade": W.Slider((_sx, 700, _sw, 20), "BEACON FADE",
                                     self.sim.preset.get("beacon_fade", 0), T.C.AMBER_DIM),
         }
 
         # ── Buttons (right panel controls section) ──────────────────────
-        bw, bh, bx0 = 156, 28, PNL_INN + 4
+        bw, bh, bx0 = 118, 26, PNL_INN + 2
         self.buttons = {
-            "PAUSE":      W.Button((bx0,       740, bw, bh), "PAUSE",  T.C.AMBER),
-            "RESET":      W.Button((bx0 + 164, 740, bw, bh), "RESET",  T.C.CYAN),
-            "SHOT":       W.Button((bx0 + 328, 740, bw, bh), "SHOT",   T.C.GREEN),
-            "GT":         W.Button((bx0,       774, bw, bh), "GT OFF", T.C.PURPLE),
-            "DIAG":       W.Button((bx0 + 164, 774, bw, bh), "DIAG",   T.C.TEXT_DIM),
-            "LOAD_VIDEO": W.Button((bx0 + 328, 774, bw, bh), "LOAD MP4", T.C.AMBER),
+            "PAUSE":      W.Button((bx0,       736, bw, bh), "PAUSE",  T.C.AMBER),
+            "RESET":      W.Button((bx0 + 122, 736, bw, bh), "RESET",  T.C.CYAN),
+            "SHOT":       W.Button((bx0 + 244, 736, bw, bh), "SHOT",   T.C.GREEN),
+            "GT":         W.Button((bx0,       768, bw, bh), "GT OFF", T.C.PURPLE),
+            "DIAG":       W.Button((bx0 + 122, 768, bw, bh), "DIAG",   T.C.TEXT_DIM),
+            "LOAD_VIDEO": W.Button((bx0 + 244, 768, bw, bh), "LOAD MP4", T.C.AMBER),
         }
         self._screenshot_n = 0
 
         # ── Header chips ────────────────────────────────────────────────
         self.chips = {}
-        xs = 580
+        xs = SIDEBAR_W + 680
         for name in config.PRESET_ORDER:
-            self.chips[name] = W.Chip((xs, 17, 68, 26), name, T.C.CYAN)
-            xs += 74
+            self.chips[name] = W.Chip((xs, 14, 58, 26), name, T.C.CYAN)
+            xs += 62
 
         self.platform_chips = {}
-        px = 956
+        px = SIDEBAR_W + 1000
         for pm in ["SATELLITE_SATELLITE", "UAV_SATELLITE", "UAV_UAV"]:
             lbl = {"SATELLITE_SATELLITE": "SAT-SAT",
                    "UAV_SATELLITE": "UAV-SAT",
                    "UAV_UAV": "UAV-UAV"}[pm]
-            self.platform_chips[pm] = W.Chip((px, 17, 72, 26), lbl, T.C.GREEN)
-            px += 78
+            self.platform_chips[pm] = W.Chip((px, 14, 68, 26), lbl, T.C.GREEN)
+            px += 72
 
         self.atmos_chips = {}
-        ax = 1200
+        ax = SIDEBAR_W + 1224
         for atm in ["CLEAR", "HAZE", "FOG", "RAIN", "LOW_LIGHT"]:
-            self.atmos_chips[atm] = W.Chip((ax, 17, 62, 26), atm, T.C.AMBER)
-            ax += 68
+            self.atmos_chips[atm] = W.Chip((ax, 14, 56, 26), atm, T.C.AMBER)
+            ax += 60
 
     # ------------------------------------------------------------------
     def _atmosphere_allowed(self):
@@ -225,6 +259,7 @@ class App:
                 elif ev.type == pygame.MOUSEBUTTONUP:
                     for s in self.sliders.values():
                         s.dragging = False
+                    self.sim_page_mgr.handle_mouse_up()
                 elif ev.type == pygame.MOUSEMOTION:
                     self._mouse_move(self._logical_mouse_pos(ev.pos), ev.buttons)
 
@@ -252,6 +287,10 @@ class App:
         if pygame.K_SPACE == key:
             self.paused = not self.paused
             self.buttons["PAUSE"].label = "RESUME" if self.paused else "PAUSE"
+        elif pygame.K_TAB == key:
+            self.active_tab = (self.active_tab + 1) % len(self.SIDEBAR_TABS)
+        elif pygame.K_F1 <= key <= pygame.K_F6:
+            self.active_tab = key - pygame.K_F1
         elif pygame.K_r == key:
             self._reset()
         elif pygame.K_s == key:
@@ -262,21 +301,24 @@ class App:
             self.show_fov_grid = not self.show_fov_grid
         elif pygame.K_f == key:
             self._toggle_fullscreen()
-        elif pygame.K_1 <= key <= pygame.K_5:
-            name = config.PRESET_ORDER[key - pygame.K_1]
-            self.preset = name
-            self._reset(name)
-        elif pygame.K_6 <= key <= pygame.K_8:
-            pm = list(self.platform_chips.keys())[key - pygame.K_6]
-            if pm != self.platform_mode:
-                self._select_platform(pm)
-        elif pygame.K_a == key:
-            allowed = [n for n in self.atmos_chips
-                       if n == "CLEAR" or self._atmosphere_allowed()]
-            if allowed:
-                idx = (allowed.index(self.atmosphere) + 1) % len(allowed)
-                self.atmosphere = allowed[idx]
-                self._reset()
+        elif self.active_tab == 0:
+            if pygame.K_1 <= key <= pygame.K_5:
+                name = config.PRESET_ORDER[key - pygame.K_1]
+                self.preset = name
+                self._reset(name)
+            elif pygame.K_6 <= key <= pygame.K_8:
+                pm = list(self.platform_chips.keys())[key - pygame.K_6]
+                if pm != self.platform_mode:
+                    self._select_platform(pm)
+            elif pygame.K_a == key:
+                allowed = [n for n in self.atmos_chips
+                           if n == "CLEAR" or self._atmosphere_allowed()]
+                if allowed:
+                    idx = (allowed.index(self.atmosphere) + 1) % len(allowed)
+                    self.atmosphere = allowed[idx]
+                    self._reset()
+        elif 0 <= key - pygame.K_1 < len(self.SIDEBAR_TABS):
+            self.active_tab = key - pygame.K_1
         return True
 
     def _logical_mouse_pos(self, pos):
@@ -308,49 +350,70 @@ class App:
         self.screen.blit(scaled, self._display_rect.topleft)
 
     def _mouse_down(self, pos, button):
-        for name, b in self.buttons.items():
-            if button == 1 and b.hit(pos):
-                if name == "PAUSE":
-                    self.paused = not self.paused
-                    b.label = "RESUME" if self.paused else "PAUSE"
-                elif name == "RESET":
-                    self._reset()
-                elif name == "SHOT":
-                    self._screenshot()
-                elif name == "GT":
-                    self.show_gt = not self.show_gt
-                    b.label = "GT ON" if self.show_gt else "GT OFF"
-                elif name == "DIAG":
-                    self.show_diag = not self.show_diag
-                    b.label = "DIAG ‹" if self.show_diag else "DIAG"
-                elif name == "LOAD_VIDEO":
-                    self._load_video()
-                return
-        for name, c in self.chips.items():
-            if button == 1 and c.hit(pos):
-                self.preset = name
-                self._reset(name)
-                return
-        for name, c in self.platform_chips.items():
-            if button == 1 and c.hit(pos):
-                self._select_platform(name)
-                return
-        for name, c in self.atmos_chips.items():
-            if button == 1 and c.hit(pos):
-                if not self._atmosphere_allowed() and name != "CLEAR":
+        # 1. Check sidebar tabs
+        if button == 1 and pos[0] < SIDEBAR_W:
+            for i in range(len(self.SIDEBAR_TABS)):
+                tab_rect = pygame.Rect(0, 66 + i * 56, SIDEBAR_W, 52)
+                if tab_rect.collidepoint(pos):
+                    self.active_tab = i
                     return
-                self.atmosphere = name
-                self._reset()
-                return
-        for s in self.sliders.values():
-            if button == 1 and s.hit(pos):
-                s.dragging = True
-                s.drag_to(pos[0])
+
+        # 2. Check top header pause toggle
+        if button == 1 and hasattr(self, "hdr_pause_rect") and self.hdr_pause_rect.collidepoint(pos):
+            self.paused = not self.paused
+            self.buttons["PAUSE"].label = "RESUME" if self.paused else "PAUSE"
+            return
+
+        # 3. Handle active view controls
+        if self.active_tab == 0:
+            for name, b in self.buttons.items():
+                if button == 1 and b.hit(pos):
+                    if name == "PAUSE":
+                        self.paused = not self.paused
+                        b.label = "RESUME" if self.paused else "PAUSE"
+                    elif name == "RESET":
+                        self._reset()
+                    elif name == "SHOT":
+                        self._screenshot()
+                    elif name == "GT":
+                        self.show_gt = not self.show_gt
+                        b.label = "GT ON" if self.show_gt else "GT OFF"
+                    elif name == "DIAG":
+                        self.show_diag = not self.show_diag
+                        b.label = "DIAG ‹" if self.show_diag else "DIAG"
+                    elif name == "LOAD_VIDEO":
+                        self._load_video()
+                    return
+            for name, c in self.chips.items():
+                if button == 1 and c.hit(pos):
+                    self.preset = name
+                    self._reset(name)
+                    return
+            for name, c in self.platform_chips.items():
+                if button == 1 and c.hit(pos):
+                    self._select_platform(name)
+                    return
+            for name, c in self.atmos_chips.items():
+                if button == 1 and c.hit(pos):
+                    if not self._atmosphere_allowed() and name != "CLEAR":
+                        return
+                    self.atmosphere = name
+                    self._reset()
+                    return
+            for s in self.sliders.values():
+                if button == 1 and s.hit(pos):
+                    s.dragging = True
+                    s.drag_to(pos[0])
+        elif self.active_tab == 3:
+            self.sim_page_mgr.handle_mouse_down(pos)
 
     def _mouse_move(self, pos, buttons):
-        for s in self.sliders.values():
-            if s.dragging and buttons[0]:
-                s.drag_to(pos[0])
+        if self.active_tab == 0:
+            for s in self.sliders.values():
+                if s.dragging and buttons[0]:
+                    s.drag_to(pos[0])
+        elif self.active_tab == 3:
+            self.sim_page_mgr.handle_mouse_move(pos, buttons)
 
     def _reset(self, name=None):
         if self.video_mode:
@@ -459,108 +522,176 @@ class App:
     def _draw(self):
         s = self.canvas
         s.fill(T.C.BG)
-        # Subtle background grid
-        self._draw_bg_grid(s)
-        self._draw_header(s)
-        self._draw_camera(s)
-        self._draw_panel(s)
-        self._draw_bottom(s)
-        self._draw_footer(s)
+
+        # Update physical optical link model from live sim step
+        res = self.sim.last_result
+        hist_pt = self.opt_model.update_from_sim(res)
+
+        # Record state change events
+        cur_st = res.get("state", "SEARCHING")
+        if cur_st != self._last_state:
+            ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
+            lvl = "INFO" if cur_st in LOCKED_STATES else ("WARNING" if cur_st in ("COASTING", "REACQUIRING") else "CRITICAL")
+            self.events_list.insert(0, (ts_str, lvl, "TRACKER", f"State transition: {self._last_state} -> {cur_st} (error: {res.get('pointing_err_deg', 0)*1000:.1f} mdeg)"))
+            if len(self.events_list) > 100:
+                self.events_list.pop()
+            self._last_state = cur_st
+
+        # 1. Left Navigation Sidebar
+        self._draw_sidebar(s)
+
+        # 2. Top Mission Control Header
+        self._draw_mission_header(s, hist_pt)
+
+        # 3. Main Active Content View
+        if self.active_tab == 0:
+            # VIRTUAL ENVIRONMENT (Camera Viewport + HUD + Controls)
+            self._draw_bg_grid(s)
+            self._draw_camera(s)
+            self._draw_panel(s)
+            self._draw_bottom(s)
+            self._draw_footer(s)
+        elif self.active_tab == 1:
+            # OVERVIEW (Figma Image 2)
+            page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 12, APP_W - SIDEBAR_W - 24, APP_H - HDR_H - 24)
+            render_overview_page(s, page_rect, self.sim, self.perf, self.opt_model, hist_pt)
+        elif self.active_tab == 2:
+            # TELEMETRY (Figma Image 1)
+            page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 12, APP_W - SIDEBAR_W - 24, APP_H - HDR_H - 24)
+            render_telemetry_page(s, page_rect, self.sim, self.perf, self.opt_model, hist_pt)
+        elif self.active_tab == 3:
+            # SIMULATION (Figma Images 3 & 4)
+            self.sim_page_mgr.apply_to_model(self.opt_model)
+            self.sim_page_mgr.draw(s, self.opt_model, hist_pt)
+        elif self.active_tab == 4:
+            # FALSE LOCK (Figma Image 5)
+            page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 12, APP_W - SIDEBAR_W - 24, APP_H - HDR_H - 24)
+            render_false_lock_page(s, page_rect, self.sim, self.perf, self.opt_model, hist_pt)
+        elif self.active_tab == 5:
+            # EVENT LOG
+            page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 12, APP_W - SIDEBAR_W - 24, APP_H - HDR_H - 24)
+            render_event_log_page(s, page_rect, self.sim, self.perf, self.opt_model, self.events_list)
+
         self._present_canvas()
+
+    def _draw_sidebar(self, surf):
+        pygame.draw.rect(surf, (8, 14, 26), (0, 0, SIDEBAR_W, APP_H))
+        pygame.draw.line(surf, (20, 36, 62), (SIDEBAR_W - 1, 0), (SIDEBAR_W - 1, APP_H), 1)
+
+        # Brand header at top of sidebar
+        pygame.draw.rect(surf, (12, 20, 38), (0, 0, SIDEBAR_W, HDR_H))
+        pygame.draw.line(surf, (20, 36, 62), (0, HDR_H - 1), (SIDEBAR_W, HDR_H - 1), 1)
+        T.text(surf, (14, 10), "FSOC", 16, T.C.CYAN_ELEC, bold=True)
+        T.text(surf, (14, 28), "PAT LAB · ISRO", 8, T.C.TEXT_DIM, bold=True)
+        T.text(surf, (14, 40), "SIH 2026 · PS 26169", 7, T.C.TEXT_FAINT)
+
+        # Tabs
+        mouse_pos = self._logical_mouse_pos(pygame.mouse.get_pos())
+        for i, (name, abbr, num) in enumerate(self.SIDEBAR_TABS):
+            tab_y = 66 + i * 56
+            tab_rect = pygame.Rect(0, tab_y, SIDEBAR_W, 52)
+            is_active = (i == self.active_tab)
+            is_hover = tab_rect.collidepoint(mouse_pos)
+
+            if is_active:
+                pygame.draw.rect(surf, (0, 32, 60), tab_rect)
+                pygame.draw.rect(surf, T.C.CYAN_ELEC, (0, tab_y, 3, 52))
+                title_col = T.C.CYAN_ELEC
+                badge_col = T.C.CYAN_ELEC
+            elif is_hover:
+                pygame.draw.rect(surf, (14, 22, 40), tab_rect)
+                title_col = T.C.TEXT
+                badge_col = T.C.TEXT_DIM
+            else:
+                title_col = T.C.TEXT_DIM
+                badge_col = T.C.TEXT_FAINT
+
+            # Badge number
+            T.text(surf, (14, tab_y + 11), num, 7, badge_col, bold=True)
+            # Label
+            T.text(surf, (32, tab_y + 10), name, 9, title_col, bold=True)
+            # Abbr subtext
+            T.text(surf, (32, tab_y + 26), abbr, 7, badge_col)
+
+        # Bottom stats
+        fps = self.clock.get_fps()
+        fps_col = T.C.GREEN if fps >= 25 else T.C.AMBER
+        T.text(surf, (14, APP_H - 42), f"FPS: {fps:.0f}", 9, fps_col, bold=True)
+        T.text(surf, (14, APP_H - 26), "NATIVE DESKTOP", 7, T.C.TEXT_FAINT)
+        T.text(surf, (14, APP_H - 14), "ISRO PAT CONSOLE", 7, T.C.TEXT_FAINT)
+
+    def _draw_mission_header(self, surf, hist_pt):
+        hdr_w = APP_W - SIDEBAR_W
+        pygame.draw.rect(surf, (6, 12, 24), (SIDEBAR_W, 0, hdr_w, HDR_H))
+        pygame.draw.line(surf, (20, 36, 62), (SIDEBAR_W, HDR_H - 1), (APP_W, HDR_H - 1), 1)
+
+        # Cyan top accent line
+        pygame.draw.rect(surf, T.C.CYAN, (SIDEBAR_W, 0, hdr_w, 2))
+
+        # Title
+        T.text(surf, (SIDEBAR_W + 16, 10), "FSOC MISSION CONTROL", 13, T.C.CYAN_ELEC, bold=True)
+        T.text(surf, (SIDEBAR_W + 16, 28), "FREE-SPACE OPTICAL COMMS · PAT LAB · ISRO SIH 2026", 8, T.C.TEXT_FAINT)
+
+        # Link State badge
+        st = hist_pt.get("state", "ESTABLISHED")
+        st_col = T.C.STATE.get(st, T.C.GREEN)
+        badge_x = SIDEBAR_W + 350
+        pygame.draw.rect(surf, (0, 32, 24), (badge_x, 10, 136, 36), border_radius=3)
+        pygame.draw.rect(surf, T.C.BORDER, (badge_x, 10, 136, 36), 1, border_radius=3)
+        T.text(surf, (badge_x + 10, 13), "LINK STATE", 7, T.C.TEXT_FAINT, bold=True)
+
+        # Pulsing indicator dot
+        p_alpha = int(180 + 75 * math.sin(time.time() * 5.0))
+        dot_col = (0, min(255, p_alpha), 120) if st in LOCKED_STATES else st_col
+        pygame.draw.circle(surf, dot_col, (badge_x + 16, 31), 4)
+        T.text(surf, (badge_x + 26, 25), st, 9, st_col, bold=True)
+
+        # Header live telemetry values
+        def _h_val(x, lbl, val, unit, col=T.C.GREEN):
+            T.text(surf, (x, 12), lbl, 7, T.C.TEXT_FAINT, bold=True)
+            vw, vh = T.text(surf, (x, 25), val, 11, col, bold=True)
+            if unit:
+                T.text(surf, (x + vw + 3, 28), unit, 8, T.C.TEXT_DIM)
+
+        _h_val(badge_x + 150, "RX POWER", f"{hist_pt.get('rx_power', -11.4):.1f}", "dBm", T.C.CYAN_ELEC)
+        _h_val(badge_x + 235, "SNR", f"{hist_pt.get('snr', 73.6):.1f}", "dB", T.C.GREEN)
+        _h_val(badge_x + 310, "MARGIN", f"{hist_pt.get('link_margin', 38.6):.1f}", "dB", T.C.GREEN)
+        _h_val(badge_x + 395, "TRACKING", f"{int(round(hist_pt.get('stability', 96)))}", "%", T.C.CYAN_ELEC)
+
+        # If in VIRTUAL ENV tab, draw scenario/platform/atmosphere chips!
+        if self.active_tab == 0:
+            for name, c in self.chips.items():
+                c.draw(surf, selected=(name == self.preset))
+            for name, c in self.platform_chips.items():
+                c.draw(surf, selected=(name == self.platform_mode))
+            for name, c in self.atmos_chips.items():
+                enabled = (name == "CLEAR" or self._atmosphere_allowed())
+                c.draw(surf, selected=(name == self.atmosphere), enabled=enabled)
+
+        # UTC Clock
+        utc_str = time.strftime("%Y-%m-%d  %H:%M:%S", time.gmtime())
+        T.text(surf, (APP_W - 120, 13), "UTC", 7, T.C.TEXT_FAINT, anchor="tc")
+        T.text(surf, (APP_W - 120, 26), utc_str, 9, T.C.TEXT, bold=True, anchor="tc")
+
+        # PAUSE Button
+        self.hdr_pause_rect = pygame.Rect(APP_W - 78, 12, 68, 32)
+        btn_col = T.C.AMBER
+        pygame.draw.rect(surf, (40, 24, 0), self.hdr_pause_rect, border_radius=2)
+        pygame.draw.rect(surf, btn_col, self.hdr_pause_rect, 1, border_radius=2)
+        pause_label = "RESUME" if self.paused else "PAUSE"
+        T.text(surf, (self.hdr_pause_rect.centerx, self.hdr_pause_rect.centery - 5), pause_label, 8, btn_col, bold=True, anchor="cc")
 
     # ---------------------------------------------------------------- background grid
     def _draw_bg_grid(self, surf):
         col = (8, 15, 27)
-        for x in range(0, APP_W, 120):
+        for x in range(SIDEBAR_W, APP_W, 120):
             pygame.draw.line(surf, col, (x, HDR_H), (x, BTM_Y), 1)
         for y in range(HDR_H, BTM_Y, 80):
-            pygame.draw.line(surf, col, (0, y), (CAM_X1, y), 1)
-
-    # ---------------------------------------------------------------- header
-    def _draw_header(self, surf):
-        # Background with two-tone stripe
-        pygame.draw.rect(surf, T.C.PANEL, (0, 0, APP_W, HDR_H))
-        pygame.draw.rect(surf, T.C.BG,    (0, 0, 180, HDR_H))
-        # Bottom border
-        pygame.draw.line(surf, T.C.BORDER_B, (0, HDR_H - 1), (APP_W, HDR_H - 1), 1)
-        pygame.draw.line(surf, T.C.BORDER,   (0, HDR_H),     (APP_W, HDR_H),     1)
-        # Top accent line
-        pygame.draw.rect(surf, T.C.CYAN, (0, 0, APP_W, 2))
-
-        # ── System ID block ──────────────────────────────────────────
-        T.text(surf, (14, 7),  "FSOC-PAT",              16, T.C.CYAN,       bold=True)
-        T.text(surf, (14, 27), "OPTICAL TRACK CONSOLE", 9,  T.C.TEXT_DIM)
-        T.text(surf, (14, 41), "SIH 2026 · PS 26169",   8,  T.C.TEXT_FAINT)
-        pygame.draw.line(surf, T.C.BORDER, (178, 4), (178, HDR_H - 5), 1)
-
-        # ── State block (state-reactive) ─────────────────────────────
-        res    = self.sim.last_result
-        st     = res.get("state", "SEARCHING")
-        st_col = T.C.STATE.get(st, T.C.CYAN)
-        st_fill= T.C.STATE_FILL.get(st, (0, 30, 50))
-        pygame.draw.rect(surf, st_fill, (183, 0, 152, HDR_H))
-        pygame.draw.rect(surf, st_col,  (183, 0, 3,   HDR_H))   # left accent
-        pygame.draw.line(surf, T.C.BORDER, (335, 4), (335, HDR_H - 5), 1)
-        T.text(surf, (260, 7),  "TRACK STATE", 9, st_col, bold=True, anchor="cc")
-        T.fit_text(surf, pygame.Rect(194, 20, 132, 27), st, 17, st_col,
-                 bold=True, padding=4)
-        # status dot
-        dot_col = T.C.AMBER if self.paused else st_col
-        pygame.draw.circle(surf, dot_col, (188, 52), 4)
-        T.text(surf, (196, 47), "PAUSED" if self.paused else "LIVE", 9, dot_col,
-               bold=True)
-
-        # ── Live metrics ─────────────────────────────────────────────
-        elapsed = res.get("t", 0.0)
-        err     = res.get("pointing_err_deg", 0.0)
-        ec = (T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG
-              else (T.C.AMBER if err < 0.30 else T.C.RED))
-        conf = res.get("confidence", 0.0)
-        fps  = self.clock.get_fps()
-
-        def _hdr_metric(x, label, value, vcol):
-            pygame.draw.line(surf, T.C.BORDER, (x, 6), (x, HDR_H - 6), 1)
-            T.text(surf, (x + 8, 6),  label, 8,  T.C.TEXT_DIM, bold=True)
-            T.text(surf, (x + 8, 19), value, 14, vcol, bold=True)
-
-        _hdr_metric(340, "ELAPSED",    f"{elapsed:7.1f} s",     T.C.TEXT)
-        _hdr_metric(420, "POINT ERR",  f"{err*1000:6.1f} m°",   ec)
-        _hdr_metric(510, "CONFIDENCE", f"{conf:.2f}",            T.C.CYAN)
-
-        fps_col = T.C.GREEN if fps >= 25 else T.C.AMBER
-        T.text(surf, (APP_W - 12, 5),  f"{fps:.0f} FPS",          10, fps_col,       bold=True, anchor="tr")
-        T.text(surf, (APP_W - 12, 20), self._platform_label(),     9,  T.C.TEXT_DIM, anchor="tr")
-        T.text(surf, (APP_W - 12, 35), self.atmosphere or "CLEAR", 9,  T.C.TEXT_FAINT, anchor="tr")
-
-        # ── Chip groups ───────────────────────────────────────────────
-        # Labels above chip rows
-        T.text(surf, (self.chips["EASY"].rect.x, 3),       "SCENARIO",   8, T.C.TEXT_FAINT, bold=True)
-        T.text(surf, (list(self.platform_chips.values())[0].rect.x, 3), "PLATFORM",   8, T.C.TEXT_FAINT, bold=True)
-        T.text(surf, (list(self.atmos_chips.values())[0].rect.x, 3),    "ATMOSPHERE", 8, T.C.TEXT_FAINT, bold=True)
-
-        for name, c in self.chips.items():
-            c.draw(surf, selected=(name == self.preset))
-        for name, c in self.platform_chips.items():
-            c.draw(surf, selected=(name == self.platform_mode))
-        for name, c in self.atmos_chips.items():
-            enabled = (name == "CLEAR" or self._atmosphere_allowed())
-            c.draw(surf, selected=(name == self.atmosphere), enabled=enabled)
-
-        # Separators between chip groups
-        sep_x = list(self.platform_chips.values())[0].rect.x - 6
-        pygame.draw.line(surf, T.C.BORDER, (sep_x, 6), (sep_x, HDR_H - 6), 1)
-        sep_x = list(self.atmos_chips.values())[0].rect.x - 6
-        pygame.draw.line(surf, T.C.BORDER, (sep_x, 6), (sep_x, HDR_H - 6), 1)
+            pygame.draw.line(surf, col, (SIDEBAR_W, y), (CAM_X1, y), 1)
 
     def _draw_footer(self, surf):
-        if self.video_mode:
-            T.text(surf, (8, APP_H - 12),
-                   "SPACE pause  ·  R restart  ·  S shot  ·  L load MP4  ·  V FOV grid",
-                   8, T.C.TEXT_FAINT)
-            return
-        T.text(surf, (8, APP_H - 12),
-               "SPACE pause  ·  R reset  ·  S shot  ·  1-5 scenario  ·  6-8 platform  "
-               "·  A atmosphere  ·  F fullscreen  ·  V grid",
+        T.text(surf, (SIDEBAR_W + 12, APP_H - 14),
+               "TAB cycle view  ·  1-5 preset  ·  SPACE pause  ·  R reset  ·  S screenshot  ·  V FOV grid  ·  F fullscreen",
                8, T.C.TEXT_FAINT)
 
     # ---------------------------------------------------------------- camera

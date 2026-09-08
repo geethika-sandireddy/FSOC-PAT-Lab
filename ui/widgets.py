@@ -7,29 +7,29 @@ from ui import theme as T
 
 
 # ------------------------------------------------------------------ stats
-def stat_row(surf, rect, label, value, value_color=T.C.TEXT, value_size=14,
+def stat_row(surf, rect, label, value, value_color=T.C.TEXT, value_size=15,
               label_color=T.C.TEXT_FAINT):
-    T.text(surf, (rect.x, rect.y + 1), label, 9, label_color)
+    T.text(surf, (rect.x, rect.y + 1), label, 11, label_color)
     T.text(surf, (rect.right, rect.y), value, value_size, value_color,
            bold=True, anchor="tr")
 
 
 def stat_val(surf, x, y, label, value, val_color=T.C.CYAN,
-             lbl_size=8, val_size=22):
+             lbl_size=11, val_size=24):
     """Single large value with small label above."""
     T.text(surf, (x, y), label, lbl_size, T.C.TEXT_FAINT)
-    T.text(surf, (x, y + lbl_size + 2), value, val_size, val_color, bold=True)
+    T.text(surf, (x, y + lbl_size + 4), value, val_size, val_color, bold=True)
 
 
 def kpi_card(surf, rect, title, rows, sub=None):
     T.panel(surf, rect)
     pygame.draw.rect(surf, T.C.BORDER_B, (rect.x, rect.y, rect.w, 1))
-    T.text(surf, (rect.x + 8, rect.y + 6), title, 9, T.C.TEXT_DIM)
-    y = rect.y + 22
+    T.text(surf, (rect.x + 8, rect.y + 6), title, 11, T.C.TEXT_DIM, bold=True)
+    y = rect.y + 24
     for label, (val, col) in rows.items():
-        T.text(surf, (rect.x + 10, y + 1), label, 8, T.C.TEXT_FAINT)
-        T.text(surf, (rect.right - 10, y), val, 13, col, bold=True, anchor="tr")
-        y += 18
+        T.text(surf, (rect.x + 10, y + 1), label, 10, T.C.TEXT_FAINT)
+        T.text(surf, (rect.right - 10, y), val, 14, col, bold=True, anchor="tr")
+        y += 20
     return y
 
 
@@ -52,13 +52,13 @@ def hbar(surf, rect, frac, color, label="", bg=T.C.PANEL_2):
                          (tx, rect.y + 1), (tx, rect.bottom - 1), 1)
     pygame.draw.rect(surf, T.C.BORDER, rect, 1)
     if label:
-        T.text(surf, (rect.x + 4, rect.y - 1), label, 9, T.C.TEXT_DIM)
+        T.text(surf, (rect.x + 4, rect.y - 1), label, 11, T.C.TEXT_DIM)
 
 
 def badge(surf, rect, s, color):
     pygame.draw.rect(surf, tuple(max(0, c // 6) for c in color), rect)
     pygame.draw.rect(surf, color, rect, 1)
-    T.text(surf, (rect.centerx, rect.centery), s, 14, color,
+    T.text(surf, (rect.centerx, rect.centery), s, 15, color,
            bold=True, anchor="cc")
 
 
@@ -99,10 +99,10 @@ class Slider:
         if not self.enabled:
             self._draw_disabled(surf)
             return
-        lx, ly = self.rect.x, self.rect.y - 10
-        T.text(surf, (lx, ly), self.label, 10, T.C.TEXT_DIM, bold=True)
+        lx, ly = self.rect.x, self.rect.y - 12
+        T.text(surf, (lx, ly), self.label, 11, T.C.TEXT_DIM, bold=True)
         val_str = value_text if value_text is not None else self.fmt.format(self.value)
-        T.text(surf, (self.rect.right, ly), val_str, 10, self.color,
+        T.text(surf, (self.rect.right, ly), val_str, 12, self.color,
                bold=True, anchor="tr")
         # track
         ty = self.rect.y + (self.rect.h - self.TRACK_H) // 2 + 6
@@ -128,8 +128,8 @@ class Slider:
         pygame.draw.rect(surf, T.C.TEXT_DIM, knob, 1)
 
     def _draw_disabled(self, surf, value_text=None):
-        T.text(surf, (self.rect.x, self.rect.y - 10),
-             self.label + "  N/A", 10, T.C.TEXT_FAINT, bold=True)
+        T.text(surf, (self.rect.x, self.rect.y - 12),
+             self.label + "  N/A", 11, T.C.TEXT_FAINT, bold=True)
         ty = self.rect.y + (self.rect.h - self.TRACK_H) // 2 + 6
         track = pygame.Rect(self.rect.x, ty, self.rect.w, self.TRACK_H)
         pygame.draw.rect(surf, T.C.PANEL_2, track)
@@ -159,7 +159,7 @@ class Button:
         pygame.draw.polygon(surf, brd, pts, 1)
         # top accent line
         pygame.draw.line(surf, col, (r.x + 1, r.y), (r.right - 7, r.y), 1)
-        T.fit_text(surf, r, self.label, 11, col, bold=True, padding=10)
+        T.fit_text(surf, r, self.label, 12, col, bold=True, padding=6)
 
 
 # ------------------------------------------------------------------ chip
@@ -177,7 +177,7 @@ class Chip:
         if not enabled:
             pygame.draw.rect(surf, T.C.BG, r)
             pygame.draw.rect(surf, T.C.BORDER_DIM, r, 1)
-            T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=5)
+            T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=4)
             return
         if selected:
             fill   = tuple(max(0, c // 5) for c in self.color)
@@ -194,7 +194,7 @@ class Chip:
             pygame.draw.line(surf, self.color,
                              (r.x + 1, r.bottom - 1),
                              (r.right - 1, r.bottom - 1), 2)
-        T.fit_text(surf, r, self.label, 10, tcol, bold=selected, padding=5)
+        T.fit_text(surf, r, self.label, 11, tcol, bold=selected, padding=4)
 
 
 def _clamp(v, lo, hi):
