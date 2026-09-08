@@ -177,7 +177,7 @@ class Chip:
         if not enabled:
             pygame.draw.rect(surf, T.C.BG, r)
             pygame.draw.rect(surf, T.C.BORDER_DIM, r, 1)
-                        T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=5)
+            T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=5)
             return
         if selected:
             fill   = tuple(max(0, c // 5) for c in self.color)
