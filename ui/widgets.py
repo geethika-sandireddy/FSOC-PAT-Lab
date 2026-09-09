@@ -64,18 +64,19 @@ def badge(surf, rect, s, color):
 
 # ------------------------------------------------------------------ slider
 class Slider:
-    TRACK_H = 7
+    TRACK_H = 6
     KNOB_W  = 10
-    KNOB_H  = 20
+    KNOB_H  = 16
 
     def __init__(self, rect, label, value=0, color=T.C.CYAN,
-                 fmt="{:>3d}", enabled=True):
+                 fmt="{:>3d}", enabled=True, unit=""):
         self.rect    = pygame.Rect(rect)
         self.label   = label
         self.value   = int(round(_clamp(value, 0, 100)))
         self.color   = color
         self.fmt     = fmt
         self.enabled = enabled
+        self.unit    = unit
         self.dragging = False
 
     @property
@@ -86,54 +87,64 @@ class Slider:
         self.value = int(round(_clamp(f * 100.0, 0, 100)))
 
     def hit(self, pos):
-        return self.enabled and self.rect.collidepoint(pos)
+        # Allow hitting the slider row
+        hit_box = pygame.Rect(self.rect.x - 4, self.rect.y - 2, self.rect.w + 8, self.rect.h + 8)
+        return self.enabled and hit_box.collidepoint(pos)
 
     def selected_enabled(self):
         return self.enabled
 
     def drag_to(self, x):
         if self.enabled:
-            self.set_frac((x - self.rect.x) / self.rect.w)
+            self.set_frac((x - self.rect.x) / max(1, self.rect.w))
 
     def draw(self, surf, value_text=None):
         if not self.enabled:
             self._draw_disabled(surf)
             return
-        lx, ly = self.rect.x, self.rect.y - 12
-        T.text(surf, (lx, ly), self.label, 11, T.C.TEXT_DIM, bold=True)
-        val_str = value_text if value_text is not None else self.fmt.format(self.value)
-        T.text(surf, (self.rect.right, ly), val_str, 12, self.color,
+        # Label on top left
+        T.text(surf, (self.rect.x, self.rect.y), self.label, 10, T.C.TEXT_DIM, bold=True)
+        # Value string on top right
+        if value_text is not None:
+            val_str = value_text
+        elif self.unit:
+            val_str = f"{self.fmt.format(self.value)} {self.unit}"
+        else:
+            val_str = self.fmt.format(self.value)
+        T.text(surf, (self.rect.right, self.rect.y), val_str, 11, self.color,
                bold=True, anchor="tr")
-        # track
-        ty = self.rect.y + (self.rect.h - self.TRACK_H) // 2 + 6
+
+        # Track sits neatly below label
+        ty = self.rect.y + 16
         track = pygame.Rect(self.rect.x, ty, self.rect.w, self.TRACK_H)
-        pygame.draw.rect(surf, T.C.PANEL_2, track)
+        pygame.draw.rect(surf, (12, 20, 36), track, border_radius=2)
         w = int(round(track.w * self.frac))
-        if w:
+        if w > 0:
             fill = tuple(max(0, c // 2) for c in self.color)
-            pygame.draw.rect(surf, fill, (track.x, track.y, w, track.h))
+            pygame.draw.rect(surf, fill, (track.x, track.y, w, track.h), border_radius=2)
             pygame.draw.line(surf, self.color,
                              (track.x + w - 1, track.y),
                              (track.x + w - 1, track.bottom - 1), 2)
         for t in (0.25, 0.5, 0.75):
             tx = track.x + int(track.w * t)
             pygame.draw.line(surf, T.C.BORDER,
-                             (tx, track.y), (tx, track.bottom), 1)
-        pygame.draw.rect(surf, T.C.BORDER, track, 1)
-        # knob
+                             (tx, track.y), (tx, track.bottom - 1), 1)
+        pygame.draw.rect(surf, T.C.BORDER, track, 1, border_radius=2)
+
+        # Knob
         kx = track.x + w - self.KNOB_W // 2
         knob = pygame.Rect(kx, ty - (self.KNOB_H - self.TRACK_H) // 2,
                            self.KNOB_W, self.KNOB_H)
-        pygame.draw.rect(surf, T.C.PANEL_3, knob)
-        pygame.draw.rect(surf, T.C.TEXT_DIM, knob, 1)
+        pygame.draw.rect(surf, (20, 36, 60), knob, border_radius=2)
+        pygame.draw.rect(surf, self.color if self.dragging else T.C.TEXT_DIM, knob, 1, border_radius=2)
 
     def _draw_disabled(self, surf, value_text=None):
-        T.text(surf, (self.rect.x, self.rect.y - 12),
-             self.label + "  N/A", 11, T.C.TEXT_FAINT, bold=True)
-        ty = self.rect.y + (self.rect.h - self.TRACK_H) // 2 + 6
+        T.text(surf, (self.rect.x, self.rect.y),
+               self.label + "  (N/A)", 10, T.C.TEXT_FAINT, bold=True)
+        ty = self.rect.y + 16
         track = pygame.Rect(self.rect.x, ty, self.rect.w, self.TRACK_H)
-        pygame.draw.rect(surf, T.C.PANEL_2, track)
-        pygame.draw.rect(surf, T.C.BORDER_DIM, track, 1)
+        pygame.draw.rect(surf, (8, 14, 24), track, border_radius=2)
+        pygame.draw.rect(surf, T.C.BORDER_DIM, track, 1, border_radius=2)
 
 
 # ------------------------------------------------------------------ button
@@ -149,17 +160,15 @@ class Button:
 
     def draw(self, surf, active_color=None):
         col  = active_color or self.color
-        fill = tuple(max(0, c // 7) for c in col)
-        brd  = tuple(max(0, c // 3) for c in col)
-        # angled top-right corner
+        fill = tuple(max(0, c // 6) for c in col)
+        brd  = tuple(max(0, c // 2) for c in col)
         r = self.rect
         pts = [(r.x, r.y), (r.right - 6, r.y), (r.right, r.y + 6),
                (r.right, r.bottom), (r.x, r.bottom)]
         pygame.draw.polygon(surf, fill, pts)
         pygame.draw.polygon(surf, brd, pts, 1)
-        # top accent line
-        pygame.draw.line(surf, col, (r.x + 1, r.y), (r.right - 7, r.y), 1)
-        T.fit_text(surf, r, self.label, 12, col, bold=True, padding=6)
+        pygame.draw.line(surf, col, (r.x + 1, r.y), (r.right - 7, r.y), 2)
+        T.fit_text(surf, r, self.label, 11, col, bold=True, padding=4)
 
 
 # ------------------------------------------------------------------ chip
@@ -175,26 +184,23 @@ class Chip:
     def draw(self, surf, selected=False, enabled=True):
         r = self.rect
         if not enabled:
-            pygame.draw.rect(surf, T.C.BG, r)
-            pygame.draw.rect(surf, T.C.BORDER_DIM, r, 1)
-            T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=4)
+            pygame.draw.rect(surf, (10, 16, 26), r, border_radius=3)
+            pygame.draw.rect(surf, T.C.BORDER_DIM, r, 1, border_radius=3)
+            T.fit_text(surf, r, self.label, 10, T.C.TEXT_FAINT, padding=3)
             return
         if selected:
-            fill   = tuple(max(0, c // 5) for c in self.color)
+            fill   = tuple(max(0, c // 4) for c in self.color)
             border = self.color
-            tcol   = self.color
+            tcol   = (255, 255, 255)
         else:
-            fill   = T.C.BG
+            fill   = (8, 16, 30)
             border = T.C.BORDER
             tcol   = T.C.TEXT_DIM
-        pygame.draw.rect(surf, fill, r)
-        pygame.draw.rect(surf, border, r, 1)
+        pygame.draw.rect(surf, fill, r, border_radius=3)
+        pygame.draw.rect(surf, border, r, 1, border_radius=3)
         if selected:
-            # bright bottom bar instead of top (aerospace style: underline)
-            pygame.draw.line(surf, self.color,
-                             (r.x + 1, r.bottom - 1),
-                             (r.right - 1, r.bottom - 1), 2)
-        T.fit_text(surf, r, self.label, 11, tcol, bold=selected, padding=4)
+            pygame.draw.rect(surf, self.color, (r.x + 1, r.bottom - 2, r.w - 2, 2))
+        T.fit_text(surf, r, self.label, 11, tcol, bold=selected, padding=3)
 
 
 def _clamp(v, lo, hi):

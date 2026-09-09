@@ -16,9 +16,9 @@ class C:
     BORDER_B = (0, 212, 255, 60) # cyan accent border
     BORDER_DIM = (18, 28, 48)
 
-    TEXT       = (238, 246, 255) # bright crisp white
-    TEXT_DIM   = (168, 198, 232) # high-contrast secondary label
-    TEXT_FAINT = (120, 150, 185) # clear tertiary/units
+    TEXT       = (240, 248, 255) # bright crisp white
+    TEXT_DIM   = (182, 212, 242) # high-contrast secondary label
+    TEXT_FAINT = (142, 174, 210) # clear readable tertiary/units (boosted contrast)
 
     CYAN       = (0, 212, 170)   # #00d4aa tactical cyan
     CYAN_ELEC  = (0, 212, 255)   # #00d4ff electric cyan
@@ -64,10 +64,10 @@ class C:
 
 # ---------------------------------------------------------------- fonts
 def _font(size, bold=False):
-    # Enforce minimum size of 10 and clean scaling so no text is microscopic
-    size = max(10, int(round(size * 1.15)))
+    # Enforce strict readable floor of 10 to ensure all secondary words remain crisp
+    actual_size = max(10, int(round(size)))
     return pygame.font.SysFont(
-        "consolas,menlo,dejavusansmono,monospace", size, bold=bold)
+        "consolas,menlo,dejavusansmono,monospace", actual_size, bold=bold)
 
 
 _FONTS, _FONTS_B = {}, {}
@@ -103,14 +103,24 @@ def text(surf, pos, s, size=13, color=C.TEXT, bold=False, anchor="tl"):
     return r.w, r.h
 
 
-def fit_text(surf, rect, s, size=13, color=C.TEXT, bold=False,
-             padding=8, anchor="cc"):
-    """Render readable text that stays inside a compact UI rectangle."""
+def fit_text(surf, rect, s, size=12, color=C.TEXT, bold=False,
+             padding=6, anchor="cc"):
+    """Render readable text that stays inside a UI rectangle with clean bounds."""
+    rect = pygame.Rect(rect)
     max_width = max(1, rect.w - padding * 2)
-    draw_size = size
-    while draw_size > 9 and font(draw_size, bold).size(s)[0] > max_width:
+    draw_size = max(10, size)
+    f = font(draw_size, bold)
+    tw, th = f.size(s)
+    while draw_size > 10 and tw > max_width:
         draw_size -= 1
-    text(surf, (rect.centerx, rect.centery), s, draw_size, color,
+        f = font(draw_size, bold)
+        tw, th = f.size(s)
+    display_str = s
+    if tw > max_width and len(s) > 4:
+        while len(display_str) > 3 and font(draw_size, bold).size(display_str + "…")[0] > max_width:
+            display_str = display_str[:-1]
+        display_str += "…"
+    text(surf, (rect.centerx, rect.centery), display_str, draw_size, color,
          bold=bold, anchor=anchor)
 
 

@@ -51,21 +51,20 @@ DISPLAY_CAP  = 60
 
 LOCKED_STATES = ("LOCKED", "DEGRADED_LOCK")
 
-# ── Layout constants ────────────────────────────────────────────────────────
-SIDEBAR_W = 160
-HDR_H     = 56
-BTM_Y     = 740
-BTM_H     = APP_H - BTM_Y          # 160
-CAM_X0, CAM_X1 = SIDEBAR_W + 4, SIDEBAR_W + 1044  # 164 .. 1204 (w: 1040)
-CAM_Y0, CAM_Y1 = HDR_H + 4, BTM_Y                 # 60 .. 740 (h: 680)
-PNL_X0, PNL_X1 = SIDEBAR_W + 1052, APP_W - 6       # 1212 .. 1594 (w: 382)
-PNL_W   = PNL_X1 - PNL_X0                         # 382
-PNL_INN = PNL_X0 + 6                              # 1218
-PNL_IW  = PNL_W - 12                              # 370
+# Reference layout defaults (for class attributes and headless mode)
+SIDEBAR_W = 150
+HDR_H     = 46
+BTM_Y     = 720
+BTM_H     = 160
+CAM_X0, CAM_X1 = 158, 1200
+CAM_Y0, CAM_Y1 = 92, 720
+PNL_X0, PNL_X1 = 1208, 1592
+PNL_W   = 384
+PNL_INN = 1212
+PNL_IW  = 376
 
 
 class App:
-    # camera region class attrs (used by _cam_scale / _cam_dest)
     CAM_X0, CAM_X1 = CAM_X0, CAM_X1
     CAM_Y0, CAM_Y1 = CAM_Y0, CAM_Y1
 
@@ -73,14 +72,23 @@ class App:
                  platform_mode=None, atmosphere=None,
                  motion_type=None, target_shape=None, target_size=None,
                  num_targets=None, target_initial=None,
-                 video_path=None, video_seed=None):
+                 video_path=None, video_seed=None,
+                 width=1600, height=900):
         pygame.init()
         self.fullscreen = bool(fullscreen)
-        flags = pygame.FULLSCREEN if self.fullscreen else 0
-        self.screen = pygame.display.set_mode(
-            (0, 0) if self.fullscreen else (APP_W, APP_H), flags)
-        self.canvas = pygame.Surface((APP_W, APP_H)).convert()
-        self._display_rect = pygame.Rect(0, 0, APP_W, APP_H)
+        if self.fullscreen:
+            flags = pygame.FULLSCREEN
+            self.screen = pygame.display.set_mode((0, 0), flags)
+            dw, dh = self.screen.get_size()
+            if dw < 1000 or dh < 600:
+                dw, dh = width, height
+            self.W, self.H = dw, dh
+        else:
+            self.W, self.H = width, height
+            self.screen = pygame.display.set_mode((self.W, self.H), pygame.RESIZABLE)
+        self.win_w, self.win_h = width, height
+        self.canvas = pygame.Surface((self.W, self.H)).convert()
+        self._display_rect = pygame.Rect(0, 0, self.W, self.H)
         pygame.display.set_caption(
             "FSOC-PAT Mission Control Console  ·  SIH 2026 · PS 26169")
         self.clock = pygame.time.Clock()
@@ -96,9 +104,8 @@ class App:
         ]
         self.active_tab = 0  # 0: VIRTUAL ENV (Default on launch!)
         self.opt_model = OpticalLinkModel()
-        self.sim_page_mgr = SimulationPageManager(
-            pygame.Rect(SIDEBAR_W + 16, HDR_H + 12, APP_W - SIDEBAR_W - 32, APP_H - HDR_H - 24)
-        )
+        self.sim_page_mgr = None
+
         self.events_list = [
             (time.strftime("%H:%M:%S UTC", time.gmtime()), "INFO", "OPT-LINK", "Carrier acquisition confirmed. Coarse alignment loop ACTIVE"),
             (time.strftime("%H:%M:%S UTC", time.gmtime()), "INFO", "TRACKER", "State transition: SEARCHING -> LOCKED (pointing error <= 10 px)"),
@@ -107,7 +114,7 @@ class App:
             (time.strftime("%H:%M:%S UTC", time.gmtime()), "INFO", "SUBSYS", "All 6 optical subsystems report nominal health"),
         ]
         self._last_state = "SEARCHING"
-        self.hdr_pause_rect = pygame.Rect(APP_W - 86, 12, 74, 32)
+        self.hdr_pause_rect = pygame.Rect(self.W - 80, 8, 72, 30)
 
         self.preset        = preset
         self.platform_mode = platform_mode or "SATELLITE_SATELLITE"
@@ -154,55 +161,191 @@ class App:
         self.error_spark = deque(maxlen=1800)
         self._scanline_surf = None   # created lazily on first camera draw
 
-        # ── Sliders (right panel disturbances section) ──────────────────
-        _sx, _sw = PNL_INN + 2, PNL_IW - 4
+        # Initialize widget collections
         self.sliders = {
-            "turbulence":  W.Slider((_sx, 588, _sw, 20), "TURBULENCE",
+            "turbulence":  W.Slider((0, 0, 100, 20), "TURBULENCE",
                                     self.sim.preset.get("turbulence", 0), T.C.PURPLE,
-                                    enabled=atmosphere_allowed(self.platform_mode)),
-            "vibration":   W.Slider((_sx, 616, _sw, 20), "VIBRATION",
-                                    self.sim.preset.get("vibration", 0), T.C.AMBER),
-            "sensor_noise": W.Slider((_sx, 644, _sw, 20), "SENSOR NOISE",
-                                     self.sim.preset.get("sensor_noise", 0), T.C.RED),
-            "jerk_prob":   W.Slider((_sx, 672, _sw, 20), "JERK PROB",
-                                    self.sim.preset.get("jerk_prob", 0), T.C.CYAN),
-            "beacon_fade": W.Slider((_sx, 700, _sw, 20), "BEACON FADE",
-                                    self.sim.preset.get("beacon_fade", 0), T.C.AMBER_DIM),
+                                    enabled=atmosphere_allowed(self.platform_mode),
+                                    unit=config.DISTURBANCE_UNITS.get("turbulence", ("", ""))[1]),
+            "vibration":   W.Slider((0, 0, 100, 20), "VIBRATION",
+                                    self.sim.preset.get("vibration", 0), T.C.AMBER,
+                                    unit=config.DISTURBANCE_UNITS.get("vibration", ("", ""))[1]),
+            "sensor_noise": W.Slider((0, 0, 100, 20), "SENSOR NOISE",
+                                     self.sim.preset.get("sensor_noise", 0), T.C.RED,
+                                     unit=config.DISTURBANCE_UNITS.get("sensor_noise", ("", ""))[1]),
+            "jerk_prob":   W.Slider((0, 0, 100, 20), "JERK PROB",
+                                    self.sim.preset.get("jerk_prob", 0), T.C.CYAN,
+                                    unit=config.DISTURBANCE_UNITS.get("jerk_prob", ("", ""))[1]),
+            "beacon_fade": W.Slider((0, 0, 100, 20), "BEACON FADE",
+                                     self.sim.preset.get("beacon_fade", 0), T.C.AMBER_DIM,
+                                     unit=config.DISTURBANCE_UNITS.get("beacon_fade", ("", ""))[1]),
         }
 
-        # ── Buttons (right panel controls section) ──────────────────────
-        bw, bh, bx0 = 118, 26, PNL_INN + 2
         self.buttons = {
-            "PAUSE":      W.Button((bx0,       736, bw, bh), "PAUSE",  T.C.AMBER),
-            "RESET":      W.Button((bx0 + 122, 736, bw, bh), "RESET",  T.C.CYAN),
-            "SHOT":       W.Button((bx0 + 244, 736, bw, bh), "SHOT",   T.C.GREEN),
-            "GT":         W.Button((bx0,       768, bw, bh), "GT OFF", T.C.PURPLE),
-            "DIAG":       W.Button((bx0 + 122, 768, bw, bh), "DIAG",   T.C.TEXT_DIM),
-            "LOAD_VIDEO": W.Button((bx0 + 244, 768, bw, bh), "LOAD MP4", T.C.AMBER),
+            "PAUSE":      W.Button((0, 0, 80, 24), "PAUSE",  T.C.AMBER),
+            "RESET":      W.Button((0, 0, 80, 24), "RESET",  T.C.CYAN),
+            "SHOT":       W.Button((0, 0, 80, 24), "SHOT",   T.C.GREEN),
+            "GT":         W.Button((0, 0, 80, 24), "GT OFF", T.C.PURPLE),
+            "DIAG":       W.Button((0, 0, 80, 24), "DIAG",   T.C.TEXT_DIM),
+            "LOAD_VIDEO": W.Button((0, 0, 80, 24), "LOAD MP4", T.C.AMBER),
         }
         self._screenshot_n = 0
 
-        # ── Header chips ────────────────────────────────────────────────
         self.chips = {}
-        xs = SIDEBAR_W + 680
         for name in config.PRESET_ORDER:
-            self.chips[name] = W.Chip((xs, 14, 58, 26), name, T.C.CYAN)
-            xs += 62
+            self.chips[name] = W.Chip((0, 0, 60, 26), name, T.C.CYAN)
 
         self.platform_chips = {}
-        px = SIDEBAR_W + 1000
         for pm in ["SATELLITE_SATELLITE", "UAV_SATELLITE", "UAV_UAV"]:
             lbl = {"SATELLITE_SATELLITE": "SAT-SAT",
                    "UAV_SATELLITE": "UAV-SAT",
                    "UAV_UAV": "UAV-UAV"}[pm]
-            self.platform_chips[pm] = W.Chip((px, 14, 68, 26), lbl, T.C.GREEN)
-            px += 72
+            self.platform_chips[pm] = W.Chip((0, 0, 70, 26), lbl, T.C.GREEN)
 
         self.atmos_chips = {}
-        ax = SIDEBAR_W + 1224
         for atm in ["CLEAR", "HAZE", "FOG", "RAIN", "LOW_LIGHT"]:
-            self.atmos_chips[atm] = W.Chip((ax, 14, 56, 26), atm, T.C.AMBER)
-            ax += 60
+            lbl = "LOW LIGHT" if atm == "LOW_LIGHT" else atm
+            self.atmos_chips[atm] = W.Chip((0, 0, 60, 26), lbl, T.C.AMBER)
+
+        # Simulation Page Manager
+        page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 10, self.W - SIDEBAR_W - 24, self.H - HDR_H - 36)
+        self.sim_page_mgr = SimulationPageManager(page_rect)
+
+        # Initial responsive layout computation
+        self._recompute_layout()
+
+    # ── Responsive layout computation ──────────────────────────────────────────
+    def _recompute_layout(self):
+        w, h = self.W, self.H
+        if self.canvas.get_size() != (w, h):
+            self.canvas = pygame.Surface((w, h)).convert()
+        self._display_rect = pygame.Rect(0, 0, w, h)
+
+        self.SIDEBAR_W = 150
+        self.HDR_H = 46
+        self.SCENARIO_H = 38 if self.active_tab == 0 else 0
+        self.HDR_TOTAL_H = self.HDR_H + self.SCENARIO_H
+        self.FOOTER_H = 22
+
+        # Right Telemetry Column width: ~27% of available content width, bounded [320, 420]
+        content_w = w - self.SIDEBAR_W - 16
+        self.PNL_W = max(320, min(420, int(content_w * 0.27)))
+        self.PNL_X0 = w - self.PNL_W - 8
+        self.PNL_X1 = w - 8
+        self.PNL_INN = self.PNL_X0 + 4
+        self.PNL_IW = self.PNL_W - 8
+
+        # Left / Center Camera Region
+        self.CAM_X0 = self.SIDEBAR_W + 8
+        self.CAM_X1 = self.PNL_X0 - 8
+        self.CAM_SIDE_W = self.CAM_X1 - self.CAM_X0
+
+        # Vertical allocation on camera side
+        content_h = h - self.HDR_TOTAL_H - self.FOOTER_H - 10
+        self.BTM_H = max(144, min(176, int(content_h * 0.27)))
+        self.BTM_Y = h - self.FOOTER_H - self.BTM_H - 4
+        self.CAM_Y0 = self.HDR_TOTAL_H + 4
+        self.CAM_Y1 = self.BTM_Y - 4
+
+        # Pause toggle button in top header
+        self.hdr_pause_rect = pygame.Rect(self.W - 74, 8, 66, 30)
+
+        # Tier 2: Scenario Bar Chips
+        chip_y = self.HDR_H + 6
+        chip_h = 25
+        chip_gap = 4
+        group_gap = 14 if w < 1440 else 24
+
+        # Group 1: Scenario
+        self.scenario_lbl_rect = pygame.Rect(self.SIDEBAR_W + 10, chip_y, 68, chip_h)
+        xs = self.scenario_lbl_rect.right + 6
+        chip_widths = {
+            "EASY": 48,
+            "MODERATE": 72,
+            "HARD": 48,
+            "SEVERE": 60,
+            "ADVERSARIAL": 88,
+        }
+        for name in config.PRESET_ORDER:
+            cw = chip_widths.get(name, 56)
+            self.chips[name].rect = pygame.Rect(xs, chip_y, cw, chip_h)
+            xs += cw + chip_gap
+
+        # Group 2: Platform
+        plat_lbl_x = xs + group_gap
+        self.platform_lbl_rect = pygame.Rect(plat_lbl_x, chip_y, 70, chip_h)
+        px = self.platform_lbl_rect.right + 6
+        plat_widths = {"SATELLITE_SATELLITE": 62, "UAV_SATELLITE": 62, "UAV_UAV": 62}
+        for pm in ["SATELLITE_SATELLITE", "UAV_SATELLITE", "UAV_UAV"]:
+            cw = plat_widths.get(pm, 62)
+            self.platform_chips[pm].rect = pygame.Rect(px, chip_y, cw, chip_h)
+            px += cw + chip_gap
+
+        # Group 3: Atmosphere
+        atm_lbl_x = px + group_gap
+        self.atmos_lbl_rect = pygame.Rect(atm_lbl_x, chip_y, 82, chip_h)
+        ax = self.atmos_lbl_rect.right + 6
+        atm_widths = {"CLEAR": 50, "HAZE": 46, "FOG": 40, "RAIN": 44, "LOW_LIGHT": 74}
+        for atm in ["CLEAR", "HAZE", "FOG", "RAIN", "LOW_LIGHT"]:
+            cw = atm_widths.get(atm, 50)
+            self.atmos_chips[atm].rect = pygame.Rect(ax, chip_y, cw, chip_h)
+            ax += cw + chip_gap
+
+        # Right Panel Cards vertical rhythm
+        pnl_avail = (h - self.FOOTER_H - 4) - (self.HDR_TOTAL_H + 4)
+        card_gap = 5
+        usable_pnl = pnl_avail - card_gap * 5
+        self.pnl_state_h = max(76, int(usable_pnl * 0.13))
+        self.pnl_mission_h = max(56, int(usable_pnl * 0.09))
+        self.pnl_perf_h = max(108, int(usable_pnl * 0.17))
+        self.pnl_geom_h = max(104, int(usable_pnl * 0.18))
+        self.pnl_dist_h = max(156, int(usable_pnl * 0.29))
+        self.pnl_ctrl_h = pnl_avail - (self.pnl_state_h + self.pnl_mission_h + self.pnl_perf_h + self.pnl_geom_h + self.pnl_dist_h + card_gap * 5)
+        if self.pnl_ctrl_h < 72:
+            self.pnl_ctrl_h = 72
+
+        pnl_y = self.HDR_TOTAL_H + 4
+        self.pnl_state_y = pnl_y
+        pnl_y += self.pnl_state_h + card_gap
+        self.pnl_mission_y = pnl_y
+        pnl_y += self.pnl_mission_h + card_gap
+        self.pnl_perf_y = pnl_y
+        pnl_y += self.pnl_perf_h + card_gap
+        self.pnl_geom_y = pnl_y
+        pnl_y += self.pnl_geom_h + card_gap
+        self.pnl_dist_y = pnl_y
+        pnl_y += self.pnl_dist_h + card_gap
+        self.pnl_ctrl_y = pnl_y
+
+        # Sliders inside Disturbance card
+        slider_start_y = self.pnl_dist_y + 24
+        slider_gap = max(24, (self.pnl_dist_h - 30) // 5)
+        _sx, _sw = self.PNL_INN + 6, self.PNL_IW - 12
+        for idx, key in enumerate(["turbulence", "vibration", "sensor_noise", "jerk_prob", "beacon_fade"]):
+            sy = slider_start_y + idx * slider_gap
+            if key in self.sliders:
+                self.sliders[key].rect = pygame.Rect(_sx, sy, _sw, 18)
+
+        # Control buttons inside Controls card
+        bw = (self.PNL_IW - 20) // 3
+        bh = 22
+        bx0 = self.PNL_INN + 6
+        r1_y = self.pnl_ctrl_y + 22
+        r2_y = self.pnl_ctrl_y + 47
+        if "PAUSE" in self.buttons:
+            self.buttons["PAUSE"].rect = pygame.Rect(bx0, r1_y, bw, bh)
+            self.buttons["RESET"].rect = pygame.Rect(bx0 + bw + 4, r1_y, bw, bh)
+            self.buttons["SHOT"].rect = pygame.Rect(bx0 + (bw + 4) * 2, r1_y, bw, bh)
+            self.buttons["GT"].rect = pygame.Rect(bx0, r2_y, bw, bh)
+            self.buttons["DIAG"].rect = pygame.Rect(bx0 + bw + 4, r2_y, bw, bh)
+            self.buttons["LOAD_VIDEO"].rect = pygame.Rect(bx0 + (bw + 4) * 2, r2_y, bw, bh)
+
+        # Sub-page manager rect
+        page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 10,
+                                self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - self.FOOTER_H - 14)
+        if self.sim_page_mgr is not None:
+            self.sim_page_mgr.rect = page_rect
+            self.sim_page_mgr.setup_sliders()
 
     # ------------------------------------------------------------------
     def _atmosphere_allowed(self):
@@ -252,6 +395,14 @@ class App:
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT:
                     running = False
+                elif ev.type == pygame.VIDEORESIZE:
+                    if not self.fullscreen:
+                        self.W, self.H = max(1024, ev.w), max(600, ev.h)
+                        self.win_w, self.win_h = self.W, self.H
+                        self.screen = pygame.display.set_mode((self.W, self.H), pygame.RESIZABLE)
+                        self.canvas = pygame.Surface((self.W, self.H)).convert()
+                        self._recompute_layout()
+                        self._scanline_surf = None
                 elif ev.type == pygame.KEYDOWN:
                     running = self._key(ev.key)
                 elif ev.type == pygame.MOUSEBUTTONDOWN:
@@ -289,8 +440,10 @@ class App:
             self.buttons["PAUSE"].label = "RESUME" if self.paused else "PAUSE"
         elif pygame.K_TAB == key:
             self.active_tab = (self.active_tab + 1) % len(self.SIDEBAR_TABS)
+            self._recompute_layout()
         elif pygame.K_F1 <= key <= pygame.K_F6:
             self.active_tab = key - pygame.K_F1
+            self._recompute_layout()
         elif pygame.K_r == key:
             self._reset()
         elif pygame.K_s == key:
@@ -319,43 +472,58 @@ class App:
                     self._reset()
         elif 0 <= key - pygame.K_1 < len(self.SIDEBAR_TABS):
             self.active_tab = key - pygame.K_1
+            self._recompute_layout()
         return True
 
     def _logical_mouse_pos(self, pos):
         """Map a physical display coordinate into the logical UI canvas."""
         if self._display_rect.w <= 0 or self._display_rect.h <= 0:
             return pos
-        x = (pos[0] - self._display_rect.x) * APP_W / self._display_rect.w
-        y = (pos[1] - self._display_rect.y) * APP_H / self._display_rect.h
+        x = (pos[0] - self._display_rect.x) * self.W / self._display_rect.w
+        y = (pos[1] - self._display_rect.y) * self.H / self._display_rect.h
         return int(x), int(y)
 
     def _toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
-        flags = pygame.FULLSCREEN if self.fullscreen else 0
-        self.screen = pygame.display.set_mode(
-            (0, 0) if self.fullscreen else (APP_W, APP_H), flags)
+        flags = pygame.FULLSCREEN if self.fullscreen else pygame.RESIZABLE
+        if self.fullscreen:
+            self.screen = pygame.display.set_mode((0, 0), flags)
+            dw, dh = self.screen.get_size()
+            if dw >= 1000 and dh >= 600:
+                self.W, self.H = dw, dh
+        else:
+            self.W, self.H = self.win_w, self.win_h
+            self.screen = pygame.display.set_mode((self.W, self.H), flags)
+        self.canvas = pygame.Surface((self.W, self.H)).convert()
+        self._recompute_layout()
         self._scanline_surf = None
 
     def _present_canvas(self):
-        """Scale the fixed mission-console canvas into the current display."""
+        """Scale the canvas into the current display if needed."""
         dw, dh = self.screen.get_size()
-        scale = min(dw / APP_W, dh / APP_H)
-        scaled_size = (max(1, int(APP_W * scale)), max(1, int(APP_H * scale)))
-        self._display_rect = pygame.Rect(
-            (dw - scaled_size[0]) // 2,
-            (dh - scaled_size[1]) // 2,
-            scaled_size[0], scaled_size[1])
-        self.screen.fill(T.C.BG)
-        scaled = pygame.transform.smoothscale(self.canvas, scaled_size)
-        self.screen.blit(scaled, self._display_rect.topleft)
+        if dw == self.W and dh == self.H:
+            self._display_rect = pygame.Rect(0, 0, self.W, self.H)
+            self.screen.blit(self.canvas, (0, 0))
+        else:
+            scale = min(dw / self.W, dh / self.H)
+            scaled_size = (max(1, int(self.W * scale)), max(1, int(self.H * scale)))
+            self._display_rect = pygame.Rect(
+                (dw - scaled_size[0]) // 2,
+                (dh - scaled_size[1]) // 2,
+                scaled_size[0], scaled_size[1])
+            self.screen.fill(T.C.BG)
+            scaled = pygame.transform.smoothscale(self.canvas, scaled_size)
+            self.screen.blit(scaled, self._display_rect.topleft)
 
     def _mouse_down(self, pos, button):
         # 1. Check sidebar tabs
-        if button == 1 and pos[0] < SIDEBAR_W:
+        if button == 1 and pos[0] < self.SIDEBAR_W:
             for i in range(len(self.SIDEBAR_TABS)):
-                tab_rect = pygame.Rect(0, 66 + i * 56, SIDEBAR_W, 52)
+                tab_rect = pygame.Rect(0, 56 + i * 52, self.SIDEBAR_W, 48)
                 if tab_rect.collidepoint(pos):
-                    self.active_tab = i
+                    if self.active_tab != i:
+                        self.active_tab = i
+                        self._recompute_layout()
                     return
 
         # 2. Check top header pause toggle
@@ -553,11 +721,11 @@ class App:
             self._draw_footer(s)
         elif self.active_tab == 1:
             # OVERVIEW (Figma Image 2)
-            page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 12, APP_W - SIDEBAR_W - 24, APP_H - HDR_H - 24)
+            page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 12, self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - 24)
             render_overview_page(s, page_rect, self.sim, self.perf, self.opt_model, hist_pt)
         elif self.active_tab == 2:
             # TELEMETRY (Figma Image 1)
-            page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 12, APP_W - SIDEBAR_W - 24, APP_H - HDR_H - 24)
+            page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 12, self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - 24)
             render_telemetry_page(s, page_rect, self.sim, self.perf, self.opt_model, hist_pt)
         elif self.active_tab == 3:
             # SIMULATION (Figma Images 3 & 4)
@@ -565,37 +733,37 @@ class App:
             self.sim_page_mgr.draw(s, self.opt_model, hist_pt)
         elif self.active_tab == 4:
             # FALSE LOCK (Figma Image 5)
-            page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 12, APP_W - SIDEBAR_W - 24, APP_H - HDR_H - 24)
+            page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 12, self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - 24)
             render_false_lock_page(s, page_rect, self.sim, self.perf, self.opt_model, hist_pt)
         elif self.active_tab == 5:
             # EVENT LOG
-            page_rect = pygame.Rect(SIDEBAR_W + 12, HDR_H + 12, APP_W - SIDEBAR_W - 24, APP_H - HDR_H - 24)
+            page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 12, self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - 24)
             render_event_log_page(s, page_rect, self.sim, self.perf, self.opt_model, self.events_list)
 
         self._present_canvas()
 
     def _draw_sidebar(self, surf):
-        pygame.draw.rect(surf, (8, 14, 26), (0, 0, SIDEBAR_W, APP_H))
-        pygame.draw.line(surf, (20, 36, 62), (SIDEBAR_W - 1, 0), (SIDEBAR_W - 1, APP_H), 1)
+        pygame.draw.rect(surf, (8, 14, 26), (0, 0, self.SIDEBAR_W, self.H))
+        pygame.draw.line(surf, (20, 36, 62), (self.SIDEBAR_W - 1, 0), (self.SIDEBAR_W - 1, self.H), 1)
 
         # Brand header at top of sidebar
-        pygame.draw.rect(surf, (12, 20, 38), (0, 0, SIDEBAR_W, HDR_H))
-        pygame.draw.line(surf, (20, 36, 62), (0, HDR_H - 1), (SIDEBAR_W, HDR_H - 1), 1)
-        T.text(surf, (14, 10), "FSOC", 16, T.C.CYAN_ELEC, bold=True)
-        T.text(surf, (14, 28), "PAT LAB · ISRO", 8, T.C.TEXT_DIM, bold=True)
-        T.text(surf, (14, 40), "SIH 2026 · PS 26169", 7, T.C.TEXT_FAINT)
+        pygame.draw.rect(surf, (12, 20, 38), (0, 0, self.SIDEBAR_W, self.HDR_H))
+        pygame.draw.line(surf, (20, 36, 62), (0, self.HDR_H - 1), (self.SIDEBAR_W, self.HDR_H - 1), 1)
+        T.text(surf, (14, 8), "FSOC", 15, T.C.CYAN_ELEC, bold=True)
+        T.text(surf, (14, 24), "PAT LAB · ISRO", 8, T.C.TEXT_DIM, bold=True)
+        T.text(surf, (14, 34), "SIH 2026 · PS 26169", 7, T.C.TEXT_FAINT)
 
         # Tabs
         mouse_pos = self._logical_mouse_pos(pygame.mouse.get_pos())
         for i, (name, abbr, num) in enumerate(self.SIDEBAR_TABS):
-            tab_y = 66 + i * 56
-            tab_rect = pygame.Rect(0, tab_y, SIDEBAR_W, 52)
+            tab_y = 56 + i * 52
+            tab_rect = pygame.Rect(0, tab_y, self.SIDEBAR_W, 48)
             is_active = (i == self.active_tab)
             is_hover = tab_rect.collidepoint(mouse_pos)
 
             if is_active:
                 pygame.draw.rect(surf, (0, 32, 60), tab_rect)
-                pygame.draw.rect(surf, T.C.CYAN_ELEC, (0, tab_y, 3, 52))
+                pygame.draw.rect(surf, T.C.CYAN_ELEC, (0, tab_y, 3, 48))
                 title_col = T.C.CYAN_ELEC
                 badge_col = T.C.CYAN_ELEC
             elif is_hover:
@@ -607,90 +775,107 @@ class App:
                 badge_col = T.C.TEXT_FAINT
 
             # Badge number
-            T.text(surf, (14, tab_y + 11), num, 7, badge_col, bold=True)
+            T.text(surf, (14, tab_y + 9), num, 7, badge_col, bold=True)
             # Label
-            T.text(surf, (32, tab_y + 10), name, 9, title_col, bold=True)
+            T.text(surf, (32, tab_y + 8), name, 9, title_col, bold=True)
             # Abbr subtext
-            T.text(surf, (32, tab_y + 26), abbr, 7, badge_col)
+            T.text(surf, (32, tab_y + 24), abbr, 7, badge_col)
 
         # Bottom stats
         fps = self.clock.get_fps()
         fps_col = T.C.GREEN if fps >= 25 else T.C.AMBER
-        T.text(surf, (14, APP_H - 42), f"FPS: {fps:.0f}", 9, fps_col, bold=True)
-        T.text(surf, (14, APP_H - 26), "NATIVE DESKTOP", 7, T.C.TEXT_FAINT)
-        T.text(surf, (14, APP_H - 14), "ISRO PAT CONSOLE", 7, T.C.TEXT_FAINT)
+        T.text(surf, (14, self.H - 42), f"FPS: {fps:.0f}", 9, fps_col, bold=True)
+        T.text(surf, (14, self.H - 26), "NATIVE DESKTOP", 7, T.C.TEXT_FAINT)
+        T.text(surf, (14, self.H - 14), "ISRO PAT CONSOLE", 7, T.C.TEXT_FAINT)
 
     def _draw_mission_header(self, surf, hist_pt):
-        hdr_w = APP_W - SIDEBAR_W
-        pygame.draw.rect(surf, (6, 12, 24), (SIDEBAR_W, 0, hdr_w, HDR_H))
-        pygame.draw.line(surf, (20, 36, 62), (SIDEBAR_W, HDR_H - 1), (APP_W, HDR_H - 1), 1)
+        hdr_w = self.W - self.SIDEBAR_W
+        pygame.draw.rect(surf, (6, 12, 24), (self.SIDEBAR_W, 0, hdr_w, self.HDR_H))
+        pygame.draw.line(surf, (20, 36, 62), (self.SIDEBAR_W, self.HDR_H - 1), (self.W, self.HDR_H - 1), 1)
 
         # Cyan top accent line
-        pygame.draw.rect(surf, T.C.CYAN, (SIDEBAR_W, 0, hdr_w, 2))
+        pygame.draw.rect(surf, T.C.CYAN, (self.SIDEBAR_W, 0, hdr_w, 2))
 
         # Title
-        T.text(surf, (SIDEBAR_W + 16, 10), "FSOC MISSION CONTROL", 13, T.C.CYAN_ELEC, bold=True)
-        T.text(surf, (SIDEBAR_W + 16, 28), "FREE-SPACE OPTICAL COMMS · PAT LAB · ISRO SIH 2026", 8, T.C.TEXT_FAINT)
+        T.text(surf, (self.SIDEBAR_W + 16, 8), "FSOC MISSION CONTROL", 12, T.C.CYAN_ELEC, bold=True)
+        T.text(surf, (self.SIDEBAR_W + 16, 25), "FREE-SPACE OPTICAL COMMS · PAT LAB · ISRO SIH 2026", 7.5, T.C.TEXT_FAINT)
 
         # Link State badge
         st = hist_pt.get("state", "ESTABLISHED")
         st_col = T.C.STATE.get(st, T.C.GREEN)
-        badge_x = SIDEBAR_W + 350
-        pygame.draw.rect(surf, (0, 32, 24), (badge_x, 10, 136, 36), border_radius=3)
-        pygame.draw.rect(surf, T.C.BORDER, (badge_x, 10, 136, 36), 1, border_radius=3)
-        T.text(surf, (badge_x + 10, 13), "LINK STATE", 7, T.C.TEXT_FAINT, bold=True)
+        badge_x = self.SIDEBAR_W + (210 if self.W < 1440 else 240)
+        badge_w = 120
+        badge_h = 32
+        badge_y = 7
+        pygame.draw.rect(surf, (0, 32, 24), (badge_x, badge_y, badge_w, badge_h), border_radius=3)
+        pygame.draw.rect(surf, T.C.BORDER, (badge_x, badge_y, badge_w, badge_h), 1, border_radius=3)
+        T.text(surf, (badge_x + 8, badge_y + 3), "LINK STATE", 6.5, T.C.TEXT_FAINT, bold=True)
 
         # Pulsing indicator dot
         p_alpha = int(180 + 75 * math.sin(time.time() * 5.0))
         dot_col = (0, min(255, p_alpha), 120) if st in LOCKED_STATES else st_col
-        pygame.draw.circle(surf, dot_col, (badge_x + 16, 31), 4)
-        T.text(surf, (badge_x + 26, 25), st, 9, st_col, bold=True)
+        pygame.draw.circle(surf, dot_col, (badge_x + 14, badge_y + 21), 3.5)
+        T.text(surf, (badge_x + 24, badge_y + 16), st, 8.5, st_col, bold=True)
 
         # Header live telemetry values
         def _h_val(x, lbl, val, unit, col=T.C.GREEN):
-            T.text(surf, (x, 12), lbl, 7, T.C.TEXT_FAINT, bold=True)
-            vw, vh = T.text(surf, (x, 25), val, 11, col, bold=True)
+            T.text(surf, (x, 8), lbl, 6.5, T.C.TEXT_FAINT, bold=True)
+            vw, vh = T.text(surf, (x, 20), val, 10.5, col, bold=True)
             if unit:
-                T.text(surf, (x + vw + 3, 28), unit, 8, T.C.TEXT_DIM)
+                T.text(surf, (x + vw + 2, 23), unit, 7.5, T.C.TEXT_DIM)
 
-        _h_val(badge_x + 150, "RX POWER", f"{hist_pt.get('rx_power', -11.4):.1f}", "dBm", T.C.CYAN_ELEC)
-        _h_val(badge_x + 235, "SNR", f"{hist_pt.get('snr', 73.6):.1f}", "dB", T.C.GREEN)
-        _h_val(badge_x + 310, "MARGIN", f"{hist_pt.get('link_margin', 38.6):.1f}", "dB", T.C.GREEN)
-        _h_val(badge_x + 395, "TRACKING", f"{int(round(hist_pt.get('stability', 96)))}", "%", T.C.CYAN_ELEC)
-
-        # If in VIRTUAL ENV tab, draw scenario/platform/atmosphere chips!
-        if self.active_tab == 0:
-            for name, c in self.chips.items():
-                c.draw(surf, selected=(name == self.preset))
-            for name, c in self.platform_chips.items():
-                c.draw(surf, selected=(name == self.platform_mode))
-            for name, c in self.atmos_chips.items():
-                enabled = (name == "CLEAR" or self._atmosphere_allowed())
-                c.draw(surf, selected=(name == self.atmosphere), enabled=enabled)
+        m_spacing = 68 if self.W < 1440 else 82
+        mx = badge_x + badge_w + 12
+        _h_val(mx, "RX POWER", f"{hist_pt.get('rx_power', -11.4):.1f}", "dBm", T.C.CYAN_ELEC)
+        _h_val(mx + m_spacing, "SNR", f"{hist_pt.get('snr', 73.6):.1f}", "dB", T.C.GREEN)
+        _h_val(mx + m_spacing * 2, "MARGIN", f"{hist_pt.get('link_margin', 38.6):.1f}", "dB", T.C.GREEN)
+        _h_val(mx + m_spacing * 3, "TRACKING", f"{int(round(hist_pt.get('stability', 96)))}", "%", T.C.CYAN_ELEC)
 
         # UTC Clock
         utc_str = time.strftime("%Y-%m-%d  %H:%M:%S", time.gmtime())
-        T.text(surf, (APP_W - 120, 13), "UTC", 7, T.C.TEXT_FAINT, anchor="tc")
-        T.text(surf, (APP_W - 120, 26), utc_str, 9, T.C.TEXT, bold=True, anchor="tc")
+        clock_cx = self.W - 130
+        T.text(surf, (clock_cx, 8), "UTC", 6.5, T.C.TEXT_FAINT, anchor="tc")
+        T.text(surf, (clock_cx, 20), utc_str, 8.5, T.C.TEXT, bold=True, anchor="tc")
 
         # PAUSE Button
-        self.hdr_pause_rect = pygame.Rect(APP_W - 78, 12, 68, 32)
+        self.hdr_pause_rect = pygame.Rect(self.W - 74, 8, 66, 30)
         btn_col = T.C.AMBER
         pygame.draw.rect(surf, (40, 24, 0), self.hdr_pause_rect, border_radius=2)
         pygame.draw.rect(surf, btn_col, self.hdr_pause_rect, 1, border_radius=2)
         pause_label = "RESUME" if self.paused else "PAUSE"
-        T.text(surf, (self.hdr_pause_rect.centerx, self.hdr_pause_rect.centery - 5), pause_label, 8, btn_col, bold=True, anchor="cc")
+        T.text(surf, (self.hdr_pause_rect.centerx, self.hdr_pause_rect.centery),
+               pause_label, 8.5, btn_col, bold=True, anchor="cc")
+
+        # Tier 2: Dedicated Scenario Control Bar (only on VIRTUAL ENV tab)
+        if self.active_tab == 0:
+            scen_rect = pygame.Rect(self.SIDEBAR_W, self.HDR_H, hdr_w, self.SCENARIO_H)
+            pygame.draw.rect(surf, (10, 16, 30), scen_rect)
+            pygame.draw.line(surf, (22, 38, 66), (self.SIDEBAR_W, scen_rect.bottom - 1), (self.W, scen_rect.bottom - 1), 1)
+
+            # Group Labels and chips
+            T.text(surf, (self.scenario_lbl_rect.x, self.scenario_lbl_rect.y + 6), "SCENARIO:", 8, T.C.TEXT_DIM, bold=True)
+            for name, c in self.chips.items():
+                c.draw(surf, selected=(name == self.preset))
+
+            T.text(surf, (self.platform_lbl_rect.x, self.platform_lbl_rect.y + 6), "PLATFORM:", 8, T.C.TEXT_DIM, bold=True)
+            for name, c in self.platform_chips.items():
+                c.draw(surf, selected=(name == self.platform_mode))
+
+            T.text(surf, (self.atmos_lbl_rect.x, self.atmos_lbl_rect.y + 6), "ATMOSPHERE:", 8, T.C.TEXT_DIM, bold=True)
+            for name, c in self.atmos_chips.items():
+                enabled = (name == "CLEAR" or self._atmosphere_allowed())
+                c.draw(surf, selected=(name == self.atmosphere), enabled=enabled)
 
     # ---------------------------------------------------------------- background grid
     def _draw_bg_grid(self, surf):
         col = (8, 15, 27)
-        for x in range(SIDEBAR_W, APP_W, 120):
-            pygame.draw.line(surf, col, (x, HDR_H), (x, BTM_Y), 1)
-        for y in range(HDR_H, BTM_Y, 80):
-            pygame.draw.line(surf, col, (SIDEBAR_W, y), (CAM_X1, y), 1)
+        for x in range(self.CAM_X0, self.CAM_X1, 100):
+            pygame.draw.line(surf, col, (x, self.CAM_Y0), (x, self.BTM_Y), 1)
+        for y in range(self.CAM_Y0, self.BTM_Y, 80):
+            pygame.draw.line(surf, col, (self.CAM_X0, y), (self.CAM_X1, y), 1)
 
     def _draw_footer(self, surf):
-        T.text(surf, (SIDEBAR_W + 12, APP_H - 14),
+        T.text(surf, (self.SIDEBAR_W + 12, self.H - 14),
                "TAB cycle view  ·  1-5 preset  ·  SPACE pause  ·  R reset  ·  S screenshot  ·  V FOV grid  ·  F fullscreen",
                8, T.C.TEXT_FAINT)
 
@@ -1040,23 +1225,29 @@ class App:
 
     # ================================================================ BOTTOM STRIP
     def _draw_bottom(self, surf):
-        by = BTM_Y
-        bh = BTM_H - 16   # leave room for footer text
-        # Bottom strip covers camera-side only (right panel extends to APP_H)
-        bw = PNL_X0
-        pygame.draw.rect(surf, T.C.PANEL, (0, by, bw, bh))
-        pygame.draw.line(surf, T.C.BORDER_B, (0, by),     (bw, by),     1)
-        pygame.draw.line(surf, T.C.BORDER,   (0, by + 1), (bw, by + 1), 1)
+        by = self.BTM_Y
+        bh = self.BTM_H
+        bx0 = self.CAM_X0
+        bw = self.CAM_SIDE_W
 
-        # PAT pipeline stepper (camera-side width)
-        self._draw_pat_stepper(surf, pygame.Rect(4, by + 4, bw - 8, 32))
+        pygame.draw.rect(surf, T.C.PANEL, (bx0, by, bw, bh))
+        pygame.draw.line(surf, T.C.BORDER_B, (bx0, by),     (bx0 + bw, by),     1)
+        pygame.draw.line(surf, T.C.BORDER,   (bx0, by + 1), (bx0 + bw, by + 1), 1)
 
-        # Error graph left portion
-        graph_rect = pygame.Rect(44, by + 42, 660, bh - 48)
+        # 1. PAT pipeline stepper (camera-side width)
+        stepper_h = 26
+        self._draw_pat_stepper(surf, pygame.Rect(bx0 + 6, by + 4, bw - 12, stepper_h))
+
+        # 2. Lower region: split between Error Graph and Gimbal/Beam Panel
+        rem_y = by + stepper_h + 8
+        rem_h = bh - stepper_h - 12
+        graph_w = int((bw - 16) * 0.58)
+        panel_w = (bw - 16) - graph_w - 8
+
+        graph_rect = pygame.Rect(bx0 + 6, rem_y, graph_w, rem_h)
         self._draw_error_graph(surf, graph_rect)
 
-        # Camera / actuator panel right of graph
-        panel_rect = pygame.Rect(718, by + 42, bw - 726, bh - 48)
+        panel_rect = pygame.Rect(graph_rect.right + 8, rem_y, panel_w, rem_h)
         self._draw_camera_panel(surf, panel_rect)
 
     # ---------------------------------------------------------------- PAT pipeline
@@ -1081,47 +1272,42 @@ class App:
 
             if active:
                 pygame.draw.rect(surf, tuple(c // 8 for c in act_col), seg)
-                # animated bottom bar
-                pygame.draw.rect(surf, act_col,
-                                 (seg.x, seg.bottom - 3, seg.w, 3))
-                text_col, fs = act_col, 10
+                pygame.draw.rect(surf, act_col, (seg.x, seg.bottom - 3, seg.w, 3))
+                text_col, fs = act_col, 9.5
             elif done:
                 pygame.draw.rect(surf, T.C.PANEL_3, seg)
-                pygame.draw.rect(surf, T.C.GREEN_DIM,
-                                 (seg.x, seg.bottom - 2, seg.w, 2))
-                text_col, fs = T.C.TEXT_DIM, 9
+                pygame.draw.rect(surf, T.C.GREEN_DIM, (seg.x, seg.bottom - 2, seg.w, 2))
+                text_col, fs = T.C.TEXT_DIM, 8.5
             else:
-                text_col, fs = T.C.TEXT_FAINT, 9
+                text_col, fs = T.C.TEXT_FAINT, 8.5
 
             T.text(surf, (seg.centerx, seg.centery - 1), step, fs,
                    text_col, bold=active, anchor="cc")
             if i < n - 1:
                 mx = x + seg_w - 1
-                pygame.draw.line(surf, T.C.BORDER,
-                                 (mx, box.y + 4), (mx, box.bottom - 4), 1)
+                pygame.draw.line(surf, T.C.BORDER, (mx, box.y + 4), (mx, box.bottom - 4), 1)
             x += seg_w
 
         # Annotation badge for special states
         ann = {"COASTING": ("COAST", T.C.CYAN), "REACQUIRING": ("RE-ACQ", T.C.PURPLE),
                "LOST": ("LOST", T.C.RED)}.get(st)
         if ann:
-            avail = APP_W - (box.right + 10)
-            bw    = max(64, min(130, avail))
-            r     = pygame.Rect(box.right + 6, box.y, bw, box.h)
+            bw = 64
+            r = pygame.Rect(box.right - bw - 4, box.y + 2, bw, box.h - 4)
             pygame.draw.rect(surf, tuple(c // 7 for c in ann[1]), r)
             pygame.draw.rect(surf, ann[1], r, 1)
             pygame.draw.rect(surf, ann[1], (r.x, r.y, 2, r.h))
-            T.text(surf, (r.centerx + 2, r.centery), ann[0],
-                   9, ann[1], bold=True, anchor="cc")
+            T.text(surf, (r.centerx + 1, r.centery), ann[0],
+                   8, ann[1], bold=True, anchor="cc")
 
     # ---------------------------------------------------------------- error graph
     def _draw_error_graph(self, surf, box):
-        T.text(surf, (box.x, box.y), "ANGULAR POINTING ERROR", 11, T.C.TEXT_DIM, bold=True)
-        T.text(surf, (box.x + 194, box.y + 1), "deg", 9, T.C.TEXT_FAINT)
-        T.text(surf, (box.right, box.y), "target < 0.0625°",
+        T.text(surf, (box.x, box.y), "ANGULAR POINTING ERROR", 10, T.C.TEXT_DIM, bold=True)
+        T.text(surf, (box.x + 180, box.y + 1), "deg", 8, T.C.TEXT_FAINT)
+        T.text(surf, (box.right - 4, box.y), "target < 0.0625°",
                7, T.C.TEXT_FAINT, anchor="tr")
 
-        plot = pygame.Rect(box.x + 32, box.y + 16, box.w - 32, box.h - 18)
+        plot = pygame.Rect(box.x + 36, box.y + 15, box.w - 38, box.h - 18)
         pygame.draw.rect(surf, T.C.BG, plot)
         pygame.draw.rect(surf, T.C.BORDER, plot, 1)
 
@@ -1176,9 +1362,9 @@ class App:
                        else (T.C.AMBER if cur_v < 0.30 else T.C.RED))
             pygame.draw.line(surf, tuple(c // 4 for c in cur_col),
                              (now_x, plot.y), (now_x, plot.bottom), 1)
-            pygame.draw.circle(surf, cur_col, (now_x, now_y), 4)
-            T.text(surf, (now_x - 6, now_y - 12),
-                   f"{cur_v*1000:.0f}", 9, cur_col, bold=True, anchor="tr")
+            pygame.draw.circle(surf, cur_col, (now_x, now_y), 3)
+            T.text(surf, (now_x - 6, now_y - 10),
+                   f"{cur_v*1000:.0f}", 8, cur_col, bold=True, anchor="tr")
 
         if not self.sim.last_result["beacon_visible"]:
             pygame.draw.rect(surf, (50, 14, 14),
@@ -1219,71 +1405,77 @@ class App:
     # ---------------------------------------------------------------- camera panel
     def _draw_camera_panel(self, surf, box):
         res = self.sim.last_result
-        T.text(surf, (box.x, box.y), "GIMBAL / ACTUATOR", 11, T.C.TEXT_DIM, bold=True)
-        pygame.draw.line(surf, T.C.BORDER, (box.x, box.y + 13), (box.x + 220, box.y + 13), 1)
+        T.text(surf, (box.x + 4, box.y), "GIMBAL / ACTUATOR", 10, T.C.TEXT_DIM, bold=True)
+        pygame.draw.line(surf, T.C.BORDER, (box.x + 4, box.y + 13), (box.x + 180, box.y + 13), 1)
 
-        y, x = box.y + 20, box.x + 10
+        beam_w = 104
+        gimbal_w = box.w - beam_w - 8
+
+        y, x = box.y + 18, box.x + 6
+        col_step = max(70, gimbal_w // 2)
         kpis = [
             ("AZIMUTH",   f"{self.sim.gimbal.pan:+.2f}°",  T.C.CYAN),
             ("ELEVATION", f"{self.sim.gimbal.tilt:+.2f}°", T.C.CYAN),
         ]
         for lab, val, vcol in kpis:
-            T.text(surf, (x, y),      lab, 9,  T.C.TEXT_DIM, bold=True)
-            T.text(surf, (x, y + 11), val, 15, vcol, bold=True)
-            x += 140
+            T.text(surf, (x, y),      lab, 8,  T.C.TEXT_DIM, bold=True)
+            T.text(surf, (x, y + 10), val, 12, vcol, bold=True)
+            x += col_step
 
-        x = box.x + 10
+        x = box.x + 6
+        y_r2 = y + 26
         kpis2 = [
             ("H-FOV",  f"{config.HFOV_DEG:.1f}°", T.C.TEXT_DIM),
             ("MODE",   "COARSE PAT",                T.C.TEXT_DIM),
         ]
         for lab, val, vcol in kpis2:
-            T.text(surf, (x, y + 30),     lab, 9,  T.C.TEXT_DIM, bold=True)
-            T.text(surf, (x, y + 41),     val, 12, vcol, bold=False)
-            x += 180
+            T.text(surf, (x, y_r2),     lab, 7.5,  T.C.TEXT_DIM, bold=True)
+            T.text(surf, (x, y_r2 + 9), val, 10, vcol, bold=False)
+            x += col_step
 
+        y_r3 = y_r2 + 24
         sp  = res.get("gimbal_sat_pan", 0.0)
         st_ = res.get("gimbal_sat_tilt", 0.0)
         sat = max(sp, st_)
         s_col = T.C.GREEN if sat <= 0.05 else (T.C.AMBER if sat < 0.5 else T.C.RED)
-        T.text(surf, (box.x + 10, y + 64), "GIMBAL SATURATION", 9, T.C.TEXT_DIM, bold=True)
-        T.text(surf, (box.x + 150, y + 64),
-               f"P {sp*100:3.0f}%  T {st_*100:3.0f}%", 11, s_col, bold=(sat > 0.05))
+        T.text(surf, (box.x + 6, y_r3), "GIMBAL SAT", 8, T.C.TEXT_DIM, bold=True)
+        T.text(surf, (box.x + 72, y_r3),
+               f"P {sp*100:2.0f}%  T {st_*100:2.0f}%", 9, s_col, bold=(sat > 0.05))
 
-        self._draw_beam_strip(surf, pygame.Rect(box.right - 140, box.y + 10, 130, box.h - 14))
+        beam_box = pygame.Rect(box.right - beam_w, box.y + 2, beam_w, box.h - 4)
+        self._draw_beam_strip(surf, beam_box)
 
     def _draw_beam_strip(self, surf, box):
         cx = box.centerx
-        ay = box.bottom - 20
-        by = box.y + 30
         err = self.sim.last_result["pointing_err_deg"]
         col = (T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG
                else (T.C.AMBER if err < 0.30 else T.C.RED))
+
+        # Top error readout
+        T.text(surf, (cx, box.y + 2), "POINT ERROR", 7.5, T.C.TEXT_DIM, bold=True, anchor="tc")
+        T.text(surf, (cx, box.y + 13), f"{err*1000:.1f} mdeg", 10.5, col, bold=True, anchor="tc")
+
+        by = box.y + 36
+        ay = box.bottom - 16
         pygame.draw.polygon(surf, (20, 56, 80),
-                            [(cx-7, ay), (box.x+4, by), (box.right-4, by)])
+                            [(cx - 6, ay), (box.x + 8, by), (box.right - 8, by)])
         pygame.draw.line(surf, col, (cx, ay), (cx, by), 2)
-        pygame.draw.rect(surf, T.C.CYAN, (cx-11, ay-9, 22, 11), 1)
-        T.text(surf, (cx, ay + 12), "SAT-A", 9, T.C.CYAN, bold=True, anchor="cc")
-        pygame.draw.circle(surf, T.C.RED, (cx, by), 7)
-        pygame.draw.circle(surf, T.C.RED, (cx, by), 12, 1)
-        T.text(surf, (cx, by - 18), "SAT-B", 9, T.C.RED, bold=True, anchor="cc")
-        mid_y = (ay + by) // 2
-        T.text(surf, (box.right - 4, mid_y - 10), "POINT ERR", 8, T.C.TEXT_DIM,
-               bold=True, anchor="tr")
-        T.text(surf, (box.right - 4, mid_y + 2), f"{err*1000:.1f} mdeg",
-               12, col, bold=True, anchor="tr")
+        pygame.draw.rect(surf, T.C.CYAN, (cx - 10, ay - 8, 20, 10), 1)
+        T.text(surf, (cx, ay + 4), "SAT-A", 7.5, T.C.CYAN, bold=True, anchor="tc")
+        pygame.draw.circle(surf, T.C.RED, (cx, by), 5)
+        pygame.draw.circle(surf, T.C.RED, (cx, by), 9, 1)
+        T.text(surf, (cx, by - 6), "SAT-B", 7.5, T.C.RED, bold=True, anchor="bc")
 
     # ================================================================ RIGHT PANEL
     def _draw_panel(self, surf):
-        # Panel background — extends full height to APP_H (controls sit below camera strip)
-        pnl_full_h = APP_H - HDR_H
-        pygame.draw.rect(surf, T.C.BG,    (PNL_X0, HDR_H, PNL_W, pnl_full_h))
-        pygame.draw.line(surf, T.C.BORDER_B, (PNL_X0, HDR_H), (PNL_X0, APP_H), 2)
-        pygame.draw.line(surf, T.C.BORDER,   (PNL_X0 + 2, HDR_H), (PNL_X0 + 2, APP_H), 1)
+        pnl_full_h = self.H - self.HDR_TOTAL_H - self.FOOTER_H - 4
+        pygame.draw.rect(surf, T.C.BG,    (self.PNL_X0, self.HDR_TOTAL_H, self.PNL_W, pnl_full_h))
+        pygame.draw.line(surf, T.C.BORDER_B, (self.PNL_X0, self.HDR_TOTAL_H), (self.PNL_X0, self.H - self.FOOTER_H), 2)
+        pygame.draw.line(surf, T.C.BORDER,   (self.PNL_X0 + 2, self.HDR_TOTAL_H), (self.PNL_X0 + 2, self.H - self.FOOTER_H), 1)
 
         # Subtle background grid for right panel
-        for gx in range(PNL_X0 + 60, PNL_X1, 60):
-            pygame.draw.line(surf, (8, 14, 28), (gx, HDR_H), (gx, APP_H), 1)
+        for gx in range(self.PNL_X0 + 60, self.PNL_X1, 60):
+            pygame.draw.line(surf, (8, 14, 28), (gx, self.HDR_TOTAL_H), (gx, self.H - self.FOOTER_H), 1)
 
         self._panel_state(surf)
         self._panel_mission(surf)
@@ -1294,45 +1486,44 @@ class App:
 
     # ── State ─────────────────────────────────────────────────────────────────
     def _panel_state(self, surf):
-        x, y, w, h = PNL_INN, 66, PNL_IW, 108
+        x, y, w, h = self.PNL_INN, self.pnl_state_y, self.PNL_IW, self.pnl_state_h
         res  = self.sim.last_result
         st   = res.get("state", "SEARCHING")
         col  = T.C.STATE.get(st, T.C.CYAN)
         fill = T.C.STATE_FILL.get(st, (0, 30, 50))
         r    = pygame.Rect(x, y, w, h)
-        T.angled_panel(surf, r, fill=fill, border=col, cut=14, accent=None)
+        T.angled_panel(surf, r, fill=fill, border=col, cut=10, accent=None)
         # Left accent stripe
-        pygame.draw.rect(surf, col, (x + 1, y + 4, 4, h - 8), border_radius=2)
+        pygame.draw.rect(surf, col, (x + 1, y + 4, 3, h - 8), border_radius=2)
 
-        # State name in large text
-        T.text(surf, (x + w // 2, y + 13), "TRACK STATE", 10, col,
-               bold=True, anchor="cc")
-        # Large state text — scale down if long
-        fs = 28 if len(st) <= 7 else (22 if len(st) <= 12 else 16)
-        T.text(surf, (x + w // 2, y + 32), st, fs, col, bold=True, anchor="cc")
+        # State title & name
+        T.text(surf, (x + 14, y + 6), "TRACK STATE", 8.5, col, bold=True)
+        fs = 20 if len(st) <= 7 else (15 if len(st) <= 12 else 12)
+        T.text(surf, (x + 14, y + 20), st, fs, col, bold=True)
 
         # Confidence arc gauge
         conf = res.get("confidence", 0.0)
-        arc_cx = x + w - 44
-        arc_cy = y + 60
-        T.arc_gauge(surf, (arc_cx, arc_cy), 28, conf, col, T.C.PANEL_3, width=5)
-        T.text(surf, (arc_cx, arc_cy), f"{conf:.2f}", 11, col, bold=True, anchor="cc")
+        arc_cx = x + w - 34
+        arc_cy = y + h // 2 - 2
+        T.arc_gauge(surf, (arc_cx, arc_cy), 20, conf, col, T.C.PANEL_3, width=4)
+        T.text(surf, (arc_cx, arc_cy), f"{conf:.2f}", 9, col, bold=True, anchor="cc")
+
         # Status / timing row
-        stat_y = y + h - 20
-        pygame.draw.line(surf, col, (x + 8, stat_y - 4), (x + w - 8, stat_y - 4), 1)
+        stat_y = y + h - 16
+        pygame.draw.line(surf, col, (x + 8, stat_y - 2), (x + w - 8, stat_y - 2), 1)
         run_col = T.C.AMBER if self.paused else col
         pygame.draw.circle(surf, run_col, (x + 14, stat_y + 4), 3)
         T.text(surf, (x + 20, stat_y),
-               "PAUSED" if self.paused else "RUNNING", 10, run_col, bold=True)
+               "PAUSED" if self.paused else "RUNNING", 8.5, run_col, bold=True)
         T.text(surf, (x + w - 8, stat_y),
-             f"t = {res.get('t', 0.0):.1f}s", 10, T.C.TEXT_DIM, anchor="tr")
+             f"t = {res.get('t', 0.0):.1f}s", 8.5, T.C.TEXT_DIM, anchor="tr")
 
     # ── Mission ────────────────────────────────────────────────────────────────
     def _panel_mission(self, surf):
-        x, y, w, h = PNL_INN, 178, PNL_IW, 74
+        x, y, w, h = self.PNL_INN, self.pnl_mission_y, self.PNL_IW, self.pnl_mission_h
         r = pygame.Rect(x, y, w, h)
         T.panel(surf, r)
-        T.section_hdr(surf, x + 8, y + 6, "MISSION", panel_w=w - 16)
+        T.section_hdr(surf, x + 8, y + 4, "MISSION", panel_w=w - 16)
         res = self.sim.last_result
         st  = res["state"]
         lock = st in LOCKED_STATES
@@ -1347,37 +1538,37 @@ class App:
                 ("Link",     self._platform_label() + "  ·  " + (self.atmosphere or "CLEAR")),
                 ("Status",   "TRACKING" if lock else st[:10]),
             ]
-        yy  = y + 26
+        yy  = y + 20
         col = T.C.GREEN if lock else T.C.STATE.get(st, T.C.CYAN)
         for lab, val in rows:
-            T.text(surf, (x + 12, yy), lab, 10, T.C.TEXT_DIM, bold=True)
+            T.text(surf, (x + 10, yy), lab, 8.5, T.C.TEXT_DIM, bold=True)
             is_status = (lab == "Status")
-            value_size = 11 if is_status else 10
+            value_size = 9 if is_status else 8.5
             value_color = col if is_status else T.C.TEXT
-            T.text(surf, (x + 100, yy), val, value_size,
+            T.text(surf, (x + 80, yy), val, value_size,
                    value_color, bold=is_status)
-            yy += 16
+            yy += 13
 
     # ── Performance ────────────────────────────────────────────────────────────
     def _panel_performance(self, surf):
-        x, y, w, h = PNL_INN, 256, PNL_IW, 136
+        x, y, w, h = self.PNL_INN, self.pnl_perf_y, self.PNL_IW, self.pnl_perf_h
         res = self.sim.last_result
         st  = self.perf.live_stats()
         err = res["pointing_err_deg"]
         ec  = (T.C.GREEN if err < config.FINE_ACQUISITION_REGION_DEG
                else (T.C.AMBER if err < 0.30 else T.C.RED))
         r   = pygame.Rect(x, y, w, h)
-        T.angled_panel(surf, r, T.C.PANEL, T.C.BORDER, cut=12, accent=None)
-        pygame.draw.rect(surf, ec, (x + 1, y + 4, 4, h - 8), border_radius=2)
-        T.section_hdr(surf, x + 10, y + 6, "PAT PERFORMANCE", color=ec, panel_w=w - 16)
+        T.angled_panel(surf, r, T.C.PANEL, T.C.BORDER, cut=10, accent=None)
+        pygame.draw.rect(surf, ec, (x + 1, y + 4, 3, h - 8), border_radius=2)
+        T.section_hdr(surf, x + 8, y + 4, "PAT PERFORMANCE", color=ec, panel_w=w - 16)
 
         # Hero pointing error box
-        err_r = pygame.Rect(x + 8, y + 26, w - 16, 44)
+        err_r = pygame.Rect(x + 6, y + 20, w - 12, 34)
         pygame.draw.rect(surf, tuple(c // 8 for c in ec), err_r, border_radius=2)
         pygame.draw.rect(surf, tuple(c // 3 for c in ec), err_r, 1, border_radius=2)
-        T.text(surf, (x + 16, y + 28), "POINTING ERROR", 9, ec, bold=True)
-        T.text(surf, (x + 16, y + 38), f"{err*1000:6.1f}", 26, ec, bold=True)
-        T.text(surf, (x + 16 + 120, y + 52), "m°", 9, ec)
+        T.text(surf, (x + 12, y + 22), "POINTING ERROR", 7.5, ec, bold=True)
+        T.text(surf, (x + 12, y + 30), f"{err*1000:5.1f}", 18, ec, bold=True)
+        T.text(surf, (x + 95, y + 36), "mdeg", 8, ec)
 
         # KPI trio
         acq  = st["acquisition_time_s"]
@@ -1388,50 +1579,52 @@ class App:
         ret_col = T.C.GREEN if ret_pct >= 95 else (T.C.AMBER if ret_pct >= 80 else T.C.RED)
         cols_data = [("ACQ", acq_s, T.C.CYAN), ("RET", f"{ret_pct:.1f}%", ret_col),
                      ("REACQ", reacq_s, T.C.PURPLE)]
-        xx = x + 12
-        col_w = (w - 24) // 3
+        xx = x + 10
+        col_w = (w - 20) // 3
+        yy_kpi = y + 58
         for lab, val, vc in cols_data:
-            T.text(surf, (xx, y + 78),  lab, 9,  T.C.TEXT_DIM, bold=True)
-            T.text(surf, (xx, y + 90),  val, 14, vc, bold=True)
+            T.text(surf, (xx, yy_kpi),  lab, 7.5,  T.C.TEXT_DIM, bold=True)
+            T.text(surf, (xx, yy_kpi + 10),  val, 11, vc, bold=True)
             xx += col_w
 
+        yy_diag = y + h - 14
         if self.show_diag:
             diag = (f"mean {st['mean_err_deg']*1000:.0f}  rms {st['rms_err_deg']*1000:.0f}"
-                    f"  max {st['max_err_deg']*1000:.0f}  fps {st['fps']:.0f}")
-            T.text(surf, (x + 12, y + 118), diag, 8, T.C.TEXT_FAINT)
+                    f"  max {st['max_err_deg']*1000:.0f}")
+            T.text(surf, (x + 8, yy_diag), diag, 7.5, T.C.TEXT_FAINT)
         else:
             fps = st.get("fps", self.clock.get_fps())
             fps_col = T.C.GREEN if fps >= 25 else T.C.AMBER
-            T.text(surf, (x + w - 8, y + 118),
-                   f"{fps:.0f} fps", 9, fps_col, bold=True, anchor="tr")
+            T.text(surf, (x + w - 8, yy_diag),
+                   f"{fps:.0f} fps", 8.5, fps_col, bold=True, anchor="tr")
 
     # ── Orbit / Video geometry ─────────────────────────────────────────────────
     def _panel_geometry(self, surf):
-        x, y, w, h = PNL_INN, 396, PNL_IW, 118
+        x, y, w, h = self.PNL_INN, self.pnl_geom_y, self.PNL_IW, self.pnl_geom_h
         g = pygame.Rect(x, y, w, h)
         if self.video_mode:
             T.panel(surf, g)
-            T.section_hdr(surf, x + 8, y + 6, "VIDEO BYPASS  (Benchmark-2)",
+            T.section_hdr(surf, x + 8, y + 4, "VIDEO BYPASS  (Benchmark-2)",
                           color=T.C.TEXT_DIM, panel_w=w - 16)
             res  = self.sim.last_result
             stat = self.perf.live_stats()
             rows = [
-                ("Input", os.path.basename(self.video_path)[:28]),
+                ("Input", os.path.basename(self.video_path)[:24]),
                 ("Acq",   f"{stat['acquisition_time_s']:.2f}s"
                            if stat["acquisition_time_s"] is not None else "--"),
                 ("Retention", f"{stat['retention_total_pct']:.1f}%"),
                 ("Centroid",  f"{res.get('centroid_err_px', 0):.1f} px"
                                if res is not None else "--"),
             ]
-            yy = y + 26
+            yy = y + 22
             for lab, val in rows:
-                T.text(surf, (x + 12, yy),  lab, 9, T.C.TEXT_FAINT)
-                T.text(surf, (x + 96, yy),  val, 10, T.C.TEXT)
-                yy += 22
+                T.text(surf, (x + 10, yy),  lab, 8, T.C.TEXT_FAINT)
+                T.text(surf, (x + 80, yy),  val, 8.5, T.C.TEXT)
+                yy += 16
             return
         view3d.render(surf, g, self.sim, self.sim.t)
-        T.text(surf, (g.right - 6, g.y + 2), "B approaching A FOV",
-               8, T.C.TEXT_FAINT, anchor="tr")
+        T.text(surf, (g.right - 6, g.y + 3), "B approaching A FOV",
+               7.5, T.C.TEXT_FAINT, anchor="tr")
 
     # ── Comparison ──────────────────────────────────────────────────────────────
     def _panel_comparison_small(self, surf, x, y, w):
@@ -1443,44 +1636,40 @@ class App:
             return
         ada  = row.get("adaptive", {})
         base = row.get("baseline", {})
-        T.text(surf, (x, y), "ADAPTIVE vs BASELINE", 8, T.C.TEXT_FAINT)
-        cx = [x + 150, x + 230, x + 300]
+        T.text(surf, (x, y), "ADAPTIVE vs BASELINE", 7.5, T.C.TEXT_FAINT)
+        cx = [x + 120, x + 180, x + 240]
         for xx, lbl in zip(cx, ["ACQ", "RET%", "FAL"]):
             T.text(surf, (xx, y), lbl, 7, T.C.TEXT_FAINT)
-        y2 = y + 12
-        T.text(surf, (x, y2), "ADAPTIVE", 8, T.C.GREEN, bold=True)
-        T.text(surf, (cx[0], y2), f"{ada.get('acq', 0):.2f}s", 8, T.C.TEXT)
-        T.text(surf, (cx[1], y2), f"{ada.get('ret_pct', 0):.0f}", 8, T.C.TEXT)
-        T.text(surf, (cx[2], y2), f"{ada.get('false_locks', 0)}", 8, T.C.GREEN)
-        y3 = y + 24
-        T.text(surf, (x, y3), "BASELINE", 8, T.C.TEXT_DIM)
-        T.text(surf, (cx[0], y3), f"{base.get('acq', 0):.2f}s", 8, T.C.TEXT_DIM)
-        T.text(surf, (cx[1], y3), f"{base.get('ret_pct', 0):.0f}", 8, T.C.TEXT_DIM)
-        T.text(surf, (cx[2], y3), f"{base.get('false_locks', 0)}", 8, T.C.RED)
+        y2 = y + 10
+        T.text(surf, (x, y2), "ADAPTIVE", 7.5, T.C.GREEN, bold=True)
+        T.text(surf, (cx[0], y2), f"{ada.get('acq', 0):.2f}s", 7.5, T.C.TEXT)
+        T.text(surf, (cx[1], y2), f"{ada.get('ret_pct', 0):.0f}", 7.5, T.C.TEXT)
+        T.text(surf, (cx[2], y2), f"{ada.get('false_locks', 0)}", 7.5, T.C.GREEN)
+        y3 = y + 20
+        T.text(surf, (x, y3), "BASELINE", 7.5, T.C.TEXT_DIM)
+        T.text(surf, (cx[0], y3), f"{base.get('acq', 0):.2f}s", 7.5, T.C.TEXT_DIM)
+        T.text(surf, (cx[1], y3), f"{base.get('ret_pct', 0):.0f}", 7.5, T.C.TEXT_DIM)
+        T.text(surf, (cx[2], y3), f"{base.get('false_locks', 0)}", 7.5, T.C.RED)
 
     # ── Disturbances ──────────────────────────────────────────────────────────
     def _panel_disturbances(self, surf):
-        x, y, w, h = PNL_INN, 518, PNL_IW, 214
+        x, y, w, h = self.PNL_INN, self.pnl_dist_y, self.PNL_IW, self.pnl_dist_h
         r = pygame.Rect(x, y, w, h)
         T.panel(surf, r)
         kind = disturbance_kind_label(self.platform_mode)
-        T.section_hdr(surf, x + 8, y + 6, f"DISTURBANCES  ·  {kind}",
+        T.section_hdr(surf, x + 8, y + 4, f"DISTURBANCES  ·  {kind}",
                       color=T.C.AMBER, panel_w=w - 16)
         note = "N/A (vacuum)" if not self._atmosphere_allowed() else "active"
-        T.text(surf, (x + w - 10, y + 6), note, 7, T.C.TEXT_FAINT, anchor="tr")
-        for key, s in self.sliders.items():
+        T.text(surf, (x + w - 8, y + 4), note, 7, T.C.TEXT_FAINT, anchor="tr")
+        for s in self.sliders.values():
             s.draw(surf)
-            unit = config.DISTURBANCE_UNITS.get(key, (None, ""))[1]
-            if unit:
-                T.text(surf, (s.rect.right, s.rect.y - 10), unit,
-                       7, T.C.TEXT_FAINT, anchor="tr")
 
     # ── Controls ──────────────────────────────────────────────────────────────
     def _panel_controls(self, surf):
-        x, y, w, h = PNL_INN, 736, PNL_IW, 68
+        x, y, w, h = self.PNL_INN, self.pnl_ctrl_y, self.PNL_IW, self.pnl_ctrl_h
         r = pygame.Rect(x, y, w, h)
         T.panel(surf, r)
-        T.section_hdr(surf, x + 8, y + 4, "CONTROLS", panel_w=w - 16)
+        T.section_hdr(surf, x + 8, y + 3, "CONTROLS", panel_w=w - 16)
         for b in self.buttons.values():
             b.draw(surf)
 
@@ -1554,7 +1743,20 @@ def main():
     ap.add_argument("--initial",    default=None, choices=["RANDOM", "CENTER"])
     ap.add_argument("--video",      default=None)
     ap.add_argument("--video-seed", type=int, default=None)
+    ap.add_argument("--width",      type=int, default=1600,
+                    help="window width (default 1600)")
+    ap.add_argument("--height",     type=int, default=900,
+                    help="window height (default 900)")
+    ap.add_argument("--res",        type=str, default=None,
+                    help="resolution string WxH, e.g. 1366x768, 1440x900, 1920x1080")
     args = ap.parse_args()
+
+    if args.res:
+        try:
+            rw, rh = [int(x.strip()) for x in args.res.lower().split("x")]
+            args.width, args.height = rw, rh
+        except Exception:
+            pass
 
     if args.frames > 0:
         headless_selftest(args.frames, args.preset.upper(),
@@ -1568,7 +1770,8 @@ def main():
               motion_type=args.motion, target_shape=args.shape,
               target_size=args.size, num_targets=args.targets,
               target_initial=args.initial, video_path=args.video,
-              video_seed=args.video_seed)
+              video_seed=args.video_seed,
+              width=args.width, height=args.height)
     app.run()
 
 

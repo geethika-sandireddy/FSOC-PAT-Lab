@@ -167,16 +167,17 @@ class SimSlider:
         T.text(surf, (self.rect.x, self.rect.y - 30), self.label, 12, C.TEXT, bold=True)
         T.text(surf, (self.rect.x, self.rect.y - 15), self.subtext, 10, C.TEXT_FAINT)
 
-        # Right side: Badge + Value
+        # Right side: Badge + Value (dynamically spaced to prevent collision)
+        val_str = f"{self.fmt.format(self.value)} {self.unit}"
+        val_w, _ = T.font(12, bold=True).size(val_str)
         badge_w, badge_h = 42, 18
-        badge_x = self.rect.right - 130
+        badge_x = self.rect.right - val_w - badge_w - 14
         badge_y = self.rect.y - 26
         pygame.draw.rect(surf, (0, 36, 68), (badge_x, badge_y, badge_w, badge_h), border_radius=2)
         pygame.draw.rect(surf, C.CYAN_ELEC, (badge_x, badge_y, badge_w, badge_h), 1, border_radius=2)
         T.text(surf, (badge_x + badge_w // 2, badge_y + 2), self.badge_text, 9, C.CYAN_ELEC, bold=True, anchor="tc")
 
-        val_str = f"{self.fmt.format(self.value)} {self.unit}"
-        T.text(surf, (self.rect.right, self.rect.y - 28), val_str, 13, C.TEXT, bold=True, anchor="tr")
+        T.text(surf, (self.rect.right, self.rect.y - 28), val_str, 12, C.TEXT, bold=True, anchor="tr")
 
         # Track background
         track_h = 8
@@ -379,8 +380,8 @@ def render_overview_page(surf, rect, sim, perf, opt: OpticalLinkModel, hist_pt: 
     T.card(surf, (ch_x, bot_y, ch_w, bot_h), fill=C.PANEL, border=C.BORDER)
     T.section_title(surf, ch_x + 12, bot_y + 10, "LINK QUALITY — RECENT HISTORY", C.CYAN_ELEC)
 
-    # Chart Legend
-    leg_x = ch_x + 230
+    # Chart Legend - right-aligned to prevent collision with section title
+    leg_x = max(ch_x + 280, ch_x + ch_w - 240)
     pygame.draw.line(surf, C.GREEN, (leg_x, bot_y + 16), (leg_x + 12, bot_y + 16), 2)
     T.text(surf, (leg_x + 16, bot_y + 10), "SNR", 10, C.TEXT_FAINT, bold=True)
     pygame.draw.line(surf, C.CYAN_ELEC, (leg_x + 56, bot_y + 16), (leg_x + 68, bot_y + 16), 2)
@@ -624,13 +625,16 @@ def _draw_dual_axis_chart_card(surf, rect, title, left_labels, right_labels, cur
     for dx in range(plot.x, plot.right, 8):
         pygame.draw.line(surf, C.PURPLE, (dx, atm_y), (dx + 4, atm_y), 2)
 
-    # Bottom Legend
+    # Bottom Legend (dynamically spaced to prevent collision)
     leg_y = rect.bottom - 22
+    l1_text = "Pointing error (µrad) – left axis"
+    tw1, _ = T.font(10, bold=True).size(l1_text)
     pygame.draw.line(surf, C.AMBER, (plot.x, leg_y + 6), (plot.x + 16, leg_y + 6), 2)
-    T.text(surf, (plot.x + 22, leg_y), "Pointing error (µrad) – left axis", 10, C.TEXT_FAINT, bold=True)
+    T.text(surf, (plot.x + 22, leg_y), l1_text, 10, C.TEXT_FAINT, bold=True)
 
-    pygame.draw.line(surf, C.PURPLE, (plot.x + 220, leg_y + 6), (plot.x + 236, leg_y + 6), 2)
-    T.text(surf, (plot.x + 242, leg_y), "ATM loss (dB) – right axis", 10, C.PURPLE, bold=True)
+    l2_x = plot.x + 22 + tw1 + 24
+    pygame.draw.line(surf, C.PURPLE, (l2_x, leg_y + 6), (l2_x + 16, leg_y + 6), 2)
+    T.text(surf, (l2_x + 22, leg_y), "ATM loss (dB) – right axis", 10, C.PURPLE, bold=True)
 
 
 # ---------------------------------------------------------------------------
@@ -650,23 +654,29 @@ class SimulationPageManager:
         sx = self.rect.x + 20
         sw = left_w - 40
 
-        # Transmitter & Link Parameters
-        y_start = self.rect.y + 48
+        # Transmitter & Link Parameters (p1_h = 356)
+        # Title is at y0 + 12. First slider label at y_start - 30.
+        y_start = self.rect.y + 66
+        row_gap = 56
         self.sliders["tx_power"] = SimSlider((sx, y_start, sw, 10), "TX Optical Power", "Laser output power", 0.0, 40.0, 30.0, "dBm", "CTRL", "{:.1f}")
-        self.sliders["wavelength"] = SimSlider((sx, y_start + 64, sw, 10), "Wavelength", "Operating wavelength", 800.0, 1600.0, 1550.0, "nm", "CTRL", "{:.0f}")
-        self.sliders["distance"] = SimSlider((sx, y_start + 128, sw, 10), "Link Distance", "Transmitter-receiver separation", 0.1, 50.0, 5.0, "km", "CTRL", "{:.1f}")
-        self.sliders["data_rate"] = SimSlider((sx, y_start + 192, sw, 10), "Data Rate", "Target channel throughput", 0.1, 100.0, 10.0, "Gbps", "CTRL", "{:.1f}")
-        self.sliders["rx_sensitivity"] = SimSlider((sx, y_start + 256, sw, 10), "RX Sensitivity", "Minimum detectable power", -70.0, -20.0, -50.0, "dBm", "CTRL", "{:.1f}")
+        self.sliders["wavelength"] = SimSlider((sx, y_start + row_gap, sw, 10), "Wavelength", "Operating wavelength", 800.0, 1600.0, 1550.0, "nm", "CTRL", "{:.0f}")
+        self.sliders["distance"] = SimSlider((sx, y_start + row_gap * 2, sw, 10), "Link Distance", "Transmitter-receiver separation", 0.1, 50.0, 5.0, "km", "CTRL", "{:.1f}")
+        self.sliders["data_rate"] = SimSlider((sx, y_start + row_gap * 3, sw, 10), "Data Rate", "Target channel throughput", 0.1, 100.0, 10.0, "Gbps", "CTRL", "{:.1f}")
+        self.sliders["rx_sensitivity"] = SimSlider((sx, y_start + row_gap * 4, sw, 10), "RX Sensitivity", "Minimum detectable power", -70.0, -20.0, -50.0, "dBm", "CTRL", "{:.1f}")
 
-        # Optical System
-        y_opt = self.rect.y + 340 + 12 + 48
+        # Optical System Box
+        p1_h = 356
+        p2_y = self.rect.y + p1_h + 12
+        y_opt = p2_y + 66
         self.sliders["beam_div"] = SimSlider((sx, y_opt, sw, 10), "Beam Divergence", "Half-angle beam spread", 0.1, 5.0, 1.5, "mrad", "CTRL", "{:.1f}")
-        self.sliders["pointing_err"] = SimSlider((sx, y_opt + 64, sw, 10), "Pointing Error", "Static alignment offset", 0.0, 100.0, 5.0, "µrad", "CTRL", "{:.0f}")
+        self.sliders["pointing_err"] = SimSlider((sx, y_opt + row_gap, sw, 10), "Pointing Error", "Static alignment offset", 0.0, 100.0, 5.0, "µrad", "CTRL", "{:.0f}")
 
-        # Atmospheric Conditions
-        y_atm = y_opt + 145 + 12
+        # Atmospheric Conditions Box
+        p2_h = 160
+        p3_y = p2_y + p2_h + 12
+        y_atm = p3_y + 66
         self.sliders["visibility"] = SimSlider((sx, y_atm, sw, 10), "Atmospheric Visibility", "Meteorological optical range", 0.1, 50.0, 15.0, "km", "ENV", "{:.1f}")
-        self.sliders["turbulence"] = SimSlider((sx, y_atm + 64, sw, 10), "Turbulence Strength (Cn²)", "Index of refraction structure", 0.01, 20.0, 2.00, "×10⁻¹⁵", "ENV", "{:.2f}")
+        self.sliders["turbulence"] = SimSlider((sx, y_atm + row_gap, sw, 10), "Turbulence Strength (Cn²)", "Index of refraction structure", 0.01, 20.0, 2.00, "×10⁻¹⁵", "ENV", "{:.2f}")
 
     def apply_to_model(self, opt: OpticalLinkModel):
         opt.tx_power_dbm = self.sliders["tx_power"].value
@@ -706,7 +716,7 @@ class SimulationPageManager:
 
         # ── LEFT COLUMN ─────────────────────────────────────────────
         # Section 1: TRANSMITTER & LINK PARAMETERS Box
-        p1_h = 340
+        p1_h = 356
         T.card(surf, (x0, y0, left_w, p1_h), fill=C.PANEL, border=C.BORDER)
         T.section_title(surf, x0 + 16, y0 + 12, "TRANSMITTER & LINK PARAMETERS", C.CYAN_ELEC)
 
@@ -718,7 +728,7 @@ class SimulationPageManager:
 
         # Section 2: OPTICAL SYSTEM Box
         p2_y = y0 + p1_h + 12
-        p2_h = 145
+        p2_h = 160
         T.card(surf, (x0, p2_y, left_w, p2_h), fill=C.PANEL, border=C.BORDER)
         T.section_title(surf, x0 + 16, p2_y + 12, "OPTICAL SYSTEM", C.CYAN_ELEC)
         self.sliders["beam_div"].draw(surf)
@@ -726,7 +736,7 @@ class SimulationPageManager:
 
         # Section 3: ATMOSPHERIC CONDITIONS Box
         p3_y = p2_y + p2_h + 12
-        p3_h = 145
+        p3_h = 160
         T.card(surf, (x0, p3_y, left_w, p3_h), fill=C.PANEL, border=C.BORDER)
         T.section_title(surf, x0 + 16, p3_y + 12, "ATMOSPHERIC CONDITIONS", C.CYAN_ELEC)
         self.sliders["visibility"].draw(surf)
@@ -850,45 +860,47 @@ def render_false_lock_page(surf, rect, sim, perf, opt: OpticalLinkModel, hist_pt
     right_x = x0 + left_w + 14
     right_w = w - left_w - 14
 
-    # ── LEFT CARD: LOCK CONFIDENCE METRICS ───────────────────────
-    card1_h = 340
+    # ── LEFT CARD 1: LOCK CONFIDENCE METRICS ───────────────────────
+    card1_h = max(260, int(main_h * 0.52))
     T.card(surf, (x0, main_y, left_w, card1_h), fill=C.PANEL, border=C.BORDER)
     T.section_title(surf, x0 + 16, main_y + 12, "LOCK CONFIDENCE METRICS", C.CYAN_ELEC)
 
     # 3 Circular Arc Gauges
-    gauge_y = main_y + 106
+    gauge_y = main_y + card1_h // 2 - 12
     gauge_gap = left_w // 3
     g_cx1 = x0 + gauge_gap // 2
     g_cx2 = x0 + gauge_gap + gauge_gap // 2
     g_cx3 = x0 + gauge_gap * 2 + gauge_gap // 2
 
     # Draw Gauges
-    T.draw_circular_arc_gauge(surf, g_cx1, gauge_y, 38, 94.0, C.CYAN_ELEC, "OVERALL LOCK CONFIDENCE", stroke=6)
-    T.draw_circular_arc_gauge(surf, g_cx2, gauge_y, 38, 95.0, C.CYAN_ELEC, "ALIGNMENT CONFIDENCE", stroke=6)
-    T.draw_circular_arc_gauge(surf, g_cx3, gauge_y, 38, 100.0, C.CYAN_ELEC, "SIGNAL CONSISTENCY", stroke=6)
+    T.draw_circular_arc_gauge(surf, g_cx1, gauge_y, 36, 94.0, C.CYAN_ELEC, "OVERALL LOCK", stroke=5)
+    T.draw_circular_arc_gauge(surf, g_cx2, gauge_y, 36, 95.0, C.CYAN_ELEC, "ALIGNMENT", stroke=5)
+    T.draw_circular_arc_gauge(surf, g_cx3, gauge_y, 36, 100.0, C.CYAN_ELEC, "CONSISTENCY", stroke=5)
 
     # Explanatory text below gauges
     exp_txt = "Lock validated against BER, SNR, alignment deviation, and tracking stability thresholds"
-    T.text(surf, (x0 + left_w // 2, main_y + 236), exp_txt, 10, C.TEXT_FAINT, anchor="tc")
+    T.text(surf, (x0 + left_w // 2, main_y + card1_h - 22), exp_txt, 10, C.TEXT_FAINT, anchor="tc")
 
     # Card 2 (Bottom Left): DETECTION ALGORITHM
     card2_y = main_y + card1_h + 12
     card2_h = main_h - card1_h - 12
     T.card(surf, (x0, card2_y, left_w, card2_h), fill=C.PANEL, border=C.BORDER)
-    T.section_title(surf, x0 + 16, card2_y + 12, "DETECTION ALGORITHM", C.CYAN_ELEC)
+    T.section_title(surf, x0 + 16, card2_y + 12, "DETECTION ALGORITHMS & THRESHOLDS", C.CYAN_ELEC)
 
     algos = [
-        "● BER Threshold Monitor",
-        "● Spatial Gating Filter",
-        "● Temporal Correlation Engine",
+        ("BER Threshold Gate", "Nominal lock gate: BER < 1.00e-06 with continuous parity checks", C.GREEN),
+        ("Spatial Gating Filter", "Angular FOV boundary: error <= 30 µrad radius gate", C.GREEN),
+        ("Temporal Correlation Engine", "Circularity > 0.85, temporal correlation index > 0.60", C.GREEN),
     ]
-    ay = card2_y + 40
-    for alg in algos:
-        T.text(surf, (x0 + 20, ay), alg, 11, C.GREEN, bold=True)
-        ay += 26
+    ay = card2_y + 38
+    for name, desc, col in algos:
+        pygame.draw.circle(surf, col, (x0 + 20, ay + 6), 4)
+        T.text(surf, (x0 + 32, ay), name, 11, col, bold=True)
+        T.text(surf, (x0 + 32, ay + 17), desc, 10, C.TEXT_FAINT)
+        ay += 44
 
-    # ── RIGHT CARD: LOCK VALIDATION CRITERIA ─────────────────────
-    rcard1_h = 340
+    # ── RIGHT CARD 1: LOCK VALIDATION CRITERIA ─────────────────────
+    rcard1_h = card1_h
     T.card(surf, (right_x, main_y, right_w, rcard1_h), fill=C.PANEL, border=C.BORDER)
     T.section_title(surf, right_x + 16, main_y + 12, "LOCK VALIDATION CRITERIA", C.CYAN_ELEC)
 
@@ -900,39 +912,40 @@ def render_false_lock_page(surf, rect, sim, perf, opt: OpticalLinkModel, hist_pt
         ("PASS", "False-lock state not asserted", "Explicit false-lock detection from anomaly correlation engine", "CLEAR", "thr: CLEAR"),
     ]
 
-    row_y = main_y + 40
+    row_y = main_y + 36
+    row_step = max(42, (rcard1_h - 48) // len(criteria))
     for status, c_title, c_desc, c_val, c_thr in criteria:
-        # PASS badge
-        pygame.draw.rect(surf, (0, 48, 28), (right_x + 16, row_y, 44, 20), border_radius=2)
-        T.text(surf, (right_x + 38, row_y + 2), status, 10, C.GREEN, bold=True, anchor="tc")
+        pygame.draw.rect(surf, (0, 48, 28), (right_x + 16, row_y + 2, 44, 20), border_radius=2)
+        T.text(surf, (right_x + 38, row_y + 4), status, 10, C.GREEN, bold=True, anchor="tc")
 
-        # Criterion Title & subtext
-        T.text(surf, (right_x + 70, row_y), c_title, 12, C.TEXT, bold=True)
-        T.text(surf, (right_x + 70, row_y + 18), c_desc, 10, C.TEXT_FAINT)
+        T.text(surf, (right_x + 68, row_y), c_title, 11, C.TEXT, bold=True)
+        T.text(surf, (right_x + 68, row_y + 17), c_desc, 10, C.TEXT_FAINT)
 
-        # Value and Threshold right
-        T.text(surf, (right_x + right_w - 16, row_y), c_val, 12, C.GREEN, bold=True, anchor="tr")
-        T.text(surf, (right_x + right_w - 16, row_y + 18), c_thr, 10, C.TEXT_FAINT, anchor="tr")
+        T.text(surf, (right_x + right_w - 16, row_y), c_val, 11, C.GREEN, bold=True, anchor="tr")
+        T.text(surf, (right_x + right_w - 16, row_y + 17), c_thr, 10, C.TEXT_FAINT, anchor="tr")
 
-        # Separator line
-        pygame.draw.line(surf, (14, 22, 38), (right_x + 16, row_y + 42), (right_x + right_w - 16, row_y + 42), 1)
-        row_y += 52
+        pygame.draw.line(surf, (14, 22, 38), (right_x + 16, row_y + row_step - 2), (right_x + right_w - 16, row_y + row_step - 2), 1)
+        row_y += row_step
 
     # Card 4 (Bottom Right): FALSE LOCK SIGNATURES
     rcard2_y = main_y + rcard1_h + 12
     rcard2_h = main_h - rcard1_h - 12
     T.card(surf, (right_x, rcard2_y, right_w, rcard2_h), fill=C.PANEL, border=C.BORDER)
-    T.section_title(surf, right_x + 16, rcard2_y + 12, "FALSE LOCK SIGNATURES", C.CYAN_ELEC)
+    T.section_title(surf, right_x + 16, rcard2_y + 12, "FALSE LOCK SIGNATURES & ANOMALIES", C.CYAN_ELEC)
 
     signatures = [
-        "Type I: BER Mismatch (High optical SNR but uncorrectable frame errors)",
-        "Type II: Energy without Correlation (Decoy/clutter specular reflection)",
-        "Type III: Unstable Centroid Wander (Platform jitter exceeding bandwidth)",
+        ("TYPE I", "BER Mismatch Anomaly", "High optical SNR detected but bit stream produces uncorrectable frame errors", C.AMBER),
+        ("TYPE II", "Specular Reflector Clutter", "Strong optical return without authentic carrier phase/polarization correlation", C.RED),
+        ("TYPE III", "Unstable Centroid Wander", "High-frequency spot vibration exceeding gimbal bandwidth limits", C.PURPLE),
     ]
     sy = rcard2_y + 38
-    for sign in signatures:
-        T.text(surf, (right_x + 20, sy), sign, 11, C.TEXT_DIM)
-        sy += 22
+    for tag, title, desc, tag_col in signatures:
+        pygame.draw.rect(surf, tuple(c // 6 for c in tag_col), (right_x + 16, sy, 58, 20), border_radius=2)
+        pygame.draw.rect(surf, tag_col, (right_x + 16, sy, 58, 20), 1, border_radius=2)
+        T.text(surf, (right_x + 45, sy + 3), tag, 9, tag_col, bold=True, anchor="tc")
+        T.text(surf, (right_x + 82, sy), title, 11, C.TEXT, bold=True)
+        T.text(surf, (right_x + 82, sy + 17), desc, 10, C.TEXT_FAINT)
+        sy += 44
 
 
 # ---------------------------------------------------------------------------
@@ -947,8 +960,9 @@ def render_event_log_page(surf, rect, sim, perf, opt: OpticalLinkModel, events_l
     T.card(surf, (x0, y0, w, h), fill=C.PANEL, border=C.BORDER)
     T.section_title(surf, x0 + 16, y0 + 14, "SYSTEM EVENT & DIAGNOSTIC LOG", C.CYAN_ELEC)
 
-    # Subtitle
-    T.text(surf, (x0 + 320, y0 + 14), "AUTONOMOUS PAT PIPELINE LOG · UTC TIMESTAMPED", 10, C.TEXT_FAINT)
+    # Subtitle (dynamically placed after section title)
+    tw_title, _ = T.font(13, bold=True).size("SYSTEM EVENT & DIAGNOSTIC LOG")
+    T.text(surf, (x0 + 16 + tw_title + 16, y0 + 14), "AUTONOMOUS PAT PIPELINE LOG · UTC TIMESTAMPED", 10, C.TEXT_FAINT)
 
     # Table Header
     th_y = y0 + 44
