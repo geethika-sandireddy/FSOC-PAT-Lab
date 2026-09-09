@@ -41,6 +41,8 @@ class PerformanceTracker:
         self.locked_visible_frames = 0
         self.errors_deg = []           # boresight (beam) error while locked
         self.est_errors_deg = []       # estimate error while locked
+        self.centroid_errors_px = []   # Metric C: true centroid error (detected vs GT)
+        self.boresight_errors_px = []  # Metric B: optical offset from sensor boresight
         self.fps_samples = []
         self.last_tick = 0.0
         self._tick_start = time.time()
@@ -55,9 +57,19 @@ class PerformanceTracker:
         self.success_frames = 0      # of those, frames the tracker held LOCKED
         self.state_time = {}
         self.trust_samples = []    # (vision_trust, model_trust) per tracked frame
-        self.unc_samples = []      # display (HUD-capped) sigma_px per frame
+        self.unc_samples = []      # display sigma px
         self.sat_samples = []      # (pan_sat, tilt_sat) per frame (0..1 each)
         self.sat_frames = 0        # frames where either axis is rate-limited
+        self.loss_events = 0
+        self.loss_reasons = {
+            "occlusion": 0,
+            "fade": 0,
+            "edge_of_fov": 0,
+            "saturation": 0,
+            "decoy_jump": 0,
+            "noise_flicker": 0,
+            "other": 0,
+        }
 
     # ------------------------------------------------------------------
     def record_frame(self, sim):
@@ -79,7 +91,7 @@ class PerformanceTracker:
         state = r["state"]
         self.state_time[state] = self.state_time.get(state, 0) + 1
 
-        is_locked = state == LOCKED
+        is_locked = state in (LOCKED, DEGRADED_LOCK)
         visible = r.get("beacon_visible", False)
 
         # Adaptive trust / uncertainty log (Phase 2 evidence)
@@ -136,6 +148,10 @@ class PerformanceTracker:
                 self.errors_deg.append(err)
             if r.get("est_err_deg") is not None:
                 self.est_errors_deg.append(r["est_err_deg"])
+            if r.get("centroid_error_px") is not None:
+                self.centroid_errors_px.append(r["centroid_error_px"])
+            if r.get("boresight_error_px") is not None:
+                self.boresight_errors_px.append(r["boresight_error_px"])
 
             if visible and r["in_fov"]:
                 if r["est_err_deg"] is not None and r["est_err_deg"] > 0.35:
@@ -155,6 +171,21 @@ class PerformanceTracker:
             if self.was_locked:
                 self.lock_lost_at_frame = self.frame_count
                 self.lock_lost_at_time = sim_t
+                self.loss_events += 1
+
+                # Diagnose exact loss trigger
+                if not visible:
+                    self.loss_reasons["occlusion"] += 1
+                elif not r.get("in_fov", True):
+                    self.loss_reasons["edge_of_fov"] += 1
+                elif getattr(sim.gimbal, "pan_sat", 0) > 0.95 or getattr(sim.gimbal, "tilt_sat", 0) > 0.95:
+                    self.loss_reasons["saturation"] += 1
+                elif r.get("candidates", 0) > 1 and getattr(sim.tracker, "_suspect", 0) > 0:
+                    self.loss_reasons["decoy_jump"] += 1
+                elif getattr(sim.tracker, "last_candidate_age", 0.0) > 0.05:
+                    self.loss_reasons["noise_flicker"] += 1
+                else:
+                    self.loss_reasons["other"] += 1
 
         self.was_locked = is_locked
 
@@ -162,10 +193,22 @@ class PerformanceTracker:
     def live_stats(self):
         n = len(self.errors_deg)
         ne = len(self.est_errors_deg)
+        nc = len(self.centroid_errors_px)
+        nb = len(self.boresight_errors_px)
+
         mean_err = sum(self.errors_deg) / n if n else None
         max_err = max(self.errors_deg) if n else None
         rms = math.sqrt(sum(e * e for e in self.errors_deg) / n) if n else None
         p95 = sorted(self.errors_deg)[int(n * 0.95) - 1] if n else None
+
+        mean_c_err = sum(self.centroid_errors_px) / nc if nc else None
+        rms_c_err = math.sqrt(sum(e * e for e in self.centroid_errors_px) / nc) if nc else None
+        p95_c_err = sorted(self.centroid_errors_px)[int(nc * 0.95) - 1] if nc else None
+        max_c_err = max(self.centroid_errors_px) if nc else None
+
+        mean_b_err = sum(self.boresight_errors_px) / nb if nb else None
+        rms_b_err = math.sqrt(sum(e * e for e in self.boresight_errors_px) / nb) if nb else None
+
         est_mean = sum(self.est_errors_deg) / ne if ne else None
         est_max = max(self.est_errors_deg) if ne else None
         est_p95 = sorted(self.est_errors_deg)[int(ne * 0.95) - 1] if ne else None
@@ -187,6 +230,12 @@ class PerformanceTracker:
             max_err_deg=max_err,
             rms_err_deg=rms,
             p95_err_deg=p95,
+            mean_centroid_err_px=mean_c_err,
+            rms_centroid_err_px=rms_c_err,
+            p95_centroid_err_px=p95_c_err,
+            max_centroid_err_px=max_c_err,
+            mean_boresight_err_px=mean_b_err,
+            rms_boresight_err_px=rms_b_err,
             est_err_mean_deg=est_mean,
             est_err_p95_deg=est_p95,
             est_err_max_deg=est_max,
@@ -207,6 +256,9 @@ class PerformanceTracker:
             mean_saturation_pct=mean_sat * 100 if mean_sat is not None else None,
             max_saturation_pct=max_sat * 100 if max_sat is not None else None,
             saturation_frames=self.sat_frames,
+            loss_events=self.loss_events,
+            loss_reasons=dict(self.loss_reasons),
+            target_loss_pct=round(max(0.0, 100.0 - retention_vis if self.visible_frames else 0.0), 2),
             path="",
         )
 
@@ -236,8 +288,12 @@ class PerformanceTracker:
                         if stats["rms_err_deg"] is not None else "n/a"])
             w.writerow(["max_pointing_error_deg", round(stats["max_err_deg"], 4)
                         if stats["max_err_deg"] is not None else "n/a"])
-            w.writerow(["p95_pointing_error_deg", round(stats["p95_err_deg"], 4)
-                        if stats["p95_err_deg"] is not None else "n/a"])
+            w.writerow(["metric_c_mean_centroid_error_px", round(stats["mean_centroid_err_px"], 3)
+                        if stats["mean_centroid_err_px"] is not None else "n/a"])
+            w.writerow(["metric_c_rms_centroid_error_px", round(stats["rms_centroid_err_px"], 3)
+                        if stats["rms_centroid_err_px"] is not None else "n/a"])
+            w.writerow(["metric_b_mean_boresight_error_px", round(stats["mean_boresight_err_px"], 3)
+                        if stats["mean_boresight_err_px"] is not None else "n/a"])
             w.writerow(["tracking_success_rate_pct", round(stats["success_rate_pct"], 2)])
             w.writerow(["lock_retention_total_pct", round(stats["retention_total_pct"], 2)])
             w.writerow(["lock_retention_visible_pct", round(stats["retention_visible_pct"], 2)])

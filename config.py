@@ -59,28 +59,52 @@ CAMERA_MAX_TILT_DEG_S = 5.0           # PS default: 5 °/s (range 5-10)
 CAM_VIEW_W = CAMERA_RESOLUTION_W      # sensor pixels (horizontal)
 CAM_VIEW_H = CAMERA_RESOLUTION_H      # sensor pixels (vertical)
 HFOV_DEG = CAMERA_FOV_H_DEG           # horizontal field of view in degrees
-PIXELS_PER_DEG = CAM_VIEW_W / HFOV_DEG
-VFOV_DEG = CAM_VIEW_H / PIXELS_PER_DEG
+VFOV_DEG = CAMERA_FOV_V_DEG           # vertical field of view in degrees
+
+PIXELS_PER_DEG_X = CAM_VIEW_W / HFOV_DEG   # 640 / 4 = 160 px/deg default
+PIXELS_PER_DEG_Y = CAM_VIEW_H / VFOV_DEG   # 480 / 3 = 160 px/deg default
+PIXELS_PER_DEG = PIXELS_PER_DEG_X          # isotropic scalar alias
 
 PRINCIPAL_U = CAM_VIEW_W / 2.0
 PRINCIPAL_V = CAM_VIEW_H / 2.0
-FOCAL_PX = (CAM_VIEW_W / 2.0) / __import__("math").tan(__import__("math").radians(HFOV_DEG / 2.0))
+FOCAL_PX_X = (CAM_VIEW_W / 2.0) / __import__("math").tan(__import__("math").radians(HFOV_DEG / 2.0))
+FOCAL_PX_Y = (CAM_VIEW_H / 2.0) / __import__("math").tan(__import__("math").radians(VFOV_DEG / 2.0))
+FOCAL_PX = FOCAL_PX_X
 
 
 def update_fov(hfov_deg, vfov_deg=None):
-    """Dynamically update camera FOV and recalculate derived optical quantities."""
-    global HFOV_DEG, VFOV_DEG, CAMERA_FOV_H_DEG, CAMERA_FOV_V_DEG, PIXELS_PER_DEG, FOCAL_PX
+    """Dynamically update camera FOV and recalculate derived optical quantities independently for X and Y."""
+    global HFOV_DEG, VFOV_DEG, CAMERA_FOV_H_DEG, CAMERA_FOV_V_DEG
+    global PIXELS_PER_DEG_X, PIXELS_PER_DEG_Y, PIXELS_PER_DEG, FOCAL_PX_X, FOCAL_PX_Y, FOCAL_PX
     HFOV_DEG = float(max(0.5, min(20.0, hfov_deg)))
     CAMERA_FOV_H_DEG = HFOV_DEG
-    PIXELS_PER_DEG = CAM_VIEW_W / HFOV_DEG
     if vfov_deg is not None:
         VFOV_DEG = float(max(0.5, min(20.0, vfov_deg)))
     else:
-        VFOV_DEG = CAM_VIEW_H / PIXELS_PER_DEG
+        VFOV_DEG = HFOV_DEG * (CAM_VIEW_H / CAM_VIEW_W)
     CAMERA_FOV_V_DEG = VFOV_DEG
+
     import math
-    FOCAL_PX = (CAM_VIEW_W / 2.0) / math.tan(math.radians(HFOV_DEG / 2.0))
-    return HFOV_DEG, VFOV_DEG, PIXELS_PER_DEG, FOCAL_PX
+    PIXELS_PER_DEG_X = CAM_VIEW_W / HFOV_DEG
+    PIXELS_PER_DEG_Y = CAM_VIEW_H / VFOV_DEG
+    PIXELS_PER_DEG = PIXELS_PER_DEG_X
+    FOCAL_PX_X = (CAM_VIEW_W / 2.0) / math.tan(math.radians(HFOV_DEG / 2.0))
+    FOCAL_PX_Y = (CAM_VIEW_H / 2.0) / math.tan(math.radians(VFOV_DEG / 2.0))
+    FOCAL_PX = FOCAL_PX_X
+    return HFOV_DEG, VFOV_DEG, PIXELS_PER_DEG_X, PIXELS_PER_DEG_Y, FOCAL_PX
+
+
+def update_resolution(w, h):
+    """Dynamically update sensor resolution and recalculate principal point and scales."""
+    global CAM_VIEW_W, CAM_VIEW_H, CAMERA_RESOLUTION_W, CAMERA_RESOLUTION_H
+    global PRINCIPAL_U, PRINCIPAL_V, PIXELS_PER_DEG_X, PIXELS_PER_DEG_Y, PIXELS_PER_DEG, FOCAL_PX_X, FOCAL_PX_Y, FOCAL_PX
+    CAM_VIEW_W = int(max(160, min(3840, w)))
+    CAM_VIEW_H = int(max(120, min(2160, h)))
+    CAMERA_RESOLUTION_W = CAM_VIEW_W
+    CAMERA_RESOLUTION_H = CAM_VIEW_H
+    PRINCIPAL_U = CAM_VIEW_W / 2.0
+    PRINCIPAL_V = CAM_VIEW_H / 2.0
+    return update_fov(HFOV_DEG, VFOV_DEG)
 
 
 def update_screen_size(w, h):
@@ -213,6 +237,8 @@ ALL_TRACKING_STATES = (
 LOCK_CONFIRM_FRAMES = 5         # consecutive frames of valid observation to achieve initial LOCKED
 REACQ_CONFIRM_FRAMES = 3        # consecutive frames of valid observation to re-achieve LOCKED from REACQUIRING
 LOCK_MIN_CONF = 0.70            # overall confidence must be >= this for full LOCKED
+DEGRADED_ENTER_CONF = 0.55      # confidence to enter DEGRADED_LOCK from reacquisition
+LOCK_HOLD_MIN_CONF = 0.45       # confidence floor to retain lock before dropping to COASTING (hysteresis)
 LOCK_MAX_UNCERTAINTY_PX = 14.0  # uncertainty must be <= this for full LOCKED
 LOCK_MAX_RESIDUAL_PX = 18.0     # observation-prediction residual must be <= this for full LOCKED
 LOST_TIMEOUT_S = 0.35           # duration to hold LOST before resetting to SEARCHING

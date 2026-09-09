@@ -84,9 +84,11 @@ class VirtualSensor:
 
     @staticmethod
     def _canvas_xy(az_deg, el_deg):
-        """Map an az/el LOS onto the 2000x2000 virtual-screen canvas."""
-        return (config.SCREEN_CANVAS_CX + az_deg * config.PIXELS_PER_DEG,
-                config.SCREEN_CANVAS_CY - el_deg * config.PIXELS_PER_DEG)
+        """Map an az/el LOS onto the 2000x2000 virtual-screen canvas with independent X/Y scale."""
+        px_x = getattr(config, "PIXELS_PER_DEG_X", config.PIXELS_PER_DEG)
+        px_y = getattr(config, "PIXELS_PER_DEG_Y", config.PIXELS_PER_DEG)
+        return (config.SCREEN_CANVAS_CX + az_deg * px_x,
+                config.SCREEN_CANVAS_CY - el_deg * px_y)
 
     @staticmethod
     def _viewport_px(az_deg, el_deg, cam_canvas):
@@ -177,6 +179,8 @@ class VirtualSensor:
                     _draw_circle_blob(frame, u, v, r, amp)
                 elif shape == "SPOT":
                     _draw_sprite(frame, u, v, _BEACON_KERNEL, amp)
+                elif shape == "ELLIPSE":
+                    _draw_ellipse_blob(frame, u, v, max(2, spx // 2), max(2, spy // 2), amp)
                 else:  # SQUARE (PS default)
                     _draw_square_blob(frame, u, v, spx, spy, amp)
                 if b is scene.beacon:
@@ -196,8 +200,17 @@ class VirtualSensor:
         if disturbance is not None:
             frame = disturbance.apply(frame, dt)
             if frame.dtype == np.uint8:
-                return frame
-        return np.clip(frame, 0, 255).astype(np.uint8)
+                out = frame
+            else:
+                out = np.clip(frame, 0, 255).astype(np.uint8)
+        else:
+            out = np.clip(frame, 0, 255).astype(np.uint8)
+
+        if getattr(config, "CAMERA_TYPE", "MONOCHROME") == "MONOCHROME":
+            import cv2
+            gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        return out
 
 
 def _hue_to_bgr(hue_deg):
@@ -245,6 +258,25 @@ def _draw_circle_blob(frame, cx, cy, radius, intensity):
     y0 = max(0, int(round(cy)) - r)
     x1 = min(w, int(round(cx)) + r + 1)
     y1 = min(h, int(round(cy)) + r + 1)
+    gh = y1 - y0
+    gw = x1 - x0
+    if gh <= 0 or gw <= 0:
+        return
+    sub = inside[:gh, :gw].copy()
+    frame[y0:y1, x0:x1][sub] += intensity
+
+
+def _draw_ellipse_blob(frame, cx, cy, rx, ry, intensity):
+    """Draw an intensity-filled elliptical target (PS 26169 optional shape)."""
+    rx = max(1, int(rx))
+    ry = max(1, int(ry))
+    h, w = frame.shape[:2]
+    yy, xx = np.mgrid[-ry:ry + 1, -rx:rx + 1]
+    inside = (xx ** 2 / float(rx * rx) + yy ** 2 / float(ry * ry)) <= 1.0
+    x0 = max(0, int(round(cx)) - rx)
+    y0 = max(0, int(round(cy)) - ry)
+    x1 = min(w, int(round(cx)) + rx + 1)
+    y1 = min(h, int(round(cy)) + ry + 1)
     gh = y1 - y0
     gw = x1 - x0
     if gh <= 0 or gw <= 0:

@@ -654,11 +654,11 @@ class Tracker:
             if self.conf.overall >= config.LOCK_MIN_CONF:
                 self.state = LOCKED
                 self.phase = LOCKED
-            elif self.conf.overall >= config.DEGRADED_ENTER_CONF:
+            elif self.conf.overall >= config.LOCK_HOLD_MIN_CONF:
                 self.state = DEGRADED_LOCK
                 self.phase = DEGRADED_LOCK
             else:
-                # Immediate lock drop when confidence collapses below 0.55
+                # Immediate lock drop when confidence collapses below lock hold floor
                 self.state = COASTING
                 self.phase = COASTING
                 self._measurement_valid = False

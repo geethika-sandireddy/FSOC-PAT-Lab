@@ -1,7 +1,7 @@
-preset,envelope,frames,throughput_fps,acquisition_time_s,mean_error_px,max_error_px,rms_error_px,mean_error_deg,max_error_deg,rms_error_deg,lock_retention_pct,target_loss_pct,actuator_saturation_pct,false_lock_events,overall_pass
-EASY,NOMINAL_OPERATING,300,47.5,0.233,5.51,59.12,11.26,0.0345,0.3695,0.0704,95.7,4.3,5.9,0,True
-MODERATE,NOMINAL_OPERATING,300,43.8,0.233,11.92,60.16,14.4,0.0745,0.376,0.09,95.7,4.3,63.0,0,False
-HARD,NOMINAL_OPERATING,300,29.5,0.233,10.61,59.86,14.1,0.0663,0.3741,0.0881,95.7,4.3,47.5,0,False
-SEVERE,EXTREME_STRESS_FAILURE_ENVELOPE,300,28.9,1.417,34.12,87.1,38.16,0.2133,0.5444,0.2385,58.0,42.0,92.7,0,False
-ADVERSARIAL,EXTREME_STRESS_FAILURE_ENVELOPE,300,27.9,1.167,17.62,32.45,18.82,0.1101,0.2028,0.1176,63.3,36.7,61.9,0,False
-ISRO_RX,NOMINAL_OPERATING,300,47.8,0.233,9.17,59.14,12.68,0.0573,0.3696,0.0793,95.7,4.3,47.4,0,True
+preset,envelope,frames,throughput_fps,acquisition_time_s,settled_pointing_error_px,metric_c_rms_centroid_px,metric_c_mean_centroid_px,metric_b_mean_boresight_px,mean_error_deg,rms_error_deg,lock_retention_pct,target_loss_pct,actuator_saturation_pct,false_lock_events,overall_pass
+EASY,NOMINAL_OPERATING,300,38.0,0.233,3.68,2.419,2.375,4.84,0.0366,0.0747,95.7,4.3,5.6,0,True
+MODERATE,NOMINAL_OPERATING,300,37.3,0.233,9.92,13.679,10.765,14.22,0.0744,0.0934,90.0,10.0,63.7,0,True
+HARD,NOMINAL_OPERATING,300,22.7,0.233,10.83,14.986,12.319,13.98,0.0826,0.1065,73.0,27.0,55.5,0,False
+SEVERE,EXTREME_STRESS_FAILURE_ENVELOPE,300,21.8,0.25,35.68,24.268,21.494,39.7,0.2139,0.2593,32.3,67.7,92.8,0,False
+ADVERSARIAL,EXTREME_STRESS_FAILURE_ENVELOPE,300,22.0,0.233,19.94,25.12,22.803,16.75,0.1374,0.1533,53.3,46.7,63.9,0,False
+ISRO_RX,NOMINAL_OPERATING,300,36.8,0.233,8.31,12.736,9.445,12.82,0.0645,0.0876,89.7,10.3,53.7,0,True

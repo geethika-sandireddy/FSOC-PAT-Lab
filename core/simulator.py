@@ -31,7 +31,8 @@ class Simulator:
     def __init__(self, preset_name="EASY", seed=None, dt=1.0 / config.FPS,
                  tracker_factory=None, platform_mode=None, atmosphere=None,
                  motion_type=None, target_shape=None, target_size=None,
-                 num_targets=None, target_initial=None):
+                 num_targets=None, target_initial=None, ephemeris_model=None,
+                 mismatch_mode="matched"):
         preset = config.DIFFICULTY_PRESETS.get(preset_name, config.DIFFICULTY_PRESETS["EASY"])
         self.preset_name = preset_name
         self.preset = preset
@@ -61,7 +62,7 @@ class Simulator:
                         else getattr(config, "NUM_TARGETS", 1),
             target_initial=target_initial,
         )
-        self.eph = EphemerisModel(self.scene.orbit, seed=seed)
+        self.eph = ephemeris_model if ephemeris_model is not None else EphemerisModel(self.scene.orbit, seed=seed, mismatch_mode=mismatch_mode)
         self.gimbal = Gimbal()
         self.sensor = VirtualSensor()
         self.disturbance = DisturbanceEngine(
@@ -144,17 +145,17 @@ class Simulator:
     # ------------------------------------------------------------------
     def set_fov(self, hfov_deg, vfov_deg=None):
         """Configure user-defined camera field of view (PS default 4x3 deg)."""
-        h, v, ppd, fpx = config.update_fov(hfov_deg, vfov_deg)
-        return h, v
+        res = config.update_fov(hfov_deg, vfov_deg)
+        return res[0], res[1]
 
     def set_screen_size(self, w, h):
         """Configure user-defined virtual screen size (PS default 2000x2000)."""
         w, h, cx, cy = config.update_screen_size(w, h)
         return w, h, cx, cy
 
-    def set_target_params(self, shape=None, size_px=None, count=None, initial=None):
+    def set_target_params(self, shape=None, size_px=None, size_py=None, count=None, initial=None):
         """Configure target parameters (shape: Square/Circle/Spot, size: 5-20px, count: 1-5, initial)."""
-        self.scene.set_target_params(shape=shape, size_px=size_px, count=count, initial=initial)
+        self.scene.set_target_params(shape=shape, size_px=size_px, size_py=size_py, count=count, initial=initial)
 
     def set_gimbal_limits(self, max_pan=None, max_tilt=None):
         """Configure gimbal speed limits (PS default 5 deg/s, range 5-10 deg/s)."""
@@ -315,6 +316,12 @@ class Simulator:
                     dtilt < config.VFOV_DEG / 2.0 + 0.1),
             frame=frame,
             t=self.t,
+            cmd_pan=pan,
+            cmd_tilt=tilt,
+            gimbal_pan=self.gimbal.pan,
+            gimbal_tilt=self.gimbal.tilt,
+            gimbal_v_pan=self.gimbal.v_pan,
+            gimbal_v_tilt=self.gimbal.v_tilt,
             gimbal_sat_pan=self.gimbal.pan_sat,
             gimbal_sat_tilt=self.gimbal.tilt_sat,
         )

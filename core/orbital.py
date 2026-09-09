@@ -115,11 +115,13 @@ class EphemerisModel:
     capped - the real effect of unmodeled drag on a long-running
     propagator."""
 
-    def __init__(self, orbit, seed=None):
+    def __init__(self, orbit, seed=None, mismatch_mode="matched"):
         rnd = random.Random(seed)
         self.orbit = orbit
+        self.mismatch_mode = str(mismatch_mode).lower()
         angle = rnd.uniform(0.0, 2.0 * math.pi)
         self._dir = (math.cos(angle), math.sin(angle))
+        self._mismatch_seed = seed or 42
 
     def _bias_deg(self, t):
         start = config.EPHEMERIS_START_BIAS_DEG
@@ -130,6 +132,17 @@ class EphemerisModel:
 
     def predict_az_el(self, t):
         az, el = self.orbit.relative_los_az_el(t)
+        # Deliberate model mismatch injection (PS Section 7 validation)
+        if self.mismatch_mode == "small":
+            az += 0.04 * math.sin(0.5 * t)
+            el += 0.03 * math.cos(0.4 * t)
+        elif self.mismatch_mode == "moderate":
+            az += 0.08 * math.sin(0.8 * t)
+            el += 0.06 * math.cos(0.7 * t)
+        elif self.mismatch_mode == "large":
+            az += 0.14 * math.sin(1.2 * t)
+            el += 0.10 * math.cos(1.0 * t)
+
         b_az, b_el = self._bias_deg(t)
         return az + b_az, el + b_el
 

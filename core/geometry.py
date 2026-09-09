@@ -75,12 +75,13 @@ def gimbal_frame(pan_deg, tilt_deg):
     return right, up, fwd
 
 
-def project_point_into_camera(world_pos, cam_pos, cam_basis, focal_px, cu, cv):
+def project_point_into_camera(world_pos, cam_pos, cam_basis, focal_px, cu, cv, focal_px_y=None):
     """Project a world point into the pinhole sensor.
 
     Returns (u, v) sensor pixel coordinates, or None if the point lies
     behind the camera.  cam_basis = (right, up, forward) column vectors.
     """
+    f_y = focal_px if focal_px_y is None else focal_px_y
     dx = world_pos[0] - cam_pos[0]
     dy = world_pos[1] - cam_pos[1]
     dz = world_pos[2] - cam_pos[2]
@@ -91,7 +92,7 @@ def project_point_into_camera(world_pos, cam_pos, cam_basis, focal_px, cu, cv):
     if qz <= 1e-6:
         return None
     u = cu + focal_px * (qx / qz)
-    v = cv - focal_px * (qy / qz)
+    v = cv - f_y * (qy / qz)
     return u, v
 
 
@@ -105,16 +106,17 @@ def project_point_into_camera_frame(world_pos, cam_pos, cam_basis):
             fwd[0] * dx + fwd[1] * dy + fwd[2] * dz)
 
 
-def ray_to_azel(px, py, focal_px, cam_basis, cu=0.0, cv=0.0):
+def ray_to_azel(px, py, focal_px, cam_basis, cu=0.0, cv=0.0, focal_px_y=None):
     """Invert projection: turn a sensor pixel into a world LOS (az, el).
 
     This is how the detection+tracking feed converts a measured pixel offset
     into the *world* LOS that the control loop points at - the measurement
     is physically grounded (uses only the pixel plus the encoder pose).
     """
+    f_y = focal_px if focal_px_y is None else focal_px_y
     right, up, fwd = cam_basis
     dwx = (px - cu) / focal_px
-    dwy = (cv - py) / focal_px
+    dwy = (cv - py) / f_y
     n = dwx * right + dwy * up + fwd
     nlen = math.sqrt(n[0] ** 2 + n[1] ** 2 + n[2] ** 2) or 1.0
     n = n / nlen

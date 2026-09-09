@@ -38,26 +38,39 @@ class Beacon:
     """Satellite B's optical beacon (PS 26169: target shape/size configurable)."""
 
     def __init__(self, orbit_model, seed=None, shape="SQUARE", size_px=10, size_py=10,
-                 phase_offset=0.0):
+                 phase_offset=0.0, target_id="TARGET-01"):
+        self.target_id = target_id
         self.orbit = orbit_model
+        self.motion_model = getattr(orbit_model, "_motion_type", "straight_line")
         self.az_deg = 0.0
         self.el_deg = 0.0
+        self.vel_az = 0.0
+        self.vel_el = 0.0
         self.range_km = 1000.0
         self.pos = (0.0, 0.0, 1000.0)
         self._time = -abs(phase_offset)   # delayed start: enters later in a run
         self.visible = True
-        self.shape = shape          # PS: Square (default), Circle, Spot
+        self.shape = shape          # PS: Square (default), Circle, Spot, Ellipse
         self.size_px = size_px      # PS: 5-20 pixels, default 10
         self.size_py = size_py
 
     def advance(self, dt):
         self._time += dt
+        prev_az, prev_el = self.az_deg, self.el_deg
         self.az_deg, self.el_deg = self.orbit.relative_los_az_el(self._time)
+        if dt > 0:
+            self.vel_az = (self.az_deg - prev_az) / dt
+            self.vel_el = (self.el_deg - prev_el) / dt
         self.range_km = self.orbit.range_km(self._time)
         q = geometry.azel_unit(self.az_deg, self.el_deg)
         r = self.range_km * 1000.0
         self.pos = (q[0] * r, q[1] * r, q[2] * r)
         return self.pos
+
+    @property
+    def trajectory(self):
+        """Return reference to underlying physical orbital motion model."""
+        return self.orbit
 
     @property
     def time(self):
@@ -157,16 +170,17 @@ class Scene3D:
         # tracker, metrics) tracks THIS one.  Extra targets get phase-delayed
         # separate orbits so they are additional independent sky objects.
         self.beacon = Beacon(self.orbit, seed=seed,
-                             shape=shape, size_px=tsize, size_py=tsize)
+                             shape=shape, size_px=tsize, size_py=tsize,
+                             target_id="TARGET-01")
         self.beacons = [self.beacon]
         for i in range(1, self.num_targets):
             extra_orbit = RelativeOrbitModel(az_amp=az_amp, el_amp=el_amp,
                                              speed=speed, seed=(seed or 7) * 31 + i,
                                              motion_type="random",
                                              initial="RANDOM")
-            extra = Beacon(extra_orbit, seed=seed + i,
+            extra = Beacon(extra_orbit, seed=(seed or 7) + i,
                            shape=shape, size_px=tsize, size_py=tsize,
-                           phase_offset=0.0)
+                           phase_offset=0.0, target_id=f"TARGET-{i+1:02d}")
             self.beacons.append(extra)
         self.stars = Starfield(config.NUM_STARS, seed=seed)
         self.distractors = []
@@ -208,14 +222,18 @@ class Scene3D:
         )
         self.beacon.orbit = self.orbit
 
-    def set_target_params(self, shape=None, size_px=None, count=None, initial=None):
-        """Dynamically update target shape (SQUARE/CIRCLE/SPOT), size (5-20 px), count (1-5), or initial pos."""
+    def set_target_params(self, shape=None, size_px=None, size_py=None, count=None, initial=None):
+        """Dynamically update target shape (SQUARE/CIRCLE/ELLIPSE/SPOT), size (5-20 px), count (1-5), or initial pos."""
         if shape is not None:
             self.beacon.shape = str(shape).upper()
+            config.TARGET_SHAPE = self.beacon.shape
         if size_px is not None:
             sz = int(max(5, min(20, size_px)))
+            sz_y = int(max(5, min(20, size_py))) if size_py is not None else sz
             self.beacon.size_px = sz
-            self.beacon.size_py = sz
+            self.beacon.size_py = sz_y
+            config.TARGET_SIZE_PX = sz
+            config.TARGET_SIZE_PY = sz_y
         if initial is not None:
             from core.orbital import RelativeOrbitModel
             self.orbit = RelativeOrbitModel(
@@ -236,7 +254,8 @@ class Scene3D:
                     speed=self.orbit.speed, seed=31 * i + 7,
                     motion_type="random", initial="RANDOM")
                 extra = Beacon(extra_orbit, shape=self.beacon.shape,
-                               size_px=self.beacon.size_px, size_py=self.beacon.size_py)
+                               size_px=self.beacon.size_px, size_py=self.beacon.size_py,
+                               target_id=f"TARGET-{i+1:02d}")
                 self.beacons.append(extra)
 
     @property
