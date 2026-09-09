@@ -49,8 +49,8 @@ class OpticalLinkModel:
         self.history = deque(maxlen=120)
         self._last_t = 0.0
 
-    def update_from_sim(self, sim_result):
-        """Synchronize real-time simulator measurements."""
+    def update_from_sim(self, sim_result, stress_mgr=None):
+        """Synchronize real-time simulator measurements and inject stress test faults."""
         t = sim_result.get("t", 0.0)
         ptg_deg = sim_result.get("pointing_err_deg", 0.001)
         # Convert degrees to microradians (1 deg = 17453.3 µrad)
@@ -59,12 +59,20 @@ class OpticalLinkModel:
         self.pointing_error_urad = round(0.85 * self.pointing_error_urad + 0.15 * live_ptg_urad, 2)
 
         conf = sim_result.get("confidence", 0.95)
-        state = sim_result.get("state", "LOCKED")
+        state = sim_result.get("state", "ESTABLISHED" if sim_result.get("state") == "LOCKED" else sim_result.get("state", "ESTABLISHED"))
+
+        # Apply stress test beam misalignment if active
+        if stress_mgr and stress_mgr.scenarios["beam_mis"]["active"]:
+            self.pointing_error_urad = round(self.pointing_error_urad + 42.0 * stress_mgr.scenarios["beam_mis"]["level"], 2)
 
         # Atmospheric loss based on visibility (Kim / Kruse model)
         q = 1.6 if self.visibility_km > 50 else (1.3 if self.visibility_km > 6 else 0.585 * (self.visibility_km ** (1/3)))
         beta = (3.91 / max(0.1, self.visibility_km)) * ((self.wavelength_nm / 550.0) ** (-q))
         atm_loss = round(beta * self.distance_km, 2)
+
+        # Apply stress test atmospheric degradation if active
+        if stress_mgr and stress_mgr.scenarios["atm_deg"]["active"]:
+            atm_loss += round(18.5 * stress_mgr.scenarios["atm_deg"]["level"], 2)
 
         # Geometric loss (free-space divergence loss)
         geo_loss = round(20.0 * math.log10(max(1.0, self.distance_km * 1000.0 * (self.beam_divergence_mrad * 1e-3) / 0.1)), 1)
@@ -73,19 +81,45 @@ class OpticalLinkModel:
         # Pointing loss
         div_rad = max(1e-6, self.beam_divergence_mrad * 1e-3)
         err_rad = self.pointing_error_urad * 1e-6
-        ptg_loss = round(4.34 * ((2.0 * err_rad / div_rad) ** 2), 2)
+        ptg_loss = round(min(45.0, 4.34 * ((2.0 * err_rad / div_rad) ** 2)), 2)
 
         total_loss = round(atm_loss + geo_loss + ptg_loss, 2)
-        rx_power = round(self.tx_power_dbm - total_loss, 2)
-        link_margin = round(rx_power - self.rx_sensitivity_dbm, 2)
+        rx_power = round(max(-65.0, min(40.0, self.tx_power_dbm - total_loss)), 2)
 
         # Signal-to-Noise Ratio (dB)
         base_snr = 85.0 - total_loss * 0.8
         jitter = (math.sin(t * 1.5) * 0.4) + (math.cos(t * 3.7) * 0.2)
         snr = max(0.0, round(base_snr + jitter, 2))
 
+        # Apply turbulence burst if active
+        if stress_mgr and stress_mgr.scenarios["turb_burst"]["active"]:
+            lvl = stress_mgr.scenarios["turb_burst"]["level"]
+            scint = (math.sin(t * 14.0) * 5.2 + math.cos(t * 26.0) * 3.4) * lvl
+            rx_power = round(rx_power + scint, 2)
+            snr = max(2.0, round(snr + scint * 1.1, 2))
+
+        # Apply signal interruption if active
+        if stress_mgr and stress_mgr.scenarios["sig_intr"]["active"]:
+            rx_power = -65.0
+            snr = 1.8
+            state = "SIGNAL LOSS"
+
+        # Apply false lock condition if active
+        if stress_mgr and stress_mgr.scenarios["false_lock"]["active"]:
+            state = "FALSE LOCK"
+        elif (stress_mgr and (stress_mgr.scenarios["atm_deg"]["active"] or stress_mgr.scenarios["beam_mis"]["active"])) and state != "SIGNAL LOSS":
+            state = "DEGRADED"
+
+        link_margin = round(rx_power - self.rx_sensitivity_dbm, 2)
+
         # Bit Error Rate (BER)
-        if snr > 40.0:
+        if state == "SIGNAL LOSS":
+            ber = 0.5
+            ber_str = "0.50 (LOST)"
+        elif state == "FALSE LOCK":
+            ber = 1.2e-4
+            ber_str = "1.20e-04"
+        elif snr > 40.0:
             ber = 1.0e-15
             ber_str = "1.00e-15"
         elif snr > 20.0:
@@ -99,10 +133,20 @@ class OpticalLinkModel:
             ber_str = "1.00e-04"
 
         # Tracking stability
-        stability = min(99.9, max(50.0, round(conf * 98.0 + (math.cos(t * 2.0) * 0.8), 1)))
+        if state == "SIGNAL LOSS":
+            stability = 0.0
+        elif state == "FALSE LOCK":
+            stability = 44.5
+        elif stress_mgr and stress_mgr.scenarios["turb_burst"]["active"]:
+            stability = min(99.9, max(40.0, round(conf * 72.0 + (math.cos(t * 12.0) * 8.0), 1)))
+        else:
+            stability = min(99.9, max(50.0, round(conf * 98.0 + (math.cos(t * 2.0) * 0.8), 1)))
 
         # Propagation delay (tau = d / c)
         prop_delay_us = round((self.distance_km * 1000.0) / (3e8) * 1e6, 2)
+
+        if stress_mgr:
+            stress_mgr.record_rx_power(rx_power)
 
         point = {
             "t": round(t, 2),
@@ -648,6 +692,14 @@ class SimulationPageManager:
         self.sliders = {}
         self.setup_sliders()
 
+    def update_rect(self, rect):
+        self.rect = pygame.Rect(rect)
+        old_vals = {k: s.value for k, s in self.sliders.items()}
+        self.setup_sliders()
+        for k, v in old_vals.items():
+            if k in self.sliders:
+                self.sliders[k].value = v
+
     def setup_sliders(self):
         w = self.rect.w
         left_w = int(w * 0.62)
@@ -820,84 +872,443 @@ class SimulationPageManager:
 
 
 # ---------------------------------------------------------------------------
-# PAGE 4: FALSE LOCK (Figma Image 5)
+# PAGE 4: STRESS TEST (Hardware-in-the-Loop Fault Injection & Verification)
 # ---------------------------------------------------------------------------
-def render_false_lock_page(surf, rect, sim, perf, opt: OpticalLinkModel, hist_pt: dict):
+class StressTestManager:
     """
-    Renders False Lock validation page matching Figma Image 5:
-    - Top Banner: LOCK VALID with checkmark & timestamp
-    - Left Column:
-      * LOCK CONFIDENCE METRICS (3 Arc Gauges: 94%, 95%, 100%)
-      * DETECTION ALGORITHM list
-    - Right Column:
-      * LOCK VALIDATION CRITERIA (5 PASS verification rows with thresholds)
-      * FALSE LOCK SIGNATURES
+    Manages the 5 interactive Stress Test Scenarios and Real-time Oscilloscope.
+    Faithfully reproduces Screenshot 1 layout and behavior.
+    """
+    def __init__(self):
+        self.scenarios = {
+            "atm_deg": {
+                "name": "Atmospheric Degradation",
+                "severity": "WARNING",
+                "desc": "Progressively increases atmospheric loss to simulate fog, haze, or precipitation. Loss increases until link margin is exhausted.",
+                "tags": ["Increasing ATM loss", "Decreasing RX power", "Rising BER", "Potential link degradation"],
+                "active": False,
+                "timer": 0.0,
+                "duration": 10.0,
+                "level": 0.0,
+                "button_rect": pygame.Rect(0, 0, 0, 0),
+            },
+            "beam_mis": {
+                "name": "Beam Misalignment",
+                "severity": "WARNING",
+                "desc": "Introduces progressive pointing error simulating gimbal drift, vibration, or platform instability.",
+                "tags": ["Increasing pointing error", "Higher pointing loss", "Reduced RX power", "Tracking deviation"],
+                "active": False,
+                "timer": 0.0,
+                "duration": 10.0,
+                "level": 0.0,
+                "button_rect": pygame.Rect(0, 0, 0, 0),
+            },
+            "turb_burst": {
+                "name": "Turbulence Burst",
+                "severity": "WARNING",
+                "desc": "Triggers high-frequency atmospheric turbulence causing rapid scintillation and beam wander.",
+                "tags": ["Rapid power fluctuations", "BER spikes", "Tracking instability", "Potential link drop"],
+                "active": False,
+                "timer": 0.0,
+                "duration": 10.0,
+                "level": 0.0,
+                "button_rect": pygame.Rect(0, 0, 0, 0),
+            },
+            "sig_intr": {
+                "name": "Signal Interruption",
+                "severity": "CRITICAL",
+                "desc": "Periodic link blockage simulating cloud passage, bird strike, or transient obstruction.",
+                "tags": ["Link loss events", "CRITICAL alerts", "SNR collapse", "BER saturation"],
+                "active": False,
+                "timer": 0.0,
+                "duration": 8.0,
+                "level": 0.0,
+                "button_rect": pygame.Rect(0, 0, 0, 0),
+            },
+            "false_lock": {
+                "name": "False Lock Condition",
+                "severity": "CRITICAL",
+                "desc": "Forces a false carrier lock state where the receiver believes acquisition has occurred but BER or alignment confidence fails validation.",
+                "tags": ["Carrier false alarm", "BER mismatch", "Anomaly asserted", "Rejection loop"],
+                "active": False,
+                "timer": 0.0,
+                "duration": 10.0,
+                "level": 0.0,
+                "button_rect": pygame.Rect(0, 0, 0, 0),
+            },
+        }
+        self.demo_step = 0
+        self.demo_rects = []
+        self.rx_power_history = deque(maxlen=120)
+        for _ in range(120):
+            self.rx_power_history.append(-11.5)
+
+    def trigger(self, key, events_list=None):
+        if key in self.scenarios:
+            sc = self.scenarios[key]
+            sc["active"] = not sc["active"]
+            if sc["active"]:
+                sc["timer"] = sc["duration"]
+                sc["level"] = 1.0
+                if events_list is not None:
+                    ts = time.strftime("%H:%M:%S UTC", time.gmtime())
+                    sev = sc["severity"]
+                    subsys = "FAULT-INJ"
+                    msg = f"Stress scenario TRIGGERED: {sc['name']} active ({sc['duration']:.0f}s duration)"
+                    events_list.insert(0, (ts, sev, subsys, msg))
+            else:
+                sc["timer"] = 0.0
+                sc["level"] = 0.0
+                if events_list is not None:
+                    ts = time.strftime("%H:%M:%S UTC", time.gmtime())
+                    events_list.insert(0, (ts, "INFO", "FAULT-INJ", f"Stress scenario CLEARED: {sc['name']} back to nominal"))
+
+    def clear_all(self, events_list=None):
+        any_active = any(sc["active"] for sc in self.scenarios.values())
+        for sc in self.scenarios.values():
+            sc["active"] = False
+            sc["timer"] = 0.0
+            sc["level"] = 0.0
+        self.demo_step = 0
+        if any_active and events_list is not None:
+            ts = time.strftime("%H:%M:%S UTC", time.gmtime())
+            events_list.insert(0, (ts, "INFO", "FAULT-INJ", "All stress scenarios CLEARED. System recovered to nominal state."))
+
+    def run_demo_step(self, step_idx, events_list=None):
+        self.demo_step = step_idx
+        if step_idx == 1:
+            self.clear_all(events_list)
+        elif step_idx == 2:
+            self.clear_all(events_list)
+            self.trigger("atm_deg", events_list)
+        elif step_idx == 3:
+            self.clear_all(events_list)
+            self.trigger("beam_mis", events_list)
+            self.trigger("turb_burst", events_list)
+        elif step_idx == 4:
+            self.clear_all(events_list)
+            self.trigger("false_lock", events_list)
+        elif step_idx == 5:
+            self.clear_all(events_list)
+
+    def update(self, dt, opt: OpticalLinkModel, events_list=None):
+        for key, sc in self.scenarios.items():
+            if sc["active"]:
+                sc["timer"] -= dt
+                if sc["timer"] <= 0.0:
+                    sc["active"] = False
+                    sc["timer"] = 0.0
+                    sc["level"] = 0.0
+                    if events_list is not None:
+                        ts = time.strftime("%H:%M:%S UTC", time.gmtime())
+                        events_list.insert(0, (ts, "INFO", "FAULT-INJ", f"Stress scenario TIMEOUT: {sc['name']} auto-cleared"))
+
+    def record_rx_power(self, val):
+        self.rx_power_history.append(val)
+
+    def handle_click(self, pos, events_list=None):
+        for key, sc in self.scenarios.items():
+            if sc["button_rect"].collidepoint(pos):
+                self.trigger(key, events_list)
+                return True
+        for idx, r in enumerate(self.demo_rects):
+            if r.collidepoint(pos):
+                self.run_demo_step(idx + 1, events_list)
+                return True
+        return False
+
+
+def render_stress_test_page(surf, rect, stress_mgr: StressTestManager, opt: OpticalLinkModel, hist_pt: dict):
+    """
+    Renders Stress Test Fault Injection & Validation console matching Screenshot 1:
+    - Top header: STRESS SCENARIO CONTROL
+    - Left column: 5 Stress Scenarios (Atmospheric Degradation, Beam Misalignment, Turbulence Burst, Signal Interruption, False Lock)
+    - Right column: SYSTEM RESPONSE metrics, RX POWER — LIVE oscilloscope, DEMO SEQUENCE guide
     """
     x0, y0, w, h = rect.x, rect.y, rect.w, rect.h
 
-    # 1. Top Banner: LOCK VALID Notification
+    hdr_h = 36
+    hdr_rect = pygame.Rect(x0, y0, w, hdr_h)
+    T.card(surf, hdr_rect, fill=C.PANEL, border=C.BORDER)
+    T.section_title(surf, x0 + 14, y0 + 10, "STRESS SCENARIO CONTROL", C.CYAN_ELEC)
+    tw_hdr, _ = T.font(14, bold=True).size("STRESS SCENARIO CONTROL")
+    T.text(surf, (x0 + 24 + tw_hdr + 24, y0 + 11), "DYNAMIC FAULT INJECTION · REAL-TIME SYSTEM VERIFICATION", 11, C.TEXT_FAINT)
+
+    main_y = y0 + hdr_h + 10
+    main_h = h - hdr_h - 10
+    left_w = int(w * 0.71)
+    right_x = x0 + left_w + 12
+    right_w = w - left_w - 12
+
+    # Left Column: 5 Scenario Cards
+    keys = ["atm_deg", "beam_mis", "turb_burst", "sig_intr", "false_lock"]
+    card_gap = 8
+    card_h = (main_h - 4 * card_gap) // 5
+
+    icons = {
+        "atm_deg": "≈",
+        "beam_mis": "⨁",
+        "turb_burst": "≋",
+        "sig_intr": "⊘",
+        "false_lock": "⚠",
+    }
+
+    mouse_pos = pygame.mouse.get_pos()
+
+    for i, key in enumerate(keys):
+        sc = stress_mgr.scenarios[key]
+        cy = main_y + i * (card_h + card_gap)
+        c_rect = pygame.Rect(x0, cy, left_w, card_h)
+
+        is_act = sc["active"]
+        border_col = C.RED if (is_act and sc["severity"] == "CRITICAL") else (C.AMBER if is_act else C.BORDER)
+        bg_col = (26, 12, 16) if (is_act and sc["severity"] == "CRITICAL") else ((28, 22, 10) if is_act else C.PANEL)
+
+        T.card(surf, c_rect, fill=bg_col, border=border_col)
+
+        if is_act:
+            accent_col = C.RED if sc["severity"] == "CRITICAL" else C.AMBER
+            pygame.draw.rect(surf, accent_col, (x0, cy, 4, card_h), border_top_left_radius=4, border_bottom_left_radius=4)
+
+        top_y = cy + 10
+        icon_str = icons.get(key, "•")
+        icon_col = C.RED if sc["severity"] == "CRITICAL" else C.AMBER
+        T.text(surf, (x0 + 16, top_y), icon_str, 15, icon_col, bold=True)
+
+        T.text(surf, (x0 + 38, top_y), sc["name"], 13, C.TEXT, bold=True)
+        tw_name, _ = T.font(13, bold=True).size(sc["name"])
+
+        badge_w, badge_h = 76, 20
+        badge_x = x0 + 38 + tw_name + 12
+        badge_bg = (48, 12, 12) if sc["severity"] == "CRITICAL" else (48, 32, 8)
+        badge_border = C.RED if sc["severity"] == "CRITICAL" else C.AMBER
+        pygame.draw.rect(surf, badge_bg, (badge_x, top_y, badge_w, badge_h), border_radius=2)
+        pygame.draw.rect(surf, badge_border, (badge_x, top_y, badge_w, badge_h), 1, border_radius=2)
+        T.text(surf, (badge_x + badge_w // 2, top_y + 3), sc["severity"], 11, badge_border, bold=True, anchor="tc")
+
+        # Right Trigger Button
+        btn_w, btn_h = 100, 32
+        btn_x = x0 + left_w - btn_w - 16
+        btn_y = top_y - 2
+        btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+        sc["button_rect"] = btn_rect
+
+        if is_act:
+            btn_bg = (70, 20, 20) if sc["severity"] == "CRITICAL" else (70, 48, 12)
+            btn_border = C.RED if sc["severity"] == "CRITICAL" else C.AMBER
+            btn_lbl = f"ACTIVE {sc['timer']:.0f}s"
+            btn_col = C.TEXT
+        else:
+            is_btn_hov = btn_rect.collidepoint(mouse_pos)
+            btn_bg = (14, 30, 56) if is_btn_hov else (8, 18, 34)
+            btn_border = C.CYAN_ELEC if is_btn_hov else (0, 140, 210)
+            btn_lbl = "TRIGGER"
+            btn_col = C.CYAN_ELEC
+
+        pygame.draw.rect(surf, btn_bg, btn_rect, border_radius=3)
+        pygame.draw.rect(surf, btn_border, btn_rect, 1, border_radius=3)
+        T.text(surf, (btn_rect.centerx, btn_rect.centery), btn_lbl, 11, btn_col, bold=True, anchor="cc")
+
+        # Middle Description
+        desc_y = top_y + 28
+        max_desc_w = left_w - btn_w - 60
+        T.multiline_text(surf, (x0 + 16, desc_y), sc["desc"], max_desc_w, size=11, color=C.TEXT_DIM, line_spacing=3)
+
+        # Bottom row: Tags pills
+        tags_y = cy + card_h - 26
+        tag_x = x0 + 16
+        for tag in sc["tags"]:
+            tw, th = T.font(11).size(tag)
+            tag_rect = pygame.Rect(tag_x, tags_y, tw + 16, 20)
+            if tag_rect.right < btn_x + btn_w:
+                pygame.draw.rect(surf, (12, 18, 30), tag_rect, border_radius=3)
+                pygame.draw.rect(surf, (22, 34, 54), tag_rect, 1, border_radius=3)
+                T.text(surf, (tag_x + 8, tags_y + 3), tag, 11, C.TEXT_FAINT)
+                tag_x += tw + 22
+
+    # Right Column
+    # Card 1: SYSTEM RESPONSE
+    resp_h = 180
+    resp_rect = pygame.Rect(right_x, main_y, right_w, resp_h)
+    T.card(surf, resp_rect, fill=C.PANEL, border=C.BORDER)
+    T.section_title(surf, right_x + 14, main_y + 10, "SYSTEM RESPONSE", C.CYAN_ELEC)
+
+    st = hist_pt.get("state", "ESTABLISHED")
+    st_col = C.GREEN if st == "ESTABLISHED" else (C.AMBER if st == "DEGRADED" else C.RED)
+
+    resp_metrics = [
+        ("Link State", st, st_col),
+        ("RX Power", f"{hist_pt.get('rx_power', -11.5):.1f} dBm", C.CYAN_ELEC),
+        ("SNR", f"{hist_pt.get('snr', 73.5):.1f} dB", C.CYAN_ELEC),
+        ("BER", hist_pt.get("ber_str", "1.00e-15"), C.GREEN if "15" in hist_pt.get("ber_str", "") or "12" in hist_pt.get("ber_str", "") else C.AMBER),
+        ("Link Margin", f"{hist_pt.get('link_margin', 38.5):.1f} dB", C.CYAN_ELEC),
+    ]
+
+    ry = main_y + 36
+    r_step = (resp_h - 44) // len(resp_metrics)
+    for lbl, val, col in resp_metrics:
+        T.text(surf, (right_x + 16, ry), lbl, 11, C.TEXT_FAINT)
+        T.text(surf, (right_x + right_w - 16, ry), val, 12, col, bold=True, anchor="tr")
+        ry += r_step
+
+    # Card 2: RX POWER — LIVE (Oscilloscope Strip Chart)
+    osc_y = main_y + resp_h + 10
+    osc_h = 160
+    osc_rect = pygame.Rect(right_x, osc_y, right_w, osc_h)
+    T.card(surf, osc_rect, fill=C.PANEL, border=C.BORDER)
+    T.section_title(surf, right_x + 14, osc_y + 10, "RX POWER — LIVE", C.CYAN_ELEC)
+
+    plot_r = pygame.Rect(right_x + 14, osc_y + 36, right_w - 28, osc_h - 48)
+    pygame.draw.rect(surf, (6, 11, 22), plot_r, border_radius=2)
+    pygame.draw.rect(surf, (20, 32, 54), plot_r, 1, border_radius=2)
+
+    grid_levels = [(-10, C.BORDER), (-30, (14, 24, 40)), (-50, (60, 16, 20))]
+    for g_val, g_col in grid_levels:
+        gy = plot_r.bottom - int(plot_r.h * (g_val + 70.0) / 70.0)
+        pygame.draw.line(surf, g_col, (plot_r.x, gy), (plot_r.right, gy), 1)
+        T.text(surf, (plot_r.x + 4, gy - 12), f"{g_val}dBm", 11, C.TEXT_FAINT)
+
+    sens_y = plot_r.bottom - int(plot_r.h * (-50.0 + 70.0) / 70.0)
+    pygame.draw.line(surf, C.RED, (plot_r.x, sens_y), (plot_r.right, sens_y), 1)
+    T.text(surf, (plot_r.right - 4, sens_y - 12), "RX SENSITIVITY (-50dBm)", 11, C.RED, anchor="tr")
+
+    hist = list(stress_mgr.rx_power_history)
+    if len(hist) >= 2:
+        pts = []
+        n = len(hist)
+        for idx, p_val in enumerate(hist):
+            px = plot_r.x + int(plot_r.w * idx / (n - 1))
+            norm_val = max(0.0, min(1.0, (p_val + 70.0) / 70.0))
+            py = plot_r.bottom - int(plot_r.h * norm_val)
+            pts.append((px, py))
+        wave_col = C.CYAN_ELEC if hist[-1] > -30.0 else (C.AMBER if hist[-1] > -50.0 else C.RED)
+        pygame.draw.lines(surf, wave_col, False, pts, 2)
+        pygame.draw.circle(surf, wave_col, pts[-1], 3)
+
+    # Card 3: DEMO SEQUENCE
+    demo_y = osc_y + osc_h + 10
+    demo_h = main_h - (resp_h + 10 + osc_h + 10)
+    demo_rect = pygame.Rect(right_x, demo_y, right_w, demo_h)
+    T.card(surf, demo_rect, fill=C.PANEL, border=C.BORDER)
+    T.section_title(surf, right_x + 14, demo_y + 10, "DEMO SEQUENCE", C.CYAN_ELEC)
+
+    demo_steps = [
+        ("1. Start with nominal state — show judge ESTABLISHED link", C.GREEN),
+        ("2. Trigger Atmospheric Degradation — watch SNR fall", C.AMBER),
+        ("3. Observe DEGRADED → alert sequence", C.AMBER),
+        ("4. Trigger False Lock — demonstrate detection", C.RED),
+        ("5. Clear stress — show system recovery", C.CYAN_ELEC),
+    ]
+
+    stress_mgr.demo_rects = []
+    dy = demo_y + 36
+    step_spacing = max(24, (demo_h - 46) // len(demo_steps))
+    for s_idx, (s_txt, s_col) in enumerate(demo_steps):
+        s_step_r = pygame.Rect(right_x + 10, dy, right_w - 20, max(22, step_spacing - 4))
+        stress_mgr.demo_rects.append(s_step_r)
+        is_step_hov = s_step_r.collidepoint(mouse_pos)
+        if is_step_hov:
+            pygame.draw.rect(surf, (16, 26, 44), s_step_r, border_radius=2)
+        T.text(surf, (right_x + 14, dy + 2), s_txt, 11, s_col, bold=True)
+        dy += step_spacing
+
+
+# ---------------------------------------------------------------------------
+# PAGE 5: FALSE LOCK (Figma Image 5 / Screenshot 3)
+# ---------------------------------------------------------------------------
+def render_false_lock_page(surf, rect, sim, perf, opt: OpticalLinkModel, hist_pt: dict):
+    """
+    Renders False Lock validation page matching Screenshot 3:
+    - Top Banner: LOCK VALID (or FALSE LOCK ALERT) with checkmark/cross & timestamp
+    - Left Column:
+      * LOCK CONFIDENCE METRICS (3 Arc Gauges: 94%, 95%, 100%)
+      * DETECTION ALGORITHM list (5 detection algorithm sub-cards)
+    - Right Column:
+      * LOCK VALIDATION CRITERIA (5 PASS/FAIL verification rows with thresholds)
+      * FALSE LOCK SIGNATURES (3 signature anomaly sub-cards)
+    """
+    x0, y0, w, h = rect.x, rect.y, rect.w, rect.h
+    is_false_lock = (hist_pt.get("state") == "FALSE LOCK")
+
+    # 1. Top Banner
     ban_h = 62
-    T.card(surf, (x0, y0, w, ban_h), fill=(4, 24, 22), border=(0, 180, 110), radius=4)
+    ban_bg = (34, 10, 14) if is_false_lock else (4, 24, 22)
+    ban_border = C.RED if is_false_lock else (0, 180, 110)
+    T.card(surf, (x0, y0, w, ban_h), fill=ban_bg, border=ban_border, radius=4)
 
-    # Checkmark icon
-    pygame.draw.circle(surf, C.GREEN, (x0 + 34, y0 + ban_h // 2), 16, 2)
-    pygame.draw.line(surf, C.GREEN, (x0 + 27, y0 + ban_h // 2), (x0 + 32, y0 + ban_h // 2 + 6), 2)
-    pygame.draw.line(surf, C.GREEN, (x0 + 32, y0 + ban_h // 2 + 6), (x0 + 42, y0 + ban_h // 2 - 5), 2)
-
-    # Title & Subtitle
-    T.text(surf, (x0 + 64, y0 + 12), "LOCK VALID", 15, C.GREEN, bold=True)
-    sub = "All lock validation criteria satisfied. Carrier acquisition confirmed with acceptable BER, SNR, and alignment confidence."
-    T.text(surf, (x0 + 64, y0 + 34), sub, 11, C.TEXT_DIM)
+    if is_false_lock:
+        pygame.draw.circle(surf, C.RED, (x0 + 34, y0 + ban_h // 2), 16, 2)
+        T.text(surf, (x0 + 34, y0 + ban_h // 2), "!", 16, C.RED, bold=True, anchor="cc")
+        T.text(surf, (x0 + 64, y0 + 12), "FALSE LOCK DETECTED", 15, C.RED, bold=True)
+        sub = "Carrier false acquisition detected. Uncorrected bit errors exceed nominal threshold. Initiating auto-rejection."
+        T.text(surf, (x0 + 64, y0 + 34), sub, 11, C.TEXT_DIM)
+    else:
+        pygame.draw.circle(surf, C.GREEN, (x0 + 34, y0 + ban_h // 2), 16, 2)
+        pygame.draw.line(surf, C.GREEN, (x0 + 27, y0 + ban_h // 2), (x0 + 32, y0 + ban_h // 2 + 6), 2)
+        pygame.draw.line(surf, C.GREEN, (x0 + 32, y0 + ban_h // 2 + 6), (x0 + 42, y0 + ban_h // 2 - 5), 2)
+        T.text(surf, (x0 + 64, y0 + 12), "LOCK VALID", 15, C.GREEN, bold=True)
+        sub = "All lock validation criteria satisfied. Carrier acquisition confirmed with acceptable BER, SNR, and alignment confidence."
+        T.text(surf, (x0 + 64, y0 + 34), sub, 11, C.TEXT_DIM)
 
     # UTC Timestamp right
     ts_str = time.strftime("%Y-%m-%dT%H:%M:%S UTC", time.gmtime())
     T.text(surf, (x0 + w - 16, y0 + 24), ts_str, 11, C.TEXT_FAINT, anchor="tr")
 
-    # 2. Main Content: Left Column (44% width) & Right Column (56% width)
-    main_y = y0 + ban_h + 14
-    main_h = h - ban_h - 18
-    left_w = int(w * 0.44)
+    # 2. Main Content: Left Column (46% width) & Right Column (54% width)
+    main_y = y0 + ban_h + 12
+    main_h = h - ban_h - 16
+    left_w = int(w * 0.46)
     right_x = x0 + left_w + 14
     right_w = w - left_w - 14
 
     # ── LEFT CARD 1: LOCK CONFIDENCE METRICS ───────────────────────
-    card1_h = max(260, int(main_h * 0.52))
+    card1_h = max(230, int(main_h * 0.46))
     T.card(surf, (x0, main_y, left_w, card1_h), fill=C.PANEL, border=C.BORDER)
     T.section_title(surf, x0 + 16, main_y + 12, "LOCK CONFIDENCE METRICS", C.CYAN_ELEC)
 
-    # 3 Circular Arc Gauges
     gauge_y = main_y + card1_h // 2 - 12
     gauge_gap = left_w // 3
     g_cx1 = x0 + gauge_gap // 2
     g_cx2 = x0 + gauge_gap + gauge_gap // 2
     g_cx3 = x0 + gauge_gap * 2 + gauge_gap // 2
 
-    # Draw Gauges
-    T.draw_circular_arc_gauge(surf, g_cx1, gauge_y, 36, 94.0, C.CYAN_ELEC, "OVERALL LOCK", stroke=5)
-    T.draw_circular_arc_gauge(surf, g_cx2, gauge_y, 36, 95.0, C.CYAN_ELEC, "ALIGNMENT", stroke=5)
-    T.draw_circular_arc_gauge(surf, g_cx3, gauge_y, 36, 100.0, C.CYAN_ELEC, "CONSISTENCY", stroke=5)
+    val_lock = 42.0 if is_false_lock else 94.0
+    val_align = 48.0 if is_false_lock else 95.0
+    val_cons = 35.0 if is_false_lock else 100.0
+    col_lock = C.RED if is_false_lock else C.CYAN_ELEC
 
-    # Explanatory text below gauges
+    T.draw_circular_arc_gauge(surf, g_cx1, gauge_y, 36, val_lock, col_lock, "OVERALL LOCK", stroke=5)
+    T.draw_circular_arc_gauge(surf, g_cx2, gauge_y, 36, val_align, col_lock, "ALIGNMENT", stroke=5)
+    T.draw_circular_arc_gauge(surf, g_cx3, gauge_y, 36, val_cons, col_lock, "CONSISTENCY", stroke=5)
+
     exp_txt = "Lock validated against BER, SNR, alignment deviation, and tracking stability thresholds"
-    T.text(surf, (x0 + left_w // 2, main_y + card1_h - 22), exp_txt, 10, C.TEXT_FAINT, anchor="tc")
+    T.text(surf, (x0 + left_w // 2, main_y + card1_h - 22), exp_txt, 11, C.TEXT_FAINT, anchor="tc")
 
-    # Card 2 (Bottom Left): DETECTION ALGORITHM
+    # Card 2 (Bottom Left): DETECTION ALGORITHM (5 Cards matching Screenshot 3)
     card2_y = main_y + card1_h + 12
     card2_h = main_h - card1_h - 12
     T.card(surf, (x0, card2_y, left_w, card2_h), fill=C.PANEL, border=C.BORDER)
-    T.section_title(surf, x0 + 16, card2_y + 12, "DETECTION ALGORITHMS & THRESHOLDS", C.CYAN_ELEC)
+    T.section_title(surf, x0 + 16, card2_y + 12, "DETECTION ALGORITHM", C.CYAN_ELEC)
 
     algos = [
-        ("BER Threshold Gate", "Nominal lock gate: BER < 1.00e-06 with continuous parity checks", C.GREEN),
-        ("Spatial Gating Filter", "Angular FOV boundary: error <= 30 µrad radius gate", C.GREEN),
-        ("Temporal Correlation Engine", "Circularity > 0.85, temporal correlation index > 0.60", C.GREEN),
+        ("BER Threshold Monitor", "Continuous BER measurement against acquisition validity window"),
+        ("Alignment Confidence Engine", "Pointing error vs. beam divergence ratio analysis"),
+        ("Signal Consistency Checker", "Power stability and carrier frequency validation"),
+        ("Multi-parameter Correlation", "Cross-correlation of BER, SNR, pointing, and tracking metrics"),
+        ("Anomaly State Machine", "State transition monitoring for false-lock pattern recognition"),
     ]
-    ay = card2_y + 38
-    for name, desc, col in algos:
-        pygame.draw.circle(surf, col, (x0 + 20, ay + 6), 4)
-        T.text(surf, (x0 + 32, ay), name, 11, col, bold=True)
-        T.text(surf, (x0 + 32, ay + 17), desc, 10, C.TEXT_FAINT)
-        ay += 44
+
+    ay = card2_y + 36
+    sub_card_h = (card2_h - 48) // len(algos)
+    for name, desc in algos:
+        sc_r = pygame.Rect(x0 + 14, ay, left_w - 28, max(36, sub_card_h - 6))
+        pygame.draw.rect(surf, (10, 18, 32), sc_r, border_radius=3)
+        pygame.draw.rect(surf, (20, 32, 52), sc_r, 1, border_radius=3)
+
+        pygame.draw.circle(surf, C.CYAN_ELEC, (sc_r.x + 14, sc_r.y + 14), 3)
+        T.text(surf, (sc_r.x + 26, sc_r.y + 6), name, 11, C.TEXT, bold=True)
+        T.text(surf, (sc_r.x + 26, sc_r.y + 22), desc, 11, C.TEXT_FAINT)
+        ay += sub_card_h
 
     # ── RIGHT CARD 1: LOCK VALIDATION CRITERIA ─────────────────────
     rcard1_h = card1_h
@@ -905,96 +1316,155 @@ def render_false_lock_page(surf, rect, sim, perf, opt: OpticalLinkModel, hist_pt
     T.section_title(surf, right_x + 16, main_y + 12, "LOCK VALIDATION CRITERIA", C.CYAN_ELEC)
 
     criteria = [
-        ("PASS", "BER within valid-lock threshold", "High BER with apparent carrier lock indicates false acquisition", "1.00e-15", "thr: < 1e-6"),
-        ("PASS", "SNR above minimum", "Low SNR with claimed lock suggests carrier false alarm", f"{hist_pt.get('snr', 73.4):.1f} dB", "thr: ≥ 8 dB"),
-        ("PASS", "Alignment confidence sufficient", "Excessive pointing error invalidates lock confidence", f"{hist_pt.get('pointing_error_urad', 1.68):.2f} µrad", "thr: < 30 µrad"),
-        ("PASS", "Tracking stability acceptable", "Unstable tracking with claimed lock is a false-lock indicator", f"{hist_pt.get('stability', 95.6):.1f} %", "thr: > 60 %"),
-        ("PASS", "False-lock state not asserted", "Explicit false-lock detection from anomaly correlation engine", "CLEAR", "thr: CLEAR"),
+        ("FAIL" if is_false_lock else "PASS", "Alignment confidence sufficient", "Excessive pointing error invalidates lock confidence", f"{hist_pt.get('pointing_error_urad', 1.69):.2f} µrad", "thr: < 30 µrad"),
+        ("FAIL" if is_false_lock else "PASS", "Tracking stability acceptable", "Unstable tracking with claimed lock is a false-lock indicator", f"{hist_pt.get('stability', 95.7):.1f} %", "thr: > 60 %"),
+        ("FAIL" if is_false_lock else "PASS", "False-lock state not asserted", "Explicit false-lock detection from anomaly correlation engine", "ASSERTED" if is_false_lock else "CLEAR", "thr: CLEAR"),
+        ("FAIL" if is_false_lock else "PASS", "BER within valid-lock threshold", "High BER with apparent carrier lock indicates false acquisition", hist_pt.get("ber_str", "1.00e-15"), "thr: < 1e-6"),
+        ("PASS", "SNR above minimum", "Low SNR with claimed lock suggests carrier false alarm", f"{hist_pt.get('snr', 73.6):.1f} dB", "thr: ≥ 8 dB"),
     ]
 
     row_y = main_y + 36
-    row_step = max(42, (rcard1_h - 48) // len(criteria))
+    row_step = max(38, (rcard1_h - 46) // len(criteria))
     for status, c_title, c_desc, c_val, c_thr in criteria:
-        pygame.draw.rect(surf, (0, 48, 28), (right_x + 16, row_y + 2, 44, 20), border_radius=2)
-        T.text(surf, (right_x + 38, row_y + 4), status, 10, C.GREEN, bold=True, anchor="tc")
+        stat_col = C.RED if status == "FAIL" else C.GREEN
+        stat_bg = (48, 12, 12) if status == "FAIL" else (0, 48, 28)
 
-        T.text(surf, (right_x + 68, row_y), c_title, 11, C.TEXT, bold=True)
-        T.text(surf, (right_x + 68, row_y + 17), c_desc, 10, C.TEXT_FAINT)
+        pygame.draw.rect(surf, stat_bg, (right_x + 14, row_y + 2, 48, 22), border_radius=2)
+        T.text(surf, (right_x + 38, row_y + 5), status, 11, stat_col, bold=True, anchor="tc")
 
-        T.text(surf, (right_x + right_w - 16, row_y), c_val, 11, C.GREEN, bold=True, anchor="tr")
-        T.text(surf, (right_x + right_w - 16, row_y + 17), c_thr, 10, C.TEXT_FAINT, anchor="tr")
+        T.text(surf, (right_x + 70, row_y), c_title, 11, C.TEXT, bold=True)
+        T.text(surf, (right_x + 70, row_y + 18), c_desc, 11, C.TEXT_FAINT)
 
-        pygame.draw.line(surf, (14, 22, 38), (right_x + 16, row_y + row_step - 2), (right_x + right_w - 16, row_y + row_step - 2), 1)
+        T.text(surf, (right_x + right_w - 16, row_y), c_val, 11, stat_col, bold=True, anchor="tr")
+        T.text(surf, (right_x + right_w - 16, row_y + 18), c_thr, 11, C.TEXT_FAINT, anchor="tr")
+
+        pygame.draw.line(surf, (14, 22, 38), (right_x + 14, row_y + row_step - 2), (right_x + right_w - 16, row_y + row_step - 2), 1)
         row_y += row_step
 
-    # Card 4 (Bottom Right): FALSE LOCK SIGNATURES
+    # Card 4 (Bottom Right): FALSE LOCK SIGNATURES (3 Cards matching Screenshot 3)
     rcard2_y = main_y + rcard1_h + 12
     rcard2_h = main_h - rcard1_h - 12
     T.card(surf, (right_x, rcard2_y, right_w, rcard2_h), fill=C.PANEL, border=C.BORDER)
-    T.section_title(surf, right_x + 16, rcard2_y + 12, "FALSE LOCK SIGNATURES & ANOMALIES", C.CYAN_ELEC)
+    T.section_title(surf, right_x + 16, rcard2_y + 12, "FALSE LOCK SIGNATURES", C.CYAN_ELEC)
 
     signatures = [
-        ("TYPE I", "BER Mismatch Anomaly", "High optical SNR detected but bit stream produces uncorrectable frame errors", C.AMBER),
-        ("TYPE II", "Specular Reflector Clutter", "Strong optical return without authentic carrier phase/polarization correlation", C.RED),
-        ("TYPE III", "Unstable Centroid Wander", "High-frequency spot vibration exceeding gimbal bandwidth limits", C.PURPLE),
+        ("Type I: BER Mismatch", "BER exceeds 1e-6 threshold while carrier lock indicator is asserted. Indicates receiver ADC threshold misalignment or noise floor shift."),
+        ("Type II: Alignment Confidence Failure", "Pointing error exceeds valid-lock envelope (30 µrad) while receiver claims tracking. Often caused by platform vibration or gimbal backlash."),
+        ("Type III: Carrier Noise Lock", "High SNR-apparent acquisition with degraded BER indicates receiver locked to noise floor artifact rather than signal carrier."),
     ]
-    sy = rcard2_y + 38
-    for tag, title, desc, tag_col in signatures:
-        pygame.draw.rect(surf, tuple(c // 6 for c in tag_col), (right_x + 16, sy, 58, 20), border_radius=2)
-        pygame.draw.rect(surf, tag_col, (right_x + 16, sy, 58, 20), 1, border_radius=2)
-        T.text(surf, (right_x + 45, sy + 3), tag, 9, tag_col, bold=True, anchor="tc")
-        T.text(surf, (right_x + 82, sy), title, 11, C.TEXT, bold=True)
-        T.text(surf, (right_x + 82, sy + 17), desc, 10, C.TEXT_FAINT)
-        sy += 44
+
+    sy = rcard2_y + 36
+    sig_card_h = (rcard2_h - 48) // len(signatures)
+    for title, desc in signatures:
+        s_r = pygame.Rect(right_x + 14, sy, right_w - 28, max(46, sig_card_h - 8))
+        pygame.draw.rect(surf, (10, 18, 32), s_r, border_radius=3)
+        pygame.draw.rect(surf, (20, 32, 52), s_r, 1, border_radius=3)
+
+        T.text(surf, (s_r.x + 16, s_r.y + 8), title, 12, C.TEXT, bold=True)
+        T.multiline_text(surf, (s_r.x + 16, s_r.y + 26), desc, s_r.w - 32, size=11, color=C.TEXT_DIM, line_spacing=2)
+        sy += sig_card_h
 
 
 # ---------------------------------------------------------------------------
-# PAGE 5: EVENT LOG
+# PAGE 6: EVENT LOG (Filterable Log & Diagnostics matching Screenshot 2)
 # ---------------------------------------------------------------------------
 def render_event_log_page(surf, rect, sim, perf, opt: OpticalLinkModel, events_list):
     """
-    Renders filterable Event Log and Diagnostics timeline.
+    Renders filterable Event Log and Diagnostics timeline matching Screenshot 2:
+    - 4 KPI cards at top (TOTAL EVENTS, CRITICAL, WARNING, INFO)
+    - Severity Legend banner (CRITICAL, WARNING, INFO)
+    - Filterable event table with empty state or active event rows
     """
     x0, y0, w, h = rect.x, rect.y, rect.w, rect.h
 
-    T.card(surf, (x0, y0, w, h), fill=C.PANEL, border=C.BORDER)
-    T.section_title(surf, x0 + 16, y0 + 14, "SYSTEM EVENT & DIAGNOSTIC LOG", C.CYAN_ELEC)
+    # 1. 4 KPI Cards at top
+    kpi_h = 68
+    kpi_gap = 12
+    kpi_w = (w - 3 * kpi_gap) // 4
 
-    # Subtitle (dynamically placed after section title)
-    tw_title, _ = T.font(13, bold=True).size("SYSTEM EVENT & DIAGNOSTIC LOG")
-    T.text(surf, (x0 + 16 + tw_title + 16, y0 + 14), "AUTONOMOUS PAT PIPELINE LOG · UTC TIMESTAMPED", 10, C.TEXT_FAINT)
+    tot_events = len(events_list)
+    crit_events = sum(1 for e in events_list if e[1] == "CRITICAL")
+    warn_events = sum(1 for e in events_list if e[1] == "WARNING")
+    info_events = sum(1 for e in events_list if e[1] == "INFO")
+
+    kpis = [
+        ("TOTAL EVENTS", str(tot_events), C.CYAN_ELEC),
+        ("CRITICAL", str(crit_events), C.RED),
+        ("WARNING", str(warn_events), C.AMBER),
+        ("INFO", str(info_events), C.CYAN_ELEC),
+    ]
+
+    for i, (lbl, val, col) in enumerate(kpis):
+        kr = pygame.Rect(x0 + i * (kpi_w + kpi_gap), y0, kpi_w, kpi_h)
+        T.card(surf, kr, fill=C.PANEL, border=C.BORDER)
+        T.text(surf, (kr.x + 14, kr.y + 10), lbl, 11, C.TEXT_FAINT, bold=True)
+        T.text(surf, (kr.x + 14, kr.y + 28), val, 24, col, bold=True)
+
+    # 2. Status Legend Banner
+    leg_y = y0 + kpi_h + 10
+    leg_h = 34
+    leg_rect = pygame.Rect(x0, leg_y, w, leg_h)
+    T.card(surf, leg_rect, fill=C.PANEL, border=C.BORDER)
+
+    leg_items = [
+        (C.RED, "CRITICAL", "Immediate intervention required"),
+        (C.AMBER, "WARNING", "Potential degradation — monitor"),
+        (C.GREEN, "INFO", "Nominal operational information"),
+    ]
+    lx = x0 + 20
+    for dot_col, title, desc in leg_items:
+        pygame.draw.circle(surf, dot_col, (lx, leg_y + leg_h // 2), 4)
+        lx += 12
+        tw_t, _ = T.text(surf, (lx, leg_y + leg_h // 2 - 7), title, 11, dot_col, bold=True)
+        lx += tw_t + 6
+        tw_d, _ = T.text(surf, (lx, leg_y + leg_h // 2 - 7), f"— {desc}", 11, C.TEXT_FAINT)
+        lx += tw_d + 32
+
+    # 3. Main Event Log Table Card
+    tbl_y = leg_y + leg_h + 10
+    tbl_h = h - (kpi_h + 10 + leg_h + 10)
+    tbl_rect = pygame.Rect(x0, tbl_y, w, tbl_h)
+    T.card(surf, tbl_rect, fill=C.PANEL, border=C.BORDER)
 
     # Table Header
-    th_y = y0 + 44
-    pygame.draw.rect(surf, (14, 22, 40), (x0 + 16, th_y, w - 32, 28), border_radius=2)
-    T.text(surf, (x0 + 26, th_y + 6), "TIME (UTC)", 11, C.TEXT_FAINT, bold=True)
-    T.text(surf, (x0 + 150, th_y + 6), "SEVERITY", 11, C.TEXT_FAINT, bold=True)
-    T.text(surf, (x0 + 260, th_y + 6), "SUBSYSTEM", 11, C.TEXT_FAINT, bold=True)
-    T.text(surf, (x0 + 410, th_y + 6), "EVENT DETAILS & THRESHOLD CROSSING", 11, C.TEXT_FAINT, bold=True)
+    th_y = tbl_y + 10
+    pygame.draw.rect(surf, (14, 22, 40), (x0 + 12, th_y, w - 24, 30), border_radius=2)
+    T.text(surf, (x0 + 24, th_y + 7), "LEVEL", 11, C.TEXT_FAINT, bold=True)
+    T.text(surf, (x0 + 140, th_y + 7), "TIMESTAMP", 11, C.TEXT_FAINT, bold=True)
+    T.text(surf, (x0 + 280, th_y + 7), "SUBSYSTEM", 11, C.TEXT_FAINT, bold=True)
+    T.text(surf, (x0 + 420, th_y + 7), "EVENT DETAILS & THRESHOLD CROSSING", 11, C.TEXT_FAINT, bold=True)
 
-    # Rows
-    row_y = th_y + 36
-    for ev in events_list:
-        if row_y > y0 + h - 26:
-            break
-        ts, level, subsys, msg = ev
+    if tot_events == 0:
+        center_y = tbl_y + tbl_h // 2
+        center_x = x0 + w // 2
+        pygame.draw.circle(surf, (20, 36, 54), (center_x, center_y - 20), 22, 2)
+        pygame.draw.line(surf, (0, 180, 110), (center_x - 8, center_y - 20), (center_x - 2, center_y - 14), 2)
+        pygame.draw.line(surf, (0, 180, 110), (center_x - 2, center_y - 14), (center_x + 8, center_y - 26), 2)
+        T.text(surf, (center_x, center_y + 14), "NO ACTIVE EVENTS", 13, C.TEXT_DIM, bold=True, anchor="cc")
+        T.text(surf, (center_x, center_y + 34), "All systems nominal", 11, C.TEXT_FAINT, anchor="cc")
+    else:
+        row_y = th_y + 38
+        for ev in events_list:
+            if row_y > tbl_y + tbl_h - 26:
+                break
+            ts, level, subsys, msg = ev
 
-        col_map = {
-            "CRITICAL": (C.RED, (48, 8, 8)),
-            "WARNING": (C.AMBER, (48, 32, 0)),
-            "INFO": (C.GREEN, (0, 36, 18)),
-        }
-        text_col, bg_col = col_map.get(level, (C.TEXT_DIM, (16, 24, 38)))
+            col_map = {
+                "CRITICAL": (C.RED, (48, 8, 8)),
+                "WARNING": (C.AMBER, (48, 32, 0)),
+                "INFO": (C.GREEN, (0, 36, 18)),
+            }
+            text_col, bg_col = col_map.get(level, (C.TEXT_DIM, (16, 24, 38)))
 
-        T.text(surf, (x0 + 26, row_y + 4), ts, 11, C.TEXT_FAINT)
+            pygame.draw.rect(surf, bg_col, (x0 + 24, row_y, 82, 22), border_radius=2)
+            pygame.draw.rect(surf, text_col, (x0 + 24, row_y, 82, 22), 1, border_radius=2)
+            T.text(surf, (x0 + 65, row_y + 3), level, 10, text_col, bold=True, anchor="tc")
 
-        # Severity Badge
-        pygame.draw.rect(surf, bg_col, (x0 + 148, row_y, 74, 22), border_radius=2)
-        pygame.draw.rect(surf, text_col, (x0 + 148, row_y, 74, 22), 1, border_radius=2)
-        T.text(surf, (x0 + 185, row_y + 3), level, 10, text_col, bold=True, anchor="tc")
+            T.text(surf, (x0 + 140, row_y + 4), ts, 11, C.TEXT_FAINT)
+            T.text(surf, (x0 + 280, row_y + 4), subsys, 11, C.TEXT_DIM, bold=True)
 
-        T.text(surf, (x0 + 260, row_y + 4), subsys, 11, C.TEXT_DIM, bold=True)
-        T.text(surf, (x0 + 410, row_y + 4), msg, 11, C.TEXT)
+            max_msg_w = w - 440
+            T.multiline_text(surf, (x0 + 420, row_y + 4), msg, max_msg_w, size=11, color=C.TEXT, line_spacing=2)
 
-        pygame.draw.line(surf, (14, 20, 34), (x0 + 16, row_y + 26), (x0 + w - 16, row_y + 26), 1)
-        row_y += 32
+            pygame.draw.line(surf, (14, 20, 34), (x0 + 12, row_y + 26), (x0 + w - 12, row_y + 26), 1)
+            row_y += 32

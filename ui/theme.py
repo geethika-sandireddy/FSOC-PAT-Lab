@@ -64,8 +64,8 @@ class C:
 
 # ---------------------------------------------------------------- fonts
 def _font(size, bold=False):
-    # Enforce strict readable floor of 10 to ensure all secondary words remain crisp
-    actual_size = max(10, int(round(size)))
+    # Enforce strict readable floor of 11 to ensure all words remain comfortably legible from 60cm
+    actual_size = max(11, int(round(size)))
     return pygame.font.SysFont(
         "consolas,menlo,dejavusansmono,monospace", actual_size, bold=bold)
 
@@ -103,15 +103,47 @@ def text(surf, pos, s, size=13, color=C.TEXT, bold=False, anchor="tl"):
     return r.w, r.h
 
 
+def multiline_text(surf, pos, s, max_width, size=12, color=C.TEXT_DIM, bold=False, line_spacing=4, anchor="tl"):
+    """
+    Renders human-friendly multi-line text that wraps naturally within max_width.
+    Returns (max_rendered_w, total_rendered_h).
+    """
+    words = s.split(" ")
+    lines = []
+    cur = ""
+    f = font(size, bold)
+    for word in words:
+        test = cur + (" " if cur else "") + word
+        if f.size(test)[0] <= max_width or not cur:
+            cur = test
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+
+    x, y = pos
+    line_h = f.get_height()
+    total_h = len(lines) * line_h + max(0, len(lines) - 1) * line_spacing
+    max_w = 0
+
+    curr_y = y
+    for line in lines:
+        lw, _ = text(surf, (x, curr_y), line, size=size, color=color, bold=bold, anchor=anchor)
+        max_w = max(max_w, lw)
+        curr_y += line_h + line_spacing
+    return max_w, total_h
+
+
 def fit_text(surf, rect, s, size=12, color=C.TEXT, bold=False,
              padding=6, anchor="cc"):
     """Render readable text that stays inside a UI rectangle with clean bounds."""
     rect = pygame.Rect(rect)
     max_width = max(1, rect.w - padding * 2)
-    draw_size = max(10, size)
+    draw_size = max(11, size)
     f = font(draw_size, bold)
     tw, th = f.size(s)
-    while draw_size > 10 and tw > max_width:
+    while draw_size > 11 and tw > max_width:
         draw_size -= 1
         f = font(draw_size, bold)
         tw, th = f.size(s)
@@ -219,14 +251,14 @@ def state_badge(surf, rect, state_label, state_str):
     fill = C.STATE_FILL.get(state_str, (0, 30, 50))
     pygame.draw.rect(surf, fill, rect, border_radius=3)
     pygame.draw.rect(surf, col, rect, 1, border_radius=3)
-    text(surf, (rect.centerx, rect.centery - 10), state_label, 10, C.TEXT_FAINT,
+    text(surf, (rect.centerx, rect.centery - 10), state_label, 11, C.TEXT_FAINT,
          anchor="cc")
     text(surf, (rect.centerx, rect.centery + 4), state_str, 14, col, bold=True,
          anchor="cc")
 
 
 def kpi_row(surf, x, y, label, value, val_color=C.TEXT, size_val=18):
-    text(surf, (x, y), label, 11, C.TEXT_FAINT)
+    text(surf, (x, y), label, 12, C.TEXT_FAINT)
     text(surf, (x, y + 14), value, size_val, val_color, bold=True)
 
 
@@ -241,19 +273,19 @@ def card(surf, rect, fill=C.CARD_BG, border=C.BORDER, radius=4, accent=None):
 
 def section_title(surf, x, y, title, accent=C.CYAN_ELEC):
     pygame.draw.rect(surf, accent, (x, y + 1, 4, 16), border_radius=1)
-    text(surf, (x + 10, y - 1), title, 13, C.TEXT_DIM, bold=True)
+    text(surf, (x + 10, y - 1), title, 14, C.TEXT, bold=True)
 
 
 def draw_metric_card(surf, rect, label, value, unit="", sub="", color=C.CYAN_ELEC, warn=False):
     rect = pygame.Rect(rect)
     border_col = C.RED if warn else C.BORDER
     card(surf, rect, fill=C.PANEL_2, border=border_col)
-    text(surf, (rect.x + 12, rect.y + 7), label.upper(), 10, C.TEXT_FAINT, bold=True)
-    vw, vh = text(surf, (rect.x + 12, rect.y + 22), value, 20, color, bold=True)
+    text(surf, (rect.x + 12, rect.y + 7), label.upper(), 11, C.TEXT_DIM, bold=True)
+    vw, vh = text(surf, (rect.x + 12, rect.y + 22), value, 22, color, bold=True)
     if unit:
-        text(surf, (rect.x + 16 + vw, rect.y + 28), unit, 11, C.TEXT_DIM)
+        text(surf, (rect.x + 16 + vw, rect.y + 28), unit, 12, C.TEXT_DIM)
     if sub:
-        text(surf, (rect.x + 12, rect.y + 48), sub, 10, C.TEXT_FAINT)
+        text(surf, (rect.x + 12, rect.y + 48), sub, 11, C.TEXT_FAINT)
 
 
 def draw_circular_arc_gauge(surf, cx, cy, radius, pct, color=C.CYAN_ELEC, label="", stroke=6):
@@ -281,10 +313,10 @@ def draw_circular_arc_gauge(surf, cx, cy, radius, pct, color=C.CYAN_ELEC, label=
         pygame.draw.line(surf, color, p1, p2, stroke)
 
     # Center percentage
-    text(surf, (cx, cy - 2), f"{int(round(pct))}%", 20, color, bold=True, anchor="cc")
+    text(surf, (cx, cy - 2), f"{int(round(pct))}%", 22, color, bold=True, anchor="cc")
     # Bottom label
     if label:
-        text(surf, (cx, cy + radius + 14), label, 10, C.TEXT_FAINT, bold=True, anchor="cc")
+        text(surf, (cx, cy + radius + 14), label, 11, C.TEXT_DIM, bold=True, anchor="cc")
 
 
 def draw_hbar_labelled(surf, rect, frac, color, label, val_str="", bg=C.PANEL):

@@ -37,9 +37,11 @@ from ui import widgets as W
 from ui import view3d
 from ui.mission_pages import (
     OpticalLinkModel,
+    StressTestManager,
     SimulationPageManager,
     render_overview_page,
     render_telemetry_page,
+    render_stress_test_page,
     render_false_lock_page,
     render_event_log_page,
 )
@@ -93,17 +95,23 @@ class App:
             "FSOC-PAT Mission Control Console  ·  SIH 2026 · PS 26169")
         self.clock = pygame.time.Clock()
 
-        # SpaceX Navigation System
+        # SpaceX / ISRO Mission Control Navigation System
+        self.sidebar_collapsed = False
+        self.SIDEBAR_EXP_W = 160
+        self.SIDEBAR_COL_W = 50
+        self.SIDEBAR_W = self.SIDEBAR_EXP_W
         self.SIDEBAR_TABS = [
             ("VIRTUAL ENV", "ENV", "01"),
             ("OVERVIEW",    "OVR", "02"),
             ("TELEMETRY",   "TEL", "03"),
             ("SIMULATION",  "SIM", "04"),
-            ("FALSE LOCK",  "FLK", "05"),
-            ("EVENT LOG",   "EVT", "06"),
+            ("STRESS TEST", "STR", "05"),
+            ("FALSE LOCK",  "FLK", "06"),
+            ("EVENT LOG",   "EVT", "07"),
         ]
         self.active_tab = 0  # 0: VIRTUAL ENV (Default on launch!)
         self.opt_model = OpticalLinkModel()
+        self.stress_mgr = StressTestManager()
         self.sim_page_mgr = None
 
         self.events_list = [
@@ -219,9 +227,7 @@ class App:
         w, h = self.W, self.H
         if self.canvas.get_size() != (w, h):
             self.canvas = pygame.Surface((w, h)).convert()
-        self._display_rect = pygame.Rect(0, 0, w, h)
-
-        self.SIDEBAR_W = 150
+        self.SIDEBAR_W = self.SIDEBAR_COL_W if self.sidebar_collapsed else self.SIDEBAR_EXP_W
         self.HDR_H = 46
         self.SCENARIO_H = 38 if self.active_tab == 0 else 0
         self.HDR_TOTAL_H = self.HDR_H + self.SCENARIO_H
@@ -344,8 +350,7 @@ class App:
         page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 10,
                                 self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - self.FOOTER_H - 14)
         if self.sim_page_mgr is not None:
-            self.sim_page_mgr.rect = page_rect
-            self.sim_page_mgr.setup_sliders()
+            self.sim_page_mgr.update_rect(page_rect)
 
     # ------------------------------------------------------------------
     def _atmosphere_allowed(self):
@@ -441,8 +446,11 @@ class App:
         elif pygame.K_TAB == key:
             self.active_tab = (self.active_tab + 1) % len(self.SIDEBAR_TABS)
             self._recompute_layout()
-        elif pygame.K_F1 <= key <= pygame.K_F6:
+        elif pygame.K_F1 <= key <= pygame.K_F7:
             self.active_tab = key - pygame.K_F1
+            self._recompute_layout()
+        elif pygame.K_c == key:
+            self.sidebar_collapsed = not self.sidebar_collapsed
             self._recompute_layout()
         elif pygame.K_r == key:
             self._reset()
@@ -516,17 +524,23 @@ class App:
             self.screen.blit(scaled, self._display_rect.topleft)
 
     def _mouse_down(self, pos, button):
-        # 1. Check sidebar tabs
+        # 1. Check sidebar collapse / expand toggle button
+        if button == 1 and hasattr(self, "sidebar_toggle_rect") and self.sidebar_toggle_rect.collidepoint(pos):
+            self.sidebar_collapsed = not self.sidebar_collapsed
+            self._recompute_layout()
+            return
+
+        # 2. Check sidebar tabs
         if button == 1 and pos[0] < self.SIDEBAR_W:
             for i in range(len(self.SIDEBAR_TABS)):
-                tab_rect = pygame.Rect(0, 56 + i * 52, self.SIDEBAR_W, 48)
+                tab_rect = pygame.Rect(0, 52 + i * 50, self.SIDEBAR_W, 46)
                 if tab_rect.collidepoint(pos):
                     if self.active_tab != i:
                         self.active_tab = i
                         self._recompute_layout()
                     return
 
-        # 2. Check top header pause toggle
+        # 3. Check top header pause toggle
         if button == 1 and hasattr(self, "hdr_pause_rect") and self.hdr_pause_rect.collidepoint(pos):
             self.paused = not self.paused
             self.buttons["PAUSE"].label = "RESUME" if self.paused else "PAUSE"
@@ -574,6 +588,8 @@ class App:
                     s.drag_to(pos[0])
         elif self.active_tab == 3:
             self.sim_page_mgr.handle_mouse_down(pos)
+        elif self.active_tab == 4:
+            self.stress_mgr.handle_click(pos, self.events_list)
 
     def _mouse_move(self, pos, buttons):
         if self.active_tab == 0:
@@ -693,25 +709,22 @@ class App:
 
         # Update physical optical link model from live sim step
         res = self.sim.last_result
-        hist_pt = self.opt_model.update_from_sim(res)
+        fps = self.clock.get_fps()
+        dt = 1.0 / max(1.0, fps)
+        self.stress_mgr.update(dt, self.opt_model, self.events_list)
+        hist_pt = self.opt_model.update_from_sim(res, self.stress_mgr)
 
         # Record state change events
-        cur_st = res.get("state", "SEARCHING")
+        cur_st = hist_pt.get("state", res.get("state", "SEARCHING"))
         if cur_st != self._last_state:
             ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
-            lvl = "INFO" if cur_st in LOCKED_STATES else ("WARNING" if cur_st in ("COASTING", "REACQUIRING") else "CRITICAL")
+            lvl = "INFO" if cur_st in LOCKED_STATES or cur_st == "ESTABLISHED" else ("WARNING" if cur_st in ("COASTING", "REACQUIRING", "DEGRADED") else "CRITICAL")
             self.events_list.insert(0, (ts_str, lvl, "TRACKER", f"State transition: {self._last_state} -> {cur_st} (error: {res.get('pointing_err_deg', 0)*1000:.1f} mdeg)"))
             if len(self.events_list) > 100:
                 self.events_list.pop()
             self._last_state = cur_st
 
-        # 1. Left Navigation Sidebar
-        self._draw_sidebar(s)
-
-        # 2. Top Mission Control Header
-        self._draw_mission_header(s, hist_pt)
-
-        # 3. Main Active Content View
+        # 1. Main Active Content View
         if self.active_tab == 0:
             # VIRTUAL ENVIRONMENT (Camera Viewport + HUD + Controls)
             self._draw_bg_grid(s)
@@ -732,13 +745,23 @@ class App:
             self.sim_page_mgr.apply_to_model(self.opt_model)
             self.sim_page_mgr.draw(s, self.opt_model, hist_pt)
         elif self.active_tab == 4:
-            # FALSE LOCK (Figma Image 5)
+            # STRESS TEST (Screenshot 1)
+            page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 12, self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - 24)
+            render_stress_test_page(s, page_rect, self.stress_mgr, self.opt_model, hist_pt)
+        elif self.active_tab == 5:
+            # FALSE LOCK (Screenshot 3)
             page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 12, self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - 24)
             render_false_lock_page(s, page_rect, self.sim, self.perf, self.opt_model, hist_pt)
-        elif self.active_tab == 5:
-            # EVENT LOG
+        elif self.active_tab == 6:
+            # EVENT LOG (Screenshot 2)
             page_rect = pygame.Rect(self.SIDEBAR_W + 12, self.HDR_H + 12, self.W - self.SIDEBAR_W - 24, self.H - self.HDR_H - 24)
             render_event_log_page(s, page_rect, self.sim, self.perf, self.opt_model, self.events_list)
+
+        # 2. Left Navigation Sidebar (Fixed Overlay)
+        self._draw_sidebar(s)
+
+        # 3. Top Mission Control Header (Fixed Overlay)
+        self._draw_mission_header(s, hist_pt)
 
         self._present_canvas()
 
@@ -749,21 +772,27 @@ class App:
         # Brand header at top of sidebar
         pygame.draw.rect(surf, (12, 20, 38), (0, 0, self.SIDEBAR_W, self.HDR_H))
         pygame.draw.line(surf, (20, 36, 62), (0, self.HDR_H - 1), (self.SIDEBAR_W, self.HDR_H - 1), 1)
-        T.text(surf, (14, 8), "FSOC", 15, T.C.CYAN_ELEC, bold=True)
-        T.text(surf, (14, 24), "PAT LAB · ISRO", 8, T.C.TEXT_DIM, bold=True)
-        T.text(surf, (14, 34), "SIH 2026 · PS 26169", 7, T.C.TEXT_FAINT)
+
+        if not self.sidebar_collapsed:
+            T.text(surf, (14, 7), "FSOC", 15, T.C.CYAN_ELEC, bold=True)
+            T.text(surf, (14, 23), "PAT LAB · ISRO", 11, T.C.TEXT_DIM, bold=True)
+            T.text(surf, (14, 34), "SIH 2026 · PS 26169", 11, T.C.TEXT_FAINT)
+        else:
+            T.text(surf, (self.SIDEBAR_W // 2, 14), "FSOC", 13, T.C.CYAN_ELEC, bold=True, anchor="tc")
 
         # Tabs
         mouse_pos = self._logical_mouse_pos(pygame.mouse.get_pos())
+        hover_tooltip = None
+
         for i, (name, abbr, num) in enumerate(self.SIDEBAR_TABS):
-            tab_y = 56 + i * 52
-            tab_rect = pygame.Rect(0, tab_y, self.SIDEBAR_W, 48)
+            tab_y = 52 + i * 50
+            tab_rect = pygame.Rect(0, tab_y, self.SIDEBAR_W, 46)
             is_active = (i == self.active_tab)
             is_hover = tab_rect.collidepoint(mouse_pos)
 
             if is_active:
                 pygame.draw.rect(surf, (0, 32, 60), tab_rect)
-                pygame.draw.rect(surf, T.C.CYAN_ELEC, (0, tab_y, 3, 48))
+                pygame.draw.rect(surf, T.C.CYAN_ELEC, (0, tab_y, 3, 46))
                 title_col = T.C.CYAN_ELEC
                 badge_col = T.C.CYAN_ELEC
             elif is_hover:
@@ -774,19 +803,56 @@ class App:
                 title_col = T.C.TEXT_DIM
                 badge_col = T.C.TEXT_FAINT
 
-            # Badge number
-            T.text(surf, (14, tab_y + 9), num, 7, badge_col, bold=True)
-            # Label
-            T.text(surf, (32, tab_y + 8), name, 9, title_col, bold=True)
-            # Abbr subtext
-            T.text(surf, (32, tab_y + 24), abbr, 7, badge_col)
+            if not self.sidebar_collapsed:
+                # Badge number
+                T.text(surf, (12, tab_y + 8), num, 11, badge_col, bold=True)
+                # Label
+                T.text(surf, (34, tab_y + 8), name, 11, title_col, bold=True)
+                # Abbr subtext
+                T.text(surf, (34, tab_y + 24), abbr, 11, badge_col)
+            else:
+                # Collapsed: Show number & abbreviation centered
+                T.text(surf, (self.SIDEBAR_W // 2, tab_y + 8), num, 11, badge_col, bold=True, anchor="tc")
+                T.text(surf, (self.SIDEBAR_W // 2, tab_y + 24), abbr, 11, title_col, bold=True, anchor="tc")
+                if is_hover:
+                    hover_tooltip = (self.SIDEBAR_W + 8, tab_y + 10, f"{num} · {name}")
+
+        # Collapse / Expand Toggle Button
+        toggle_y = self.H - 96
+        if not self.sidebar_collapsed:
+            self.sidebar_toggle_rect = pygame.Rect(10, toggle_y, self.SIDEBAR_W - 20, 30)
+            is_tog_hov = self.sidebar_toggle_rect.collidepoint(mouse_pos)
+            tog_bg = (18, 30, 54) if is_tog_hov else (10, 18, 34)
+            pygame.draw.rect(surf, tog_bg, self.sidebar_toggle_rect, border_radius=3)
+            pygame.draw.rect(surf, T.C.CYAN_ELEC if is_tog_hov else (20, 36, 62), self.sidebar_toggle_rect, 1, border_radius=3)
+            T.text(surf, (self.sidebar_toggle_rect.centerx, self.sidebar_toggle_rect.centery), "◄ COLLAPSE", 11, T.C.CYAN_ELEC if is_tog_hov else T.C.TEXT_DIM, bold=True, anchor="cc")
+        else:
+            self.sidebar_toggle_rect = pygame.Rect(8, toggle_y, 34, 30)
+            is_tog_hov = self.sidebar_toggle_rect.collidepoint(mouse_pos)
+            tog_bg = (18, 30, 54) if is_tog_hov else (10, 18, 34)
+            pygame.draw.rect(surf, tog_bg, self.sidebar_toggle_rect, border_radius=3)
+            pygame.draw.rect(surf, T.C.CYAN_ELEC if is_tog_hov else (20, 36, 62), self.sidebar_toggle_rect, 1, border_radius=3)
+            T.text(surf, (self.sidebar_toggle_rect.centerx, self.sidebar_toggle_rect.centery), "►", 13, T.C.CYAN_ELEC, bold=True, anchor="cc")
 
         # Bottom stats
         fps = self.clock.get_fps()
         fps_col = T.C.GREEN if fps >= 25 else T.C.AMBER
-        T.text(surf, (14, self.H - 42), f"FPS: {fps:.0f}", 9, fps_col, bold=True)
-        T.text(surf, (14, self.H - 26), "NATIVE DESKTOP", 7, T.C.TEXT_FAINT)
-        T.text(surf, (14, self.H - 14), "ISRO PAT CONSOLE", 7, T.C.TEXT_FAINT)
+        if not self.sidebar_collapsed:
+            T.text(surf, (14, self.H - 52), f"FPS: {fps:.0f}", 11, fps_col, bold=True)
+            T.text(surf, (14, self.H - 34), "NATIVE DESKTOP", 11, T.C.TEXT_FAINT)
+            T.text(surf, (14, self.H - 18), "ISRO PAT CONSOLE", 11, T.C.TEXT_FAINT)
+        else:
+            T.text(surf, (self.SIDEBAR_W // 2, self.H - 38), f"{fps:.0f}", 11, fps_col, bold=True, anchor="tc")
+            T.text(surf, (self.SIDEBAR_W // 2, self.H - 22), "FPS", 11, T.C.TEXT_FAINT, anchor="tc")
+
+        # Floating Tooltip in collapsed mode
+        if hover_tooltip:
+            tx, ty, tip_text = hover_tooltip
+            tt_w, tt_h = T.font(11, bold=True).size(tip_text)
+            tip_rect = pygame.Rect(tx, ty, tt_w + 16, 26)
+            pygame.draw.rect(surf, (8, 16, 32), tip_rect, border_radius=3)
+            pygame.draw.rect(surf, T.C.CYAN_ELEC, tip_rect, 1, border_radius=3)
+            T.text(surf, (tx + 8, ty + 5), tip_text, 11, T.C.CYAN_ELEC, bold=True)
 
     def _draw_mission_header(self, surf, hist_pt):
         hdr_w = self.W - self.SIDEBAR_W
@@ -797,35 +863,37 @@ class App:
         pygame.draw.rect(surf, T.C.CYAN, (self.SIDEBAR_W, 0, hdr_w, 2))
 
         # Title
-        T.text(surf, (self.SIDEBAR_W + 16, 8), "FSOC MISSION CONTROL", 12, T.C.CYAN_ELEC, bold=True)
-        T.text(surf, (self.SIDEBAR_W + 16, 25), "FREE-SPACE OPTICAL COMMS · PAT LAB · ISRO SIH 2026", 7.5, T.C.TEXT_FAINT)
+        T.text(surf, (self.SIDEBAR_W + 16, 7), "FSOC MISSION CONTROL", 13, T.C.CYAN_ELEC, bold=True)
+        sub_title = "FREE-SPACE OPTICAL COMMS · PAT LAB · ISRO SIH 2026" if self.W >= 1500 else "PAT LAB · ISRO SIH 2026"
+        T.text(surf, (self.SIDEBAR_W + 16, 24), sub_title, 11, T.C.TEXT_FAINT)
 
         # Link State badge
         st = hist_pt.get("state", "ESTABLISHED")
         st_col = T.C.STATE.get(st, T.C.GREEN)
-        badge_x = self.SIDEBAR_W + (210 if self.W < 1440 else 240)
-        badge_w = 120
+        badge_x = self.SIDEBAR_W + (180 if self.W < 1440 else 230)
+        badge_w = 118
         badge_h = 32
         badge_y = 7
-        pygame.draw.rect(surf, (0, 32, 24), (badge_x, badge_y, badge_w, badge_h), border_radius=3)
-        pygame.draw.rect(surf, T.C.BORDER, (badge_x, badge_y, badge_w, badge_h), 1, border_radius=3)
-        T.text(surf, (badge_x + 8, badge_y + 3), "LINK STATE", 6.5, T.C.TEXT_FAINT, bold=True)
+        badge_bg = (40, 12, 16) if st in ("FALSE LOCK", "SIGNAL LOSS") else ((40, 28, 8) if st == "DEGRADED" else (0, 32, 24))
+        pygame.draw.rect(surf, badge_bg, (badge_x, badge_y, badge_w, badge_h), border_radius=3)
+        pygame.draw.rect(surf, st_col, (badge_x, badge_y, badge_w, badge_h), 1, border_radius=3)
+        T.text(surf, (badge_x + 8, badge_y + 3), "LINK STATE", 11, T.C.TEXT_FAINT, bold=True)
 
         # Pulsing indicator dot
         p_alpha = int(180 + 75 * math.sin(time.time() * 5.0))
-        dot_col = (0, min(255, p_alpha), 120) if st in LOCKED_STATES else st_col
+        dot_col = (0, min(255, p_alpha), 120) if st in LOCKED_STATES or st == "ESTABLISHED" else st_col
         pygame.draw.circle(surf, dot_col, (badge_x + 14, badge_y + 21), 3.5)
-        T.text(surf, (badge_x + 24, badge_y + 16), st, 8.5, st_col, bold=True)
+        T.text(surf, (badge_x + 24, badge_y + 16), st, 11, st_col, bold=True)
 
         # Header live telemetry values
         def _h_val(x, lbl, val, unit, col=T.C.GREEN):
-            T.text(surf, (x, 8), lbl, 6.5, T.C.TEXT_FAINT, bold=True)
-            vw, vh = T.text(surf, (x, 20), val, 10.5, col, bold=True)
+            T.text(surf, (x, 7), lbl, 11, T.C.TEXT_FAINT, bold=True)
+            vw, vh = T.text(surf, (x, 21), val, 13, col, bold=True)
             if unit:
-                T.text(surf, (x + vw + 2, 23), unit, 7.5, T.C.TEXT_DIM)
+                T.text(surf, (x + vw + 3, 23), unit, 11, T.C.TEXT_DIM)
 
-        m_spacing = 68 if self.W < 1440 else 82
-        mx = badge_x + badge_w + 12
+        m_spacing = 76 if self.W < 1440 else 96
+        mx = badge_x + badge_w + 14
         _h_val(mx, "RX POWER", f"{hist_pt.get('rx_power', -11.4):.1f}", "dBm", T.C.CYAN_ELEC)
         _h_val(mx + m_spacing, "SNR", f"{hist_pt.get('snr', 73.6):.1f}", "dB", T.C.GREEN)
         _h_val(mx + m_spacing * 2, "MARGIN", f"{hist_pt.get('link_margin', 38.6):.1f}", "dB", T.C.GREEN)
@@ -833,9 +901,9 @@ class App:
 
         # UTC Clock
         utc_str = time.strftime("%Y-%m-%d  %H:%M:%S", time.gmtime())
-        clock_cx = self.W - 130
-        T.text(surf, (clock_cx, 8), "UTC", 6.5, T.C.TEXT_FAINT, anchor="tc")
-        T.text(surf, (clock_cx, 20), utc_str, 8.5, T.C.TEXT, bold=True, anchor="tc")
+        clock_cx = self.W - 160
+        T.text(surf, (clock_cx, 7), "UTC", 11, T.C.TEXT_FAINT, anchor="tc")
+        T.text(surf, (clock_cx, 21), utc_str, 11, T.C.TEXT, bold=True, anchor="tc")
 
         # PAUSE Button
         self.hdr_pause_rect = pygame.Rect(self.W - 74, 8, 66, 30)
@@ -844,7 +912,7 @@ class App:
         pygame.draw.rect(surf, btn_col, self.hdr_pause_rect, 1, border_radius=2)
         pause_label = "RESUME" if self.paused else "PAUSE"
         T.text(surf, (self.hdr_pause_rect.centerx, self.hdr_pause_rect.centery),
-               pause_label, 8.5, btn_col, bold=True, anchor="cc")
+               pause_label, 11, btn_col, bold=True, anchor="cc")
 
         # Tier 2: Dedicated Scenario Control Bar (only on VIRTUAL ENV tab)
         if self.active_tab == 0:
