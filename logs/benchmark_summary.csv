@@ -1,0 +1,7 @@
+preset,envelope,frames,throughput_fps,acquisition_time_s,mean_error_px,max_error_px,rms_error_px,mean_error_deg,max_error_deg,rms_error_deg,lock_retention_pct,target_loss_pct,actuator_saturation_pct,false_lock_events,overall_pass
+EASY,NOMINAL_OPERATING,300,47.5,0.233,5.51,59.12,11.26,0.0345,0.3695,0.0704,95.7,4.3,5.9,0,True
+MODERATE,NOMINAL_OPERATING,300,43.8,0.233,11.92,60.16,14.4,0.0745,0.376,0.09,95.7,4.3,63.0,0,False
+HARD,NOMINAL_OPERATING,300,29.5,0.233,10.61,59.86,14.1,0.0663,0.3741,0.0881,95.7,4.3,47.5,0,False
+SEVERE,EXTREME_STRESS_FAILURE_ENVELOPE,300,28.9,1.417,34.12,87.1,38.16,0.2133,0.5444,0.2385,58.0,42.0,92.7,0,False
+ADVERSARIAL,EXTREME_STRESS_FAILURE_ENVELOPE,300,27.9,1.167,17.62,32.45,18.82,0.1101,0.2028,0.1176,63.3,36.7,61.9,0,False
+ISRO_RX,NOMINAL_OPERATING,300,47.8,0.233,9.17,59.14,12.68,0.0573,0.3696,0.0793,95.7,4.3,47.4,0,True

@@ -10,10 +10,23 @@ A real-time simulation and autonomous beam-pointing system for Free-Space Optica
 
 ```bash
 # Install dependencies
-pip install pygame-ce opencv-python numpy
+pip install pygame-ce opencv-python numpy fastapi uvicorn websockets
 
-# Run the mission-console GUI
+# Option 1: Launch Web Mission Control Dashboard (Interactive Browser GUI + Telemetry)
+python server.py --port 8000
+# -> Open browser to http://localhost:8000
+
+# Option 2: Run native Desktop Mission Console GUI (pygame-ce)
 python main.py
+
+# Option 3: Run Standalone Windows Executable (No Python needed)
+dist\FSOC_PAT_Mission_Console\FSOC_PAT_Mission_Console.exe
+
+# Option 4: Run Benchmark-2 MP4 Bypass (Evaluator-supplied video input)
+python -m metrics.mp4_bypass -i logs/test_bench.mp4 -t logs/test_bench_truth.csv
+
+# Option 5: Run Full Multi-Preset Benchmark Suite
+python -m metrics.benchmark_suite
 
 # Run the benchmark that generated every number below (reproduces the report exactly)
 python -m metrics.stress_test

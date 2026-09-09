@@ -11,10 +11,11 @@ import {
 import { useTelemetry, type Telemetry } from "./hooks/useTelemetry";
 import CameraViewport from "./components/CameraViewport";
 import SceneConfigPage from "./components/SceneConfigPage";
+import BenchmarkPage from "./components/BenchmarkPage";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type View = "overview" | "telemetry" | "config" | "simulation" | "stress" | "falselock" | "eventlog";
+type View = "overview" | "telemetry" | "config" | "simulation" | "stress" | "falselock" | "eventlog" | "benchmark";
 
 interface TelemetryPoint {
   t: number;
@@ -1028,6 +1029,7 @@ export default function App() {
     { view: "stress", label: "STRESS TEST", abbr: "STR", num: "05", icon: "⚡" },
     { view: "falselock", label: "FALSE LOCK", abbr: "FLK", num: "06", icon: "◎" },
     { view: "eventlog", label: "EVENT LOG", abbr: "EVT", num: "07", icon: "≡" },
+    { view: "benchmark", label: "BENCHMARK", abbr: "BMK", num: "08", icon: "📊" },
   ];
 
   const sidebarWidth = sidebarCollapsed ? 54 : 160;
@@ -1199,6 +1201,7 @@ export default function App() {
             {view === "stress" && <StressView scenarios={scenarios} onTrigger={onTrigger} metrics={metrics} history={history} />}
             {view === "falselock" && <FalseLockView metrics={metrics} />}
             {view === "eventlog" && <EventLogView events={events} />}
+            {view === "benchmark" && <BenchmarkPage />}
             {view === "config" && (
               <SceneConfigPage
                 currentPreset={telemetry?.preset || "EASY"}

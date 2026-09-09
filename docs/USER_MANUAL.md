@@ -402,3 +402,78 @@ Performance logs include columns: `frame, state, est_err_deg, truth_az, truth_el
 ---
 
 *Developed for ISRO SIH 2026 — Problem Statement 26169*
+
+
+---
+
+## 10. Web Mission Control & Standalone Executable
+
+### 10.1 Running the Modern Web Mission Control
+
+In addition to the native Pygame desktop interface, FSOC-PAT-Lab includes a high-performance web dashboard featuring real-time WebSocket telemetry, interactive 3D link budget simulation, dynamic scene configuration, and the Benchmark-2 MP4 Evaluation Suite:
+
+```bash
+python server.py --host 0.0.0.0 --port 8000
+```
+
+Open your browser to:
+```
+http://localhost:8000
+```
+
+#### Sidebar Navigation Views:
+1. **01 · OVERVIEW**: Real-time virtual camera feed, target detection bounding boxes, tracking state pill, and live boresight angular offset scopes.
+2. **02 · TELEMETRY**: Multi-channel chart history (pointing error, BER, link margin, atmospheric attenuation).
+3. **03 · PS CONFIG**: Interactive sliders and selectors for all SIH26169 parameters (2000×2000 screen, 640×480 sensor, 4°×3° FOV, target size 5–20 px, motion profiles, platform modes).
+4. **04 · OPTICAL LINK**: Physical link budget calculator (wavelength, beam divergence, optical link margin, receive power).
+5. **05 · STRESS TEST**: Live injection of wrong prior, dynamic solar storms, beacon burns, and slew saturation episodes.
+6. **06 · FALSE LOCK**: AI classification metrics and false-lock defense audit.
+7. **07 · EVENT LOG**: System event stream with timestamps and severity filtering.
+8. **08 · BENCHMARK**: Benchmark-2 MP4 Bypass Runner, Multi-Preset Sweep, and Trust Manager Architecture.
+
+---
+
+### 10.2 Benchmark-2 MP4 Evaluator Mode (Step-by-Step)
+
+The PS requires an external evaluator to supply an arbitrary 30 FPS MP4 video to test coarse pointing directly on raw pixel input:
+
+#### Via Web GUI (BENCHMARK Tab):
+1. Navigate to **08 · BENCHMARK** -> **BENCHMARK-2 · EVALUATOR MP4 BYPASS**.
+2. Select a video from the dropdown (automatically populated from `logs/`) or type an absolute file path into the input field.
+3. Observe the ground truth detection badge:
+   - `[✓ GROUND TRUTH AVAILABLE]`: The evaluator sidecar CSV `[video_name]_truth.csv` was detected. True centroiding error (Metric C) will be computed.
+   - `[⚠ GROUND TRUTH NOT AVAILABLE]`: Video-only input. Metric B (Optical-Axis Offset) will be displayed. Metric C will be marked `N/A`.
+4. Click **▶ RUN MP4 BENCHMARK**.
+5. Inspect the generated compliance scorecards (Acquisition Time, Pointing Error, Target Loss %, Throughput FPS, Lock Retention %).
+6. Click **DOWNLOAD JSON REPORT** or **DOWNLOAD CSV REPORT** for evaluator record submission.
+
+#### Generating Synthetic Evaluator Videos:
+Click **+ SYNTHETIC FIGURE-8 MP4** or **+ SYNTHETIC ORBITAL MP4** in the GUI to generate standardized test videos with ground-truth sidecar CSV files.
+
+#### Via Headless CLI:
+```bash
+# Evaluate video WITH ground truth sidecar CSV
+python -m metrics.mp4_bypass -i logs/test_bench.mp4 -t logs/test_bench_truth.csv
+
+# Evaluate video WITHOUT ground truth (pure video input)
+python -m metrics.mp4_bypass -i logs/no_truth.mp4
+
+# Generate synthetic benchmark MP4
+python -m metrics.synthetic_video --out logs/custom_eval.mp4 --motion figure_eight --seconds 5.0
+```
+
+---
+
+### 10.3 Standalone Windows Executable (No Python Required)
+
+For evaluators or judges running on clean Windows machines without Python installed:
+
+1. Navigate to the release directory:
+   ```
+   dist/FSOC_PAT_Mission_Console/
+   ```
+2. Double-click `FSOC_PAT_Mission_Console.exe` to launch the full Mission Control desktop application.
+3. To run headless batch evaluation from command prompt:
+   ```cmd
+   dist\FSOC_PAT_Mission_Console\FSOC_PAT_Mission_Console.exe --frames 300 --preset ISRO_RX
+   ```

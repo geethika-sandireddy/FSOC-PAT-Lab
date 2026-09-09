@@ -328,8 +328,9 @@ class VideoInputSimulator:
     has no known 15 Hz clock); identity = persistence + appearance.
     """
 
-    def __init__(self, video_path, seed=None, dt=None, truth_csv=None):
+    def __init__(self, video_path, seed=None, dt=None, truth_csv=None, truth_path=None):
         import cv2
+        truth_csv = truth_path or truth_csv
         self.preset = config.DIFFICULTY_PRESETS["EASY"]
         self.preset_name = "VIDEO"
         self.platform_mode = None
@@ -376,7 +377,7 @@ class VideoInputSimulator:
         # video mode: the whole frame is the sensor - the association gate
         # spans the video's own angular FOV so the beacon stays associated
         # across its full sweep instead of being knocked out by servo lag.
-        self.video_fov_deg = config.CAMERA_FOV_H_DEG
+        self.video_fov_deg = float(getattr(config, "CAMERA_FOV_H_DEG", 4.0))
         self.tracker = Tracker(self.eph, seed=seed, video_mode=True,
                                gate_deg=self.video_fov_deg * 0.95)
         self.controller = PointingController(self.gimbal, self.tracker)
@@ -384,5 +385,207 @@ class VideoInputSimulator:
         self.t = 0.0
         self.frame = None
         self.intensity_hist = deque(maxlen=240)
-        
-        # ... rest unchanged ...
+
+        # Video geometry mapped onto the LOS frame
+        self.focal_px = (self.video_w / 2.0) / math.tan(
+            math.radians(self.video_fov_deg / 2.0))
+        self.cu = self.video_w / 2.0
+        self.cv = self.video_h / 2.0
+        self.pixels_per_deg = self.video_w / self.video_fov_deg
+
+        self.tracker.reset(0.0, 0.0)
+        self.ground_truth_available = bool(self.truth and len(self.truth) > 0)
+        self.frame_idx = 0
+
+        # Structured performance and metric logs
+        self.centroid_log = []          # Metric A: (frame, detected_cx, detected_cy)
+        self.optical_offset_log = []    # Metric B: (frame, offset_px, offset_deg)
+        self.true_err_log = []          # Metric C: (frame, true_err_px, true_err_deg) (only if GT available)
+        self.estimate_log = []          # (frame, est_az, est_el)
+        self.lock_history = []          # (frame, state)
+
+        self.acquisition_time_s = None
+        self.lock_lost_at = None
+        self.reacq_times = []
+        self._was_locked = False
+        self.locked_frames = 0
+        self.lost_frames = 0
+        self.reacq_attempts = 0
+        self.reacq_successes = 0
+        self._false_lock_count = 0
+        self.false_lock_events = 0
+        self.last_result = None
+
+    @property
+    def state(self):
+        return self.tracker.state
+
+    @property
+    def is_locked(self):
+        return self.tracker.state in ("LOCKED", "DEGRADED_LOCK")
+
+    def step(self):
+        """Read one video frame and close the detection -> track -> control loop.
+
+        Benchmark-2 Semantics (PS 26169):
+        - Virtual/PTZ camera is bypassed; external video enters the pipeline.
+        - Metric A: Detected centroid (u, v) in frame pixels.
+        - Metric B: Optical-axis / Frame-centre offset dist((u, v), (cu, cv)).
+        - Metric C: True centroiding error dist((u, v), (gt_u, gt_v)) computed ONLY
+          when evaluator ground-truth sidecar CSV is available.
+        - No ground-truth coordinates are ever injected into the tracking loop.
+        """
+        import cv2
+        import numpy as np
+
+        ret, frame = self.cap.read()
+        if not ret:
+            return None
+        self.t += self.dt
+        frame = np.ascontiguousarray(frame)
+
+        basis = self.gimbal.basis()  # identity basis: gimbal held at (0, 0)
+        candidates = self.detector.detect(frame, basis, self.focal_px,
+                                          cu=self.cu, cv=self.cv)
+        state, est_az, est_el, confidence = self.tracker.update(
+            candidates, self.t, self.dt)
+        self.intensity_hist.append(
+            self.tracker.associated.peak if self.tracker.associated else None)
+
+        # Tracked candidate in sensor frame
+        tracked = self.tracker.associated
+
+        # --- METRIC A: Detected Centroid (x, y) ---
+        detected_cx = float(tracked.x) if tracked is not None else None
+        detected_cy = float(tracked.y) if tracked is not None else None
+        self.detected_cx = detected_cx
+        self.detected_cy = detected_cy
+
+        # --- METRIC B: Optical-axis / Frame-centre offset ---
+        if detected_cx is not None:
+            optical_offset_px = math.hypot(detected_cx - self.cu, detected_cy - self.cv)
+            optical_offset_deg = optical_offset_px / self.pixels_per_deg
+        else:
+            optical_offset_px = None
+            optical_offset_deg = None
+
+        # --- METRIC C: True Centroiding Error (Only if Ground Truth Available) ---
+        true_centroid_err_px = None
+        true_centroid_err_deg = None
+        gt_x, gt_y = None, None
+
+        if self.ground_truth_available:
+            tb = self.truth.get(self.frame_idx)
+            if tb is not None:
+                gt_x, gt_y = float(tb[0]), float(tb[1])
+                if detected_cx is not None:
+                    true_centroid_err_px = math.hypot(detected_cx - gt_x, detected_cy - gt_y)
+                else:
+                    true_centroid_err_px = math.hypot(self.cu - gt_x, self.cv - gt_y)
+                true_centroid_err_deg = true_centroid_err_px / self.pixels_per_deg
+
+        self.frame_idx += 1
+        if detected_cx is not None:
+            self.centroid_log.append((self.frame_idx, detected_cx, detected_cy))
+        if optical_offset_px is not None:
+            self.optical_offset_log.append((self.frame_idx, optical_offset_px, optical_offset_deg))
+        if true_centroid_err_px is not None:
+            self.true_err_log.append((self.frame_idx, true_centroid_err_px, true_centroid_err_deg))
+
+        self.estimate_log.append((self.frame_idx, est_az, est_el))
+        self.lock_history.append((self.frame_idx, state))
+
+        # --- State, Acquisition & Reacquisition Statistics ---
+        is_locked = state in ("LOCKED", "DEGRADED_LOCK")
+        if is_locked:
+            self.locked_frames += 1
+            if self.acquisition_time_s is None:
+                self.acquisition_time_s = self.t
+            elif not self._was_locked:
+                if self.lock_lost_at is not None:
+                    dt_reacq = self.t - self.lock_lost_at
+                    self.reacq_times.append(dt_reacq)
+                    self.reacq_successes += 1
+                    self.lock_lost_at = None
+
+            # False lock detection against ground truth when available
+            if self.ground_truth_available and true_centroid_err_px is not None:
+                if true_centroid_err_px > 0.35 * max(self.video_w, self.video_h):
+                    self._false_lock_count += 1
+                    if self._false_lock_count == 5:
+                        self.false_lock_events += 1
+                else:
+                    self._false_lock_count = 0
+        else:
+            self.lost_frames += 1
+            self._false_lock_count = 0
+            if self._was_locked:
+                self.lock_lost_at = self.t
+                self.reacq_attempts += 1
+
+        self._was_locked = is_locked
+
+        candidates_detail = [
+            dict(
+                u=round(float(c.u), 1),
+                v=round(float(c.v), 1),
+                area=int(c.area),
+                circularity=round(float(c.circularity), 3),
+                snr=round(float(c.snr), 2),
+                ml_score=round(float(c.ml_score), 3),
+                track_id=getattr(c, "track_id", None),
+                track_age=getattr(c, "track_age", 0),
+            )
+            for c in candidates
+        ]
+
+        self.last_result = dict(
+            state=state,
+            est_az=est_az,
+            est_el=est_el,
+            confidence=confidence,
+            candidates=len(candidates),
+            cand_list=candidates,
+            candidates_detail=candidates_detail,
+            frame=frame,
+            t=self.t,
+            frame_idx=self.frame_idx,
+            ground_truth_available=self.ground_truth_available,
+            # Metric A
+            detected_cx=detected_cx,
+            detected_cy=detected_cy,
+            # Metric B
+            optical_offset_px=optical_offset_px,
+            optical_offset_deg=optical_offset_deg,
+            # Metric C (Only valid if ground_truth_available)
+            gt_x=gt_x,
+            gt_y=gt_y,
+            true_centroid_err_px=true_centroid_err_px,
+            true_centroid_err_deg=true_centroid_err_deg,
+            # Telemetry compatibility
+            pointing_err_deg=true_centroid_err_deg if true_centroid_err_deg is not None else optical_offset_deg,
+            in_fov=detected_cx is not None,
+        )
+        return self.last_result
+
+    def close(self):
+        """Release underlying OpenCV video capture handle."""
+        if hasattr(self, "cap") and self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+
+    def reset(self):
+        """Reset video to frame 0 and reinitialize tracking states."""
+        if hasattr(self, "cap") and self.cap is not None:
+            self.cap.set(1, 0)  # cv2.CAP_PROP_POS_FRAMES = 1
+        self.frame_idx = 0
+        self.t = 0.0
+        self.tracker = Tracker(
+            detector_type="hybrid",
+            fov_deg=(self.hfov_deg, self.vfov_deg),
+            pixels_per_deg=self.pixels_per_deg,
+            cu=self.cu,
+            cv=self.cv,
+        )

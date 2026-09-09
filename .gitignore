@@ -16,6 +16,10 @@ dist/
 logs/run_*.csv
 logs/bypass_*.csv
 logs/classB*.mp4
+logs/unit_test_*
+logs/benchmark_unit_test_*
+logs/benchmark_no_truth_*
+logs/benchmark_test_bench_*
 
 # Editors / OS
 .vscode/

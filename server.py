@@ -388,6 +388,79 @@ def get_history():
         return {"history": list(SIM_STATE["history"])}
 
 
+@app.get("/benchmark/summary")
+def get_benchmark_summary():
+    """Return latest multi-preset benchmark summary JSON."""
+    json_path = os.path.join(config.LOG_DIR, "benchmark_summary.json")
+    if os.path.isfile(json_path):
+        with open(json_path, "r") as f:
+            return json.load(f)
+    return {"error": "Benchmark summary not found. Run benchmark suite first."}
+
+
+@app.get("/benchmark/list-videos")
+def list_benchmark_videos():
+    """List available MP4 videos in logs/ and workspace root."""
+    videos = []
+    root = os.path.dirname(os.path.abspath(__file__))
+    dirs_to_check = [config.LOG_DIR, root]
+    seen = set()
+    for d in dirs_to_check:
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if fn.lower().endswith(".mp4") and fn not in seen:
+                seen.add(fn)
+                full_path = os.path.join(d, fn)
+                truth_csv = os.path.splitext(full_path)[0] + "_truth.csv"
+                has_truth = os.path.isfile(truth_csv)
+                try:
+                    size_mb = os.path.getsize(full_path) / (1024 * 1024)
+                except Exception:
+                    size_mb = 0.0
+                videos.append({
+                    "filename": fn,
+                    "path": full_path,
+                    "has_truth": has_truth,
+                    "truth_csv": truth_csv if has_truth else None,
+                    "size_mb": round(size_mb, 2),
+                })
+    return {"videos": videos}
+
+
+@app.post("/benchmark/run-mp4")
+def run_mp4_benchmark_endpoint(body: dict):
+    """Run Benchmark-2 MP4 bypass and return comprehensive evaluation metrics."""
+    from metrics.mp4_bypass import run_bypass
+    video_path = body.get("video_path")
+    if not video_path or not os.path.isfile(video_path):
+        # Fallback search in logs/
+        cand = [os.path.join(config.LOG_DIR, f) for f in os.listdir(config.LOG_DIR) if f.endswith(".mp4")] if os.path.isdir(config.LOG_DIR) else []
+        if cand:
+            video_path = cand[0]
+        else:
+            return {"error": f"Video file not found: {video_path}"}
+
+    truth_path = body.get("truth_path")
+    stats = run_bypass(video_path, truth_path=truth_path, verbose=False)
+    return stats
+
+
+@app.post("/benchmark/generate-synthetic")
+def generate_synthetic_video_endpoint(body: dict):
+    """Generate a synthetic benchmark MP4 with ground truth sidecar CSV."""
+    from metrics.synthetic_video import generate
+    motion = body.get("motion", "figure_eight")
+    noise = body.get("noise", ["gaussian"])
+    seconds = float(body.get("seconds", 5.0))
+    fps = int(body.get("fps", 30))
+    out_name = f"bench_{motion}_{int(time.time())}.mp4"
+    out_path = os.path.join(config.LOG_DIR, out_name)
+    v_path, t_path = generate(out_path, width=640, height=480, fps=fps, seconds=seconds,
+                              motion=motion, noise=noise, beacon_size=10)
+    return {"video_path": v_path, "truth_path": t_path, "filename": out_name}
+
+
 # ---------------------------------------------------------------------------
 # WebSocket
 # ---------------------------------------------------------------------------
