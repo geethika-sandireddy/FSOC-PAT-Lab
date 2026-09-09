@@ -391,8 +391,11 @@ class VideoInputSimulator:
         # spans the video's own angular FOV so the beacon stays associated
         # across its full sweep instead of being knocked out by servo lag.
         self.video_fov_deg = float(getattr(config, "CAMERA_FOV_H_DEG", 4.0))
+        self.cu = self.video_w / 2.0
+        self.cv = self.video_h / 2.0
         self.tracker = Tracker(self.eph, seed=seed, video_mode=True,
-                               gate_deg=self.video_fov_deg * 0.95)
+                               gate_deg=self.video_fov_deg * 0.95,
+                               cu=self.cu, cv=self.cv)
         self.controller = PointingController(self.gimbal, self.tracker)
         self.dt = self._dt
         self.t = 0.0

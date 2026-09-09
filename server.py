@@ -247,9 +247,20 @@ def _build_telemetry(result: dict, sim: Simulator, perf: PerformanceTracker, opt
         atm_loss = round(latest.get("atm_loss", atm_loss), 2)
         stab_pct = round(latest.get("stability", stab_pct), 1)
 
+    bs_err = result.get("boresight_error_px")
+    if bs_err is None:
+        bs_err = result.get("optical_offset_px")
+    is_aligned = (bs_err is not None and bs_err <= 15.0)
+    is_optically_locked = (state == "LOCKED" and is_aligned)
+    display_state = "LOCKED" if is_optically_locked else ("TRACKING" if hasattr(sim, "video_w") and state in ("LOCKED", "DEGRADED_LOCK") else ("ALIGNING" if state in ("LOCKED", "DEGRADED_LOCK") else state))
+
     return {
         "t": round(result["t"], 3),
         "state": state,
+        "display_state": display_state,
+        "link_state": display_state,
+        "is_aligned": is_aligned,
+        "is_optically_locked": is_optically_locked,
         "tracking_state": result.get("tracking_state", state),
         "tracking_phase": result.get("tracking_phase", getattr(tr, "phase", state)),
         "is_locked": bool(result.get("is_locked", getattr(tr, "is_locked", state == "LOCKED"))),

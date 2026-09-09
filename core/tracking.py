@@ -189,8 +189,10 @@ class ModulationTrack:
 
 class Tracker:
     def __init__(self, ephemeris_model, seed=None, video_mode=False,
-                 gate_deg=config.ASSOC_GATE_DEG):
+                 gate_deg=config.ASSOC_GATE_DEG, cu=None, cv=None):
         self.eph = ephemeris_model
+        self.cu = float(cu) if cu is not None else float(getattr(config, "CAM_VIEW_W", 640)) / 2.0
+        self.cv = float(cv) if cv is not None else float(getattr(config, "CAM_VIEW_H", 480)) / 2.0
         # video_mode=True (Benchmark-2 MP4 bypass): an external video feeds the
         # coarse-pointing loop.  Its beacon has no known 15 Hz modulation clock,
         # so acquisition / lock-hold use appearance + temporal persistence

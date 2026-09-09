@@ -180,7 +180,7 @@ const TopBar = ({ metrics, paused, onPause, state, connected }: { metrics: LiveM
   const stateColor = !connected ? "#ff2d55"
     : state === "LOCKED" ? "#00ff88"
     : state === "DEGRADED_LOCK" ? "#eab308"
-    : state === "ACQUIRING" || state === "CANDIDATE" ? "#00d4ff"
+    : state === "ALIGNING" || state === "TRACKING" || state === "ACQUIRING" || state === "CANDIDATE" ? "#00d4ff"
     : state === "COASTING" ? "#38bdf8"
     : state === "REACQUIRING" ? "#a855f7"
     : state === "LOST" ? "#ef4444"

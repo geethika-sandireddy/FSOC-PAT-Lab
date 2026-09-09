@@ -748,10 +748,15 @@ class App:
         hist_pt = self.opt_model.update_from_sim(res, self.stress_mgr)
 
         # Record state change events
-        cur_st = hist_pt.get("state", res.get("state", "SEARCHING"))
+        raw_st = hist_pt.get("state", res.get("state", "SEARCHING"))
+        boresight_err = res.get("boresight_error_px")
+        if boresight_err is None and getattr(self, "video_mode", False):
+            boresight_err = res.get("optical_offset_px")
+        is_aligned = (boresight_err is not None and boresight_err <= 15.0)
+        cur_st = "LOCKED" if (raw_st in ("LOCKED", "DEGRADED_LOCK") and is_aligned) else ("TRACKING" if getattr(self, "video_mode", False) and raw_st in ("LOCKED", "DEGRADED_LOCK") else ("ALIGNING" if raw_st in ("LOCKED", "DEGRADED_LOCK") else raw_st))
         if cur_st != self._last_state:
             ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
-            lvl = "INFO" if cur_st == "LOCKED" else ("WARNING" if cur_st in ("COASTING", "REACQUIRING", "DEGRADED_LOCK", "CANDIDATE", "ACQUIRING") else "CRITICAL")
+            lvl = "INFO" if cur_st == "LOCKED" else ("WARNING" if cur_st in ("COASTING", "REACQUIRING", "DEGRADED_LOCK", "CANDIDATE", "ACQUIRING", "ALIGNING", "TRACKING") else "CRITICAL")
             self.events_list.insert(0, (ts_str, lvl, "TRACKER", f"State transition: {self._last_state} -> {cur_st} (error: {res.get('pointing_err_deg', 0)*1000:.1f} mdeg)"))
             if len(self.events_list) > 100:
                 self.events_list.pop()
@@ -905,13 +910,26 @@ class App:
 
         # Link State badge (positioned after title with clean clearance)
         res = getattr(self.sim, "last_result", {}) or {}
-        st = hist_pt.get("state", res.get("state", "SEARCHING"))
-        st_col = T.C.STATE.get(st, T.C.GREEN)
+        raw_st = hist_pt.get("state", res.get("state", "SEARCHING"))
+        boresight_err = res.get("boresight_error_px")
+        if boresight_err is None and getattr(self, "video_mode", False):
+            boresight_err = res.get("optical_offset_px")
+        is_aligned = (boresight_err is not None and boresight_err <= 15.0)
+
+        # Optical link state requires both tracking lock AND boresight alignment
+        if raw_st in ("LOCKED", "DEGRADED_LOCK") and not is_aligned:
+            st = "TRACKING" if getattr(self, "video_mode", False) else "ALIGNING"
+            st_col = T.C.CYAN_ELEC
+            badge_bg = (8, 28, 44)
+        else:
+            st = raw_st
+            st_col = T.C.STATE.get(st, T.C.GREEN)
+            badge_bg = (44, 14, 18) if st in ("FALSE LOCK", "SIGNAL LOSS", "LOST") else ((44, 30, 8) if st in ("DEGRADED", "DEGRADED_LOCK") else (6, 36, 26))
+
         badge_x = self.SIDEBAR_W + (285 if self.W >= 1480 else 235)
         badge_w = 126
         badge_h = 34
         badge_y = 6
-        badge_bg = (44, 14, 18) if st in ("FALSE LOCK", "SIGNAL LOSS", "LOST") else ((44, 30, 8) if st in ("DEGRADED", "DEGRADED_LOCK") else (6, 36, 26))
         pygame.draw.rect(surf, badge_bg, (badge_x, badge_y, badge_w, badge_h), border_radius=4)
         pygame.draw.rect(surf, st_col, (badge_x, badge_y, badge_w, badge_h), 1, border_radius=4)
         T.text(surf, (badge_x + 10, badge_y + 3), "LINK STATE", 10, T.C.TEXT_FAINT, bold=True)
@@ -1034,10 +1052,17 @@ class App:
         surf.blit(self._scanline_surf, dest.topleft)
 
         # State-reactive viewport border with glow
-        st     = self.sim.last_result.get("state", "SEARCHING")
-        vp_col = T.C.STATE.get(st, T.C.BORDER)
-        # Pulsing glow on lock
-        if st in LOCKED_STATES:
+        res    = self.sim.last_result
+        st     = res.get("state", "SEARCHING")
+        boresight_err = res.get("boresight_error_px")
+        if boresight_err is None and getattr(self, "video_mode", False):
+            boresight_err = res.get("optical_offset_px")
+        is_aligned = (boresight_err is not None and boresight_err <= 15.0)
+        is_optically_locked = (st in LOCKED_STATES and is_aligned)
+
+        vp_col = T.C.GREEN if is_optically_locked else (T.C.CYAN_ELEC if st in LOCKED_STATES else T.C.STATE.get(st, T.C.BORDER))
+        # Pulsing glow on true optical lock
+        if is_optically_locked:
             p = T.pulse(1.5)
             gc = tuple(int(c * (0.4 + 0.6 * p)) for c in vp_col)
             pygame.draw.rect(surf, gc,      dest, 2)
@@ -1082,18 +1107,27 @@ class App:
         """Slim status strip at bottom of camera."""
         res = self.sim.last_result
         st  = res["state"]
+        boresight_err = res.get("boresight_error_px")
+        if boresight_err is None and getattr(self, "video_mode", False):
+            boresight_err = res.get("optical_offset_px")
+        is_aligned = (boresight_err is not None and boresight_err <= 15.0)
+
         if not res["in_fov"]:
             label, col = "OUTSIDE FIELD OF VIEW", T.C.TEXT_FAINT
         elif st == "SEARCHING":
             label, col = "ACQUISITION WINDOW · SCANNING", T.C.AMBER
         elif st == "COASTING":
             label, col = "PREDICTIVE COAST · BEACON LOST", T.C.CYAN
-        elif st == "LOCKED":
+        elif st in LOCKED_STATES and is_aligned:
             label, col = "BEACON ACQUIRED · LOCKED", T.C.GREEN
+        elif st in LOCKED_STATES and not is_aligned:
+            label, col = "BEACON TRACKED · SLEWING TO BORESIGHT", T.C.CYAN_ELEC
         elif st == "DEGRADED_LOCK":
             label, col = "DEGRADED LOCK · CONFIDENCE LOW", T.C.GREEN_DIM
         elif st == "REACQUIRING":
             label, col = "BEACON LOST · RE-ACQUIRING", T.C.PURPLE
+        elif st in ("CANDIDATE", "ACQUIRING"):
+            label, col = "BEACON DETECTED · ALIGNING TO BORESIGHT", T.C.CYAN_ELEC
         else:
             label, col = "SEARCHING", T.C.AMBER
 
@@ -1125,6 +1159,31 @@ class App:
         col = T.C.STATE.get(st, T.C.CYAN)
         cx, cy = dest.centerx, dest.centery
 
+        # Pre-compute target beacon position & true optical boresight co-alignment
+        b_u, b_v = None, None
+        assoc = self.sim.tracker.associated
+        if assoc is not None:
+            b_u, b_v = assoc.u, assoc.v
+        elif res.get("beacon_visible", False):
+            if hasattr(self.sim, "sensor"):
+                b = self.sim.scene.beacon
+                cam_canvas = self.sim.sensor._canvas_xy(self.sim.gimbal.pan, self.sim.gimbal.tilt)
+                b_u, b_v = self.sim.sensor._viewport_px(b.az_deg, b.el_deg, cam_canvas)
+            elif getattr(self, "video_mode", False):
+                b_u = res.get("detected_cx")
+                b_v = res.get("detected_cy")
+
+        cam_cu = float(getattr(self.sim, "cu", 320.0)) if getattr(self, "video_mode", False) else float(getattr(config, "PRINCIPAL_U", 320.0))
+        cam_cv = float(getattr(self.sim, "cv", 240.0)) if getattr(self, "video_mode", False) else float(getattr(config, "PRINCIPAL_V", 240.0))
+
+        dist_px = math.hypot(b_u - cam_cu, b_v - cam_cv) if (b_u is not None and b_v is not None) else res.get("boresight_error_px")
+        if dist_px is None and getattr(self, "video_mode", False):
+            dist_px = res.get("optical_offset_px")
+
+        is_aligned = (dist_px is not None and dist_px <= 15.0)
+        is_spec_pass = (dist_px is not None and dist_px < 10.0)
+        is_optically_locked = (st in LOCKED_STATES and is_aligned)
+
         def to_screen(u, v):
             return (dest.x + int(u * sc), dest.y + int(v * sc))
 
@@ -1143,8 +1202,7 @@ class App:
         bp = self._est_pixel(self.sim.gimbal.pan, self.sim.gimbal.tilt)
         if bp is not None:
             bx, by = to_screen(bp[0], bp[1])
-            is_locked = (st in LOCKED_STATES)
-            rc = (0, 255, 136) if is_locked else (50, 120, 180)
+            rc = (0, 255, 136) if is_optically_locked else (50, 120, 180)
             ret_r = int(18 * sc)
             
             # Sleek open reticle ring
@@ -1171,7 +1229,7 @@ class App:
                 pygame.draw.circle(surf, (0, 230, 255), arr_tip, 3)
                 T.text(surf, (arr_tip[0] + 6, arr_tip[1] - 6), f"SLEW {slew_spd:.2f}°/s", 10, (0, 230, 255), bold=True)
 
-            axis_lbl = "BORESIGHT [CO-ALIGNED]" if is_locked else "OPTICAL AXIS (0,0)"
+            axis_lbl = "BORESIGHT [CO-ALIGNED]" if is_optically_locked else "OPTICAL AXIS (0,0)"
             T.text(surf, (bx, by + ret_r + 5), axis_lbl, 9.5, rc, bold=True, anchor="tc")
 
         # ── 2b. Azimuth Heading Tape (Top of camera view) ──
@@ -1197,19 +1255,10 @@ class App:
         T.text(surf, (tape_rect.right + 8, tape_rect.centery), f"PAN {cur_pan:+.2f}°", 10.5, T.C.CYAN_ELEC, bold=True, anchor="lc")
 
         # ── 3. Target Beacon Reticle & Tactical Card ──
-        b_u, b_v = None, None
-        assoc = self.sim.tracker.associated
-        if assoc is not None:
-            b_u, b_v = assoc.u, assoc.v
-        elif res.get("beacon_visible", False):
-            b = self.sim.scene.beacon
-            cam_canvas = self.sim.sensor._canvas_xy(self.sim.gimbal.pan, self.sim.gimbal.tilt)
-            b_u, b_v = self.sim.sensor._viewport_px(b.az_deg, b.el_deg, cam_canvas)
-
         if b_u is not None and 0 <= b_u < 640 and 0 <= b_v < 480:
             tx, ty = to_screen(b_u, b_v)
             degraded = (st == "DEGRADED_LOCK")
-            target_col = T.C.AMBER if degraded else (T.C.GREEN if st in LOCKED_STATES else T.C.CYAN_ELEC)
+            target_col = T.C.AMBER if degraded else (T.C.GREEN if is_optically_locked else T.C.CYAN_ELEC)
             p = T.pulse(2.0)
             target_r = int((22 + 3 * p) * sc)
             arm = int(8 * sc)
@@ -1224,11 +1273,7 @@ class App:
             # Outer guide ring
             pygame.draw.circle(surf, tuple(c // 3 for c in target_col), (tx, ty), target_r + 6, 1)
 
-            # Check alignment with boresight
-            dist_px = math.hypot(b_u - 320, b_v - 240)
-            is_aligned = (dist_px < 10.0)  # ISRO < 10 px spec!
-
-            if is_aligned and st in LOCKED_STATES:
+            if is_optically_locked:
                 pygame.draw.circle(surf, T.C.GREEN, (tx, ty), target_r + int(10 * p), 1)
 
             # Leader Line to Tactical Target Card
@@ -1256,7 +1301,7 @@ class App:
 
             # Tactical HUD Card
             card_rect = pygame.Rect(card_x, card_y, card_w, card_h)
-            card_bg = (4, 18, 14, 235) if not degraded else (26, 18, 6, 235)
+            card_bg = (4, 18, 14, 235) if is_optically_locked else ((26, 18, 6, 235) if degraded else (6, 18, 28, 235))
             bg_surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
             bg_surf.fill(card_bg)
             surf.blit(bg_surf, card_rect.topleft)
@@ -1264,13 +1309,14 @@ class App:
             pygame.draw.rect(surf, target_col, (card_x, card_y, 4, card_h), border_top_left_radius=4, border_bottom_left_radius=4)
 
             # Card text
-            tag_title = "[TARGET BEACON] · 15 Hz FSOC"
+            tag_title = "[TARGET BEACON] · LOCKED" if is_optically_locked else ("[TARGET BEACON] · ALIGNING" if not getattr(self, "video_mode", False) else "[TARGET BEACON] · VIDEO INPUT")
             T.text(surf, (card_x + 10, card_y + 5), tag_title, 11, target_col, bold=True)
             err_mdeg = res.get("pointing_err_deg", 0.0) * 1000.0
-            err_str = f"RESIDUAL: {dist_px:.1f} px ({err_mdeg:.1f} mdeg)"
-            pass_str = "PASS < 10 px" if is_aligned else "ALIGNING..."
+            dist_val = dist_px if dist_px is not None else 0.0
+            err_str = f"RESIDUAL: {dist_val:.1f} px ({err_mdeg:.1f} mdeg)"
+            pass_str = "PASS < 10 px" if is_spec_pass else ("ALIGNING..." if not getattr(self, "video_mode", False) else f"OFFSET {dist_val:.1f} px")
             T.text(surf, (card_x + 10, card_y + 21), err_str, 10.5, T.C.TEXT, bold=True, mono=True)
-            T.text(surf, (card_x + 10, card_y + 36), f"ISRO SPEC: {pass_str} · CONF: {int(res.get('confidence',0)*100)}%", 10, T.C.GREEN if is_aligned else T.C.AMBER, bold=True)
+            T.text(surf, (card_x + 10, card_y + 36), f"ISRO SPEC: {pass_str} · CONF: {int(res.get('confidence',0)*100)}%", 10, T.C.GREEN if is_spec_pass else T.C.AMBER, bold=True)
 
         # ── 4. Distractor Decoys (AI Discrimination Showcase) ──
         if hasattr(self.sim, "sensor"):
@@ -1372,8 +1418,8 @@ class App:
         
         err_deg = res.get("pointing_err_deg", 999.0)
         err_px = err_deg * (config.FOCAL_PX / (180.0 / math.pi))
-        is_spec_pass = (err_px < 10.0 and st in LOCKED_STATES)
-        pass_txt = "[ PASS ]" if is_spec_pass else "[ ALIGNING ]"
+        is_spec_pass = (err_px < 10.0 and is_optically_locked)
+        pass_txt = "[ PASS ]" if is_spec_pass else ("[ ALIGNING ]" if not getattr(self, "video_mode", False) else "[ TRACKING ]")
         pass_col = T.C.GREEN if is_spec_pass else T.C.AMBER
 
         s_surf = pygame.Surface((spec_w, spec_h), pygame.SRCALPHA)
@@ -1484,14 +1530,31 @@ class App:
         panel_rect = pygame.Rect(graph_rect.right + 8, rem_y, panel_w, rem_h)
         self._draw_camera_panel(surf, panel_rect)
 
-    # ---------------------------------------------------------------- PAT pipeline
     def _draw_pat_stepper(self, surf, box):
         res  = self.sim.last_result
         st   = res["state"]
+        boresight_err = res.get("boresight_error_px")
+        if boresight_err is None and getattr(self, "video_mode", False):
+            boresight_err = res.get("optical_offset_px")
+        is_aligned = (boresight_err is not None and boresight_err <= 15.0)
+        is_opt_lock = (st in LOCKED_STATES and is_aligned)
+
         steps = ["PREDICT", "POINT", "SEARCH", "ACQUIRE", "LOCK"]
-        idx  = {"SEARCHING": 2, "REACQUIRING": 2, "COASTING": 3,
-                "TENTATIVE": 3, "LOCKED": 4, "DEGRADED_LOCK": 4}.get(st, 0)
-        act_col = T.C.STATE.get(st, T.C.CYAN)
+        if is_opt_lock:
+            idx = 4
+            act_col = T.C.GREEN
+        elif st in LOCKED_STATES or st == "DEGRADED_LOCK":
+            idx = 3
+            act_col = T.C.CYAN_ELEC
+        elif st in ("TENTATIVE", "COASTING", "CANDIDATE", "ACQUIRING"):
+            idx = 3
+            act_col = T.C.CYAN
+        elif st in ("SEARCHING", "REACQUIRING"):
+            idx = 2
+            act_col = T.C.AMBER if st == "SEARCHING" else T.C.PURPLE
+        else:
+            idx = 0
+            act_col = T.C.CYAN
 
         pygame.draw.rect(surf, T.C.PANEL_2, box)
         pygame.draw.rect(surf, T.C.BORDER,  box, 1)
@@ -1732,8 +1795,25 @@ class App:
         x, y, w, h = self.PNL_INN, self.pnl_state_y, self.PNL_IW, self.pnl_state_h
         res  = self.sim.last_result
         st   = res.get("state", "SEARCHING")
-        col  = T.C.STATE.get(st, T.C.CYAN)
-        fill = T.C.STATE_FILL.get(st, (0, 30, 50))
+        boresight_err = res.get("boresight_error_px")
+        if boresight_err is None and getattr(self, "video_mode", False):
+            boresight_err = res.get("optical_offset_px")
+        is_aligned = (boresight_err is not None and boresight_err <= 15.0)
+        is_opt_lock = (st in LOCKED_STATES and is_aligned)
+
+        if is_opt_lock:
+            disp_st = "LOCKED"
+            col = T.C.GREEN
+            fill = (4, 30, 18)
+        elif st in LOCKED_STATES:
+            disp_st = "TRACKING" if getattr(self, "video_mode", False) else "ALIGNING"
+            col = T.C.CYAN_ELEC
+            fill = (6, 26, 40)
+        else:
+            disp_st = st
+            col = T.C.STATE.get(st, T.C.CYAN)
+            fill = T.C.STATE_FILL.get(st, (0, 30, 50))
+
         r    = pygame.Rect(x, y, w, h)
         T.card(surf, r, fill=fill, border=col)
         pygame.draw.rect(surf, col, (x, y, 4, h))
@@ -1741,8 +1821,8 @@ class App:
         # Title
         T.text(surf, (x + 14, y + 8), "OPTICAL TRACKING STATE", 11, T.C.TEXT_DIM, bold=True)
         # Big state name
-        fs = 20 if len(st) <= 8 else 16
-        T.text(surf, (x + 14, y + 26), st, fs, col, bold=True)
+        fs = 20 if len(disp_st) <= 8 else 16
+        T.text(surf, (x + 14, y + 26), disp_st, fs, col, bold=True)
 
         # Confidence arc gauge on right
         conf = res.get("confidence", 0.0)
@@ -1802,7 +1882,11 @@ class App:
         T.text(surf, (err_r.x + 10, err_r.y + 4), "POINTING ERROR", 11, T.C.TEXT_DIM, bold=True)
         err_mdeg = err * 1000.0
         T.text(surf, (err_r.x + 10, err_r.y + 18), f"{err_mdeg:5.1f} mdeg", 18, ec, bold=True, mono=True)
-        pt_status = "LOCKED" if err < config.FINE_ACQUISITION_REGION_DEG else "COARSE"
+        boresight_err = res.get("boresight_error_px")
+        if boresight_err is None and getattr(self, "video_mode", False):
+            boresight_err = res.get("optical_offset_px")
+        is_aligned = (boresight_err is not None and boresight_err <= 15.0)
+        pt_status = "LOCKED" if (err < config.FINE_ACQUISITION_REGION_DEG and is_aligned) else ("ALIGNING" if not getattr(self, "video_mode", False) else "TRACKING")
         T.text(surf, (err_r.right - 10, err_r.centery), pt_status, 12, ec, bold=True, anchor="rc")
 
         # KPI Trio
@@ -1939,9 +2023,15 @@ class App:
         res = self.sim.last_result
         err_deg = res.get("pointing_err_deg", 0.0)
         err_px = err_deg * (config.FOCAL_PX / (180.0 / math.pi))
-        cur_shape = getattr(self.sim.scene.beacon, "shape", getattr(config, "TARGET_SHAPE", "SQUARE"))
-        cur_motion = getattr(self.sim.scene.orbit, "motion_type", "FIGURE_EIGHT")
-        is_spec_pass = (err_px < 10.0 and res.get("state") in LOCKED_STATES)
+        cur_shape = getattr(getattr(self.sim, "scene", None), "beacon", None)
+        cur_shape = getattr(cur_shape, "shape", getattr(config, "TARGET_SHAPE", "SQUARE")) if cur_shape else "SQUARE"
+        cur_motion = getattr(getattr(self.sim, "scene", None), "orbit", None)
+        cur_motion = getattr(cur_motion, "motion_type", "FIGURE_EIGHT") if cur_motion else "FIGURE_EIGHT"
+        boresight_err = res.get("boresight_error_px")
+        if boresight_err is None and getattr(self, "video_mode", False):
+            boresight_err = res.get("optical_offset_px")
+        is_aligned = (boresight_err is not None and boresight_err <= 15.0)
+        is_spec_pass = (err_px < 10.0 and res.get("state") in LOCKED_STATES and is_aligned)
 
         clauses = [
             ("Clause 1: 2000×2000 Screen Canvas", "Min 2000×2000 px, camera origin at centre", "2000×2000 Canvas · Centre (1000, 1000) · 160 px/°", "PASS [OK]", T.C.GREEN),

@@ -69,11 +69,14 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
       return;
     }
 
-    const st = telemetry.state;
-    const isLocked = st === "LOCKED";
-    const stateCol = st === "LOCKED" ? "#00ff88"
+    const rawSt = telemetry.state;
+    const isAligned = telemetry.is_aligned ?? (telemetry.boresight_error_px != null ? telemetry.boresight_error_px <= 15.0 : (telemetry.pointing_err_deg * 160 <= 15.0));
+    const isOpticallyLocked = (rawSt === "LOCKED") && isAligned;
+    const st = isOpticallyLocked ? "LOCKED" : (rawSt === "LOCKED" ? "ALIGNING" : rawSt);
+    const isLocked = isOpticallyLocked;
+    const stateCol = isOpticallyLocked ? "#00ff88"
       : st === "DEGRADED_LOCK" ? "#eab308"
-      : st === "ACQUIRING" || st === "CANDIDATE" ? "#00d4ff"
+      : st === "ALIGNING" || st === "TRACKING" || st === "ACQUIRING" || st === "CANDIDATE" ? "#00d4ff"
       : st === "COASTING" ? "#38bdf8"
       : st === "REACQUIRING" ? "#a855f7"
       : st === "LOST" ? "#ef4444"
@@ -81,7 +84,7 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
       : "#64748b";
 
     // 2. Optical Boresight (Camera Center LOS)
-    const boresightCol = isLocked ? "#00ff88" : "#3b82f6";
+    const boresightCol = isOpticallyLocked ? "#00ff88" : "#3b82f6";
     const br = 20;
 
     ctx.strokeStyle = boresightCol;
@@ -225,7 +228,7 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
         ctx.fillRect(cardX, cardY, 150, 52);
         ctx.strokeRect(cardX, cardY, 150, 52);
 
-        const isAligned = telemetry.pointing_err_deg * 160 < 10;
+        const isPass = (telemetry.pointing_err_deg * 160 < 10) && isOpticallyLocked;
         ctx.fillStyle = stateCol;
         ctx.font = "bold 10px 'DM Mono', monospace";
         ctx.textAlign = "left";
@@ -235,9 +238,9 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
         ctx.font = "9px 'DM Mono', monospace";
         ctx.fillText(`LOS: ${telemetry.truth_az.toFixed(2)}°, ${telemetry.truth_el.toFixed(2)}°`, cardX + 8, cardY + 28);
 
-        ctx.fillStyle = isAligned ? "#00ff88" : "#f59e0b";
+        ctx.fillStyle = isPass ? "#00ff88" : "#f59e0b";
         ctx.font = "bold 9.5px 'DM Mono', monospace";
-        ctx.fillText(`RESIDUAL: ${(telemetry.pointing_err_deg * 160).toFixed(1)} px (${isAligned ? "PASS" : "ALIGNING"})`, cardX + 8, cardY + 42);
+        ctx.fillText(`RESIDUAL: ${(telemetry.pointing_err_deg * 160).toFixed(1)} px (${isPass ? "PASS" : "ALIGNING"})`, cardX + 8, cardY + 42);
       }
     }
 
@@ -259,8 +262,10 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
     });
   }, [telemetry, connected]);
 
-  const st = telemetry?.state ?? "SEARCHING";
-  const isLocked = st === "LOCKED" || st === "DEGRADED_LOCK";
+  const rawSt = telemetry?.state ?? "SEARCHING";
+  const isAligned = telemetry?.is_aligned ?? (telemetry?.boresight_error_px != null ? telemetry.boresight_error_px <= 15.0 : (telemetry ? telemetry.pointing_err_deg * 160 <= 15.0 : false));
+  const isOpticallyLocked = (rawSt === "LOCKED") && isAligned;
+  const displaySt = isOpticallyLocked ? "LOCKED" : (rawSt === "LOCKED" ? "ALIGNING" : rawSt);
   const confPct = telemetry ? Math.round(telemetry.confidence * 100) : 0;
   const candidates = telemetry?.candidates_detail || [];
 
@@ -269,9 +274,9 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
       {/* Top Overlay Strip */}
       <div className="absolute top-2 left-3 right-3 flex justify-between items-center z-10 pointer-events-none">
         <div className="flex items-center gap-2 bg-[#060e1a]/90 border border-[var(--border-dim)] px-2.5 py-1 rounded pointer-events-auto">
-          <span className="w-2 h-2 rounded-full" style={{ background: connected ? (isLocked ? "#00ff88" : "#00d4ff") : "#ff2d55" }} />
+          <span className="w-2 h-2 rounded-full" style={{ background: connected ? (isOpticallyLocked ? "#00ff88" : (displaySt === "ALIGNING" ? "#00d4ff" : "#ff8c00")) : "#ff2d55" }} />
           <span className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">
-            {connected ? st : "DISCONNECTED"}
+            {connected ? displaySt : "DISCONNECTED"}
           </span>
           {connected && (
             <span className="font-mono text-xs text-cyan-400 border-l border-slate-700 pl-2">

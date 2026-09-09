@@ -241,6 +241,8 @@ DEGRADED_ENTER_CONF = 0.55      # confidence to enter DEGRADED_LOCK from reacqui
 LOCK_HOLD_MIN_CONF = 0.45       # confidence floor to retain lock before dropping to COASTING (hysteresis)
 LOCK_MAX_UNCERTAINTY_PX = 14.0  # uncertainty must be <= this for full LOCKED
 LOCK_MAX_RESIDUAL_PX = 18.0     # observation-prediction residual must be <= this for full LOCKED
+LOCK_MAX_BORESIGHT_PX = 15.0    # target centroid offset from boresight must be <= this to achieve LOCKED
+LOCK_HOLD_MAX_BORESIGHT_PX = 20.0 # boresight offset must remain <= this to retain LOCKED (hysteresis)
 LOST_TIMEOUT_S = 0.35           # duration to hold LOST before resetting to SEARCHING
 
 ASSOC_UNCERTAINTY_FACTOR = 0.5       # gate grows with internal sigma (px)
