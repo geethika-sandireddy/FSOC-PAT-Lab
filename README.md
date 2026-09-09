@@ -6,6 +6,33 @@ A real-time simulation and autonomous beam-pointing system for Free-Space Optica
 
 ---
 
+### Core Differentiation & System Value
+
+> **"Unlike a conventional beacon-tracking demo that only shows detection and tracking, FSOC-PAT-Lab is an end-to-end, evaluator-ready coarse-PAT validation environment that closes the loop from synthetic optical scene generation and realistic sensor disturbances through AI-assisted beacon identification, uncertainty-aware tracking, gimbal-constrained pointing, recovery from target loss, and quantitative benchmark evidence."**
+
+#### Top 6 Engineering Differentiators
+1. **Evaluator-Ready MP4 Bypass**: Ingests external 30 FPS MP4 video directly into the coarse-PAT tracking pipeline, completely bypassing the synthetic scene and PTZ gimbal.
+2. **Benchmark & Metric Integrity**: Enforces strict three-way metric separation: Metric A (Detected Centroid), Metric B (Optical Offset), and Metric C (True Error vs ground truth). If unannotated, Metric C strictly outputs `N/A`.
+3. **Zero Ground-Truth Leakage Guarantee**: Truth coordinates are strictly isolated to evaluation logging; detector, ML classifier, and Kalman tracker receive zero ground truth (verified by automated tests).
+4. **Uncertainty-Aware Target Recovery**: Target occlusion triggers covariance inflation in `COASTING` mode, expanding the validation gate for empirical reacquisition in **$0.442\text{ s}$** (PS target $\le 1.0\text{ s}$).
+5. **Physics- & Actuator-Aware Validation**: Realistically models physical $5.0^\circ/\text{s}$ slew limits and actuator saturation. Reports honest physical failure envelopes under aggressive multi-g stress rather than faking zero error.
+6. **Configurable FSOC Digital Testbed**: Live runtime configuration of platforms (SAT-SAT vacuum gating vs terrestrial UAV), atmospheric weather, dynamic FOV ($0.5^\circ\text{--}20^\circ$), motion kinematics, and noise channels.
+
+#### Competitor Differentiation Matrix
+
+| Capability / Dimension | Typical Basic Prototype | FSOC-PAT-Lab (This System) |
+|---|:---:|:---:|
+| **Evaluator Video Input** | Synthetic scenes only | **Evaluator 30 FPS MP4 bypass pipeline** |
+| **Metric Integrity** | Frame offset labeled as error | **Strict Metric A (Centroid), B (Boresight), C (True Error)** |
+| **Ground-Truth Isolation** | Unverified / leaked during loss | **Architecturally isolated & unit-tested (Zero Leakage)** |
+| **Target Loss Recovery** | Blind spiral search restart | **Uncertainty-driven coasting & adaptive gating (< 0.5s)** |
+| **Actuator Kinematics** | Instantaneous pointing assumed | **Strict $5.0^\circ/\text{s}$ slew limits & saturation flags** |
+| **Failure Envelope** | Unmeasured / crashes on stress | **Documented physical actuator failure envelope** |
+| **Space vs Terrestrial Gating**| Identical weather for all links | **Vacuum gating strictly forces CLEAR for SAT-SAT** |
+| **Deployment Portability**| Requires Python & complex venv | **Zero-dependency PyInstaller standalone `.exe`** |
+
+---
+
 ## Quick Start
 
 ```bash

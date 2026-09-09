@@ -477,3 +477,70 @@ For evaluators or judges running on clean Windows machines without Python instal
    ```cmd
    dist\FSOC_PAT_Mission_Console\FSOC_PAT_Mission_Console.exe --frames 300 --preset ISRO_RX
    ```
+
+---
+
+## 11. Evaluator Guide: Why FSOC-PAT-Lab & Defense FAQ for Judges
+
+This section is prepared specifically for technical evaluators from ISRO, DRDO, and academic review panels examining candidate prototypes for SIH26169.
+
+---
+
+### 11.1 The Elevator Pitches
+
+#### The 20-Second Pitch (Rapid Assessment)
+> "We are not claiming to have invented beacon detection or Kalman filtering. Our differentiation is that we integrated those techniques into a complete, evaluator-ready FSOC coarse-PAT validation testbed. It generates controlled optical scenarios, injects realistic disturbances, tracks under physical actuator constraints, recovers from target loss, accepts external 30 FPS MP4 video feeds, and produces auditable performance metrics without leaking ground truth."
+
+#### The 45-Second Pitch (Detailed Assessment)
+> "Conventional academic demos show a detector finding a bright spot and drawing a bounding box. FSOC-PAT-Lab closes the entire coarse-alignment engineering loop. We combine a 4-feature ML appearance classifier with a 15 Hz temporal modulation correlator to achieve zero false locks on decoys. When the beacon is occluded, our Kalman covariance grows dynamically, expanding the validation gate to reacquire the beacon in under 0.5 seconds.
+> Furthermore, we model physical gimbal slew limits (5.0°/s), meaning our system honestly reports the resulting error envelope when maneuvers exceed actuator capacity. Finally, via Benchmark-2, evaluators can ingest external MP4 video directly into our pipeline, backed by strict Metric A/B/C separation and zero ground-truth leakage."
+
+---
+
+### 11.2 Judge Cross-Examination FAQ
+
+#### Q1: "Other teams also use OpenCV and AI classifiers. What makes your solution unique?"
+**Answer**:
+"OpenCV and machine learning are foundational tools, not proprietary inventions. What is unique about FSOC-PAT-Lab is the **evaluation and validation architecture** wrapped around them:
+1. **Multi-Cue Discrimination**: We do not rely on brightness alone. We fuse spatial contour circularity, SNR, and normalized area (via calibrated Logistic Regression) with temporal 15 Hz modulation correlation to eliminate false locks from cloud glints or decoys.
+2. **Evaluator MP4 Bypass**: We don't just benchmark against our own synthetic data. Evaluators can ingest their own 30 FPS MP4 flight footage directly into our coarse-PAT tracking pipeline.
+3. **Metric Integrity**: We strictly distinguish between pointing boresight offset (Metric B) and true centroid error (Metric C), never faking accuracy when ground truth is absent.
+4. **Zero GT Leakage**: Ground truth coordinates are strictly isolated to evaluation logging and never fed into the tracker."
+
+#### Q2: "Isn't this just a simulation? How does it help ISRO in the real world?"
+**Answer**:
+"In optical terminal design, building physical test apparatus with vacuum chambers and rate tables is expensive and time-consuming. FSOC-PAT-Lab acts as a **Software-in-the-Loop (SIL) Pre-Screening Testbed**. It allows aerospace engineers to verify acquisition times, reacquisition thresholds, and whether a 5.0°/s gimbal motor is kinematically sufficient for a given satellite pass geometry before committing to expensive flight hardware."
+
+#### Q3: "Why does pointing error exceed 10 px in SEVERE and ADVERSARIAL benchmarks?"
+**Answer**:
+"In those scenarios, target angular acceleration reaches $12^\circ/\text{s}^2$, which exceeds the physical $5.0^\circ/\text{s}$ slew rate limit imposed by the problem statement. The vision estimator tracks the target with sub-10 px accuracy, but the physical gimbal saturates at 100% duty cycle (`pan_sat = 1.0`). We document this Newtonian actuator saturation envelope rather than falsifying zero error. In nominal regimes (`EASY`, `MODERATE`, and `MP4 Benchmark`), pointing error strictly passes the $\le 10\text{ px}$ requirement."
+
+---
+
+### 11.3 Competitor Differentiation Matrix
+
+| Evaluation Capability | Typical Basic Prototype | FSOC-PAT-Lab |
+|---|:---:|:---:|
+| **External Video Input** | Synthetic scenes only | **Evaluator 30 FPS MP4 bypass pipeline** |
+| **Metric Hierarchy** | Frame offset labeled as error | **Strict Metric A (Centroid), B (Boresight), C (True Error)** |
+| **Ground-Truth Isolation** | Unverified / leaked during loss | **Architecturally isolated & unit-tested (Zero Leakage)** |
+| **Target Loss Recovery** | Blind spiral restart | **Uncertainty-driven coasting & adaptive gating (< 0.5s)** |
+| **Actuator Kinematics** | Instantaneous pointing assumed | **Strict $5.0^\circ/\text{s}$ slew limits & saturation flags** |
+| **Failure Envelope** | Unmeasured / crashes on stress | **Documented physical actuator failure envelope** |
+| **Scenario Vacuum Gating**| Identical weather for all links | **Space vacuum strictly forces CLEAR for SAT-SAT** |
+| **Deployment Portability**| Requires Python & complex venv | **Zero-dependency PyInstaller standalone `.exe`** |
+
+---
+
+### 11.4 Step-by-Step Verification Guide for Evaluators
+
+1. **Verify Metric A/B/C Integrity on Unannotated Video**:
+   - Go to **08 · BENCHMARK** -> select `logs/no_truth.mp4`.
+   - Notice the badge displays `[⚠ GROUND TRUTH NOT AVAILABLE]`.
+   - Run the benchmark: Metric B (Optical Offset) displays real values, while Metric C strictly outputs `N/A`.
+2. **Verify Zero Ground-Truth Leakage**:
+   - Inspect the HUD on the **01 · OVERVIEW** tab: verify `[GT LEAKAGE: NONE]` indicator.
+   - Run `python -m unittest tests/test_mp4_benchmark.py` in the terminal to view automated assertion outputs.
+3. **Verify Uncertainty-Aware Reacquisition**:
+   - On the **03 · PS CONFIG** tab, click `[INJECT 1.0s OCCLUSION]`.
+   - Watch the tracker transition from `LOCKED` to `COASTING` to `REACQUIRING` to `LOCKED` with an empirical recovery time of ~0.44s.

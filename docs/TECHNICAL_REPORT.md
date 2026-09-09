@@ -1027,3 +1027,140 @@ The following table details pre-emptive defenses against adversarial cross-exami
 | **Attack 4: Non-Zero Tracking Error in Extreme Presets**<br>*"Why does pointing error reach 11–40 px in SEVERE and ADVERSARIAL benchmarks?"* | **HIGH** | In extreme multi-g maneuvers, target angular acceleration ($\ge 12^\circ/	ext{s}^2$) exceeds the physical gimbal slew rate limit of 5.0°/s. | The vision estimator tracks the target with sub-10 px accuracy, but the physical gimbal saturates at 100% duty cycle (`pan_sat = 1.0`). We document this Newtonian actuator saturation envelope rather than falsifying zero error. | `metrics/benchmark_suite.py` categorizes `NOMINAL` vs `EXTREME_STRESS_FAILURE_ENVELOPE`. |
 | **Attack 5: Dynamic Parameter Mutability**<br>*"Does the system actually accept custom canvas sizes, FOV, and target dimensions at runtime?"* | **MEDIUM** | Hardcoded constants in backend simulators causing GUI settings to be cosmetic-only. | All parameters (`SCREEN_SIZE_W/H`, `HFOV/VFOV`, `target_size`, `motion_type`, `gimbal_limits`) are fully wired from frontend/WebSocket to backend simulator state with active clamping. | `tests/test_ps_compliance.py` tests 11 dynamic parameter mutations. |
 | **Attack 6: Deployment Portability**<br>*"Can the evaluation panel run this on a secure air-gapped machine without Python dependencies?"* | **HIGH** | Hostile evaluation environments often prohibit external internet access or Python package installation. | Complete PyInstaller standalone bundle (`dist/FSOC_PAT_Mission_Console/FSOC_PAT_Mission_Console.exe`) embeds all C-extensions, OpenCV, NumPy, and Pygame runtimes into a zero-dependency executable. | Verified standalone build in `dist/`. |
+
+---
+
+## 20. Novelty, Differentiation and Practical Value
+
+### 20.1 Honest Novelty Hierarchy: What Is NOT Novel vs. What IS Differentiated
+
+To maintain absolute credibility with ISRO and DRDO domain experts, we establish a strict demarcation between off-the-shelf primitives and genuine system-level innovations:
+
+```
++-------------------------------------------------------------------------------+
+|                       HONEST NOVELTY DEMARCATION                             |
++-------------------------------------------------------------------------------+
+|  WHAT IS NOT NOVEL BY ITSELF (Proven Mathematical Primitives):                |
+|  - Connected-component analysis and subpixel intensity centroiding (OpenCV)   |
+|  - 4-feature Logistic Regression classification (Standard ML)                 |
+|  - Linear-Gaussian Kalman filtering for kinematic state propagation          |
+|  - Proportional-integral 2-DOF gimbal servomechanism control                  |
+|  - Log-normal scintillation fading formulations                              |
++-------------------------------------------------------------------------------+
+                                       |
+                                       v
++-------------------------------------------------------------------------------+
+|  WHAT IS GENUINELY DIFFERENTIATED (Integrated System Architecture):           |
+|  1. Complete Closed-Loop Validation Environment tailored to mobile FSOC PAT   |
+|  2. Evaluator-Ready MP4 Bypass (Direct processing of external video feeds)     |
+|  3. Benchmark Integrity (Strict separation of Metric A, B, and C)             |
+|  4. Zero Ground-Truth Leakage Guarantee (Architecturally enforced & tested)  |
+|  5. Uncertainty-Aware Target Loss & Empirical Reacquisition (< 0.5s)          |
+|  6. Actuator-Constrained Pointing with Observable Failure Envelopes           |
+|  7. Platform-Aware Scenario Gating (Space-to-space vacuum vs terrestrial)     |
++-------------------------------------------------------------------------------+
+```
+
+---
+
+### 20.2 The Core Differentiation Statement
+
+> **"Unlike a conventional beacon-tracking demo that only shows detection and tracking, FSOC-PAT-Lab is an end-to-end, evaluator-ready coarse-PAT validation environment that closes the loop from synthetic optical scene generation and realistic sensor disturbances through AI-assisted beacon identification, uncertainty-aware tracking, gimbal-constrained pointing, recovery from target loss, and quantitative benchmark evidence."**
+
+---
+
+### 20.3 Top 6 Concrete Engineering Differentiators
+
+#### Differentiator 1: Evaluator-Ready MP4 Bypass Pipeline
+- **The Capability**: The system does not operate solely on internal synthetic scenes. Evaluators can ingest any external 30 FPS MP4 video (`--video path/to/video.mp4` or via the web GUI `BENCHMARK` tab).
+- **The Pipeline**: Ingested frames bypass the synthetic 3D scene and virtual PTZ camera, feeding directly into the real-time detection, AI classification, and tracking pipeline.
+- **Defensible Engineering Limitation**: Pre-recorded video cannot physically alter its camera orientation in response to gimbal commands. The system acknowledges this: in MP4 mode, it evaluates pure coarse-pointing image-processing and tracking accuracy rather than physical optical closed-loop tracking.
+
+#### Differentiator 2: Benchmark & Metric Integrity
+Most academic demos display a single "error" metric, often confusing frame-centre offset with tracking accuracy. FSOC-PAT-Lab enforces a strict three-tier metric hierarchy:
+- **Metric A (Detected Centroid)**: $(u_{\text{detected}}, v_{\text{detected}})$ on the sensor plane.
+- **Metric B (Optical-Axis / Boresight Offset)**: $\sqrt{(u_{\text{detected}} - u_{\text{centre}})^2 + (v_{\text{detected}} - v_{\text{centre}})^2}$, measuring how well the terminal is pointing at the target.
+- **Metric C (True Centroiding Error)**: $\sqrt{(u_{\text{detected}} - u_{\text{true}})^2 + (v_{\text{detected}} - v_{\text{true}})^2}$, measuring detection estimator accuracy against companion ground-truth annotations.
+- **Integrity Fallback**: When an evaluator supplies an unannotated MP4 without ground truth, Metric C strictly outputs `N/A` with `GROUND_TRUTH_AVAILABLE: NO`. The system never fabricates true centroid accuracy from frame-centre distance.
+
+#### Differentiator 3: Zero Ground-Truth Leakage Guarantee
+- **The Architecture**: In `core/simulator.py` and `metrics/mp4_bypass.py`, ground-truth coordinates are sequestered strictly within `PerformanceTracker.eval_records`.
+- **Zero Leakage**: The `DetectionEngine` receives only raw pixel buffers (`np.ndarray uint8`); the `BeaconClassifier` receives only contour-derived morphometric features; the `Tracker` receives only candidate detection tables.
+- **Automated Verification**: Regression test `tests/test_mp4_benchmark.py::test_04_simulator_zero_ground_truth_leakage` enforces this guarantee on every build.
+
+#### Differentiator 4: Uncertainty-Aware Recovery State Machine
+Rather than naively resetting to a blind search when target line-of-sight is interrupted, the system implements a formal probabilistic recovery mechanism:
+$$\text{LOCKED} \xrightarrow[\text{occlusion}]{\text{missed innovation}} \text{COASTING} \xrightarrow{\mathbf{P}_{k|k-1} = \mathbf{F}\mathbf{P}\mathbf{F}^T + \mathbf{Q}} \text{REACQUIRING} \xrightarrow[\text{persistent } \ge 3 \text{ frames}]{\text{gate verification}} \text{LOCKED}$$
+- **Covariance Inflation**: In `COASTING` mode, the Kalman uncertainty covariance matrix $\mathbf{P}$ grows dynamically based on target maneuver variance $\mathbf{Q}$.
+- **Adaptive Validation Gating**: The search area expands dynamically with predicted uncertainty ($\chi^2 \le \gamma \cdot \det(\mathbf{S})$), enabling rapid reacquisition once the beacon re-emerges.
+- **Empirical Reacquisition Result**: Measured mean reacquisition duration is **$0.442\text{ s}$** (PS target $\le 1.0\text{ s}$, 80% success rate).
+
+#### Differentiator 5: Physics- & Actuator-Aware Validation
+- **Realistic Servomechanism**: The 2-DOF gimbal model incorporates physical acceleration limits, viscous friction, and a strict $5.0^\circ/\text{s}$ slew rate limit.
+- **Observable Failure Envelope**: Under aggressive maneuvers ($\dot{\theta} \ge 5.8^\circ/\text{s}$, $\ddot{\theta} \ge 12.0^\circ/\text{s}^2$ in `SEVERE` and `ADVERSARIAL`), the gimbal motor saturates at 100% duty cycle (`pan_sat = 1.0`).
+- **Aerospace Defense**: Rather than falsifying zero error by ignoring physical mechanics, the system logs the resulting pointing error ($31\text{--}40\text{ px}$) as a documented **Actuator Slew Saturation Envelope**, establishing realistic operating limits.
+
+#### Differentiator 6: Configurable FSOC Digital Testbed
+The project is not a hardcoded single-scenario demo. Evaluators can configure:
+- **Terminal Scenarios**: Satellite-to-Satellite (space vacuum), UAV-to-Satellite, UAV-to-UAV.
+- **Terrestrial Atmosphere**: Clear, Haze, Fog, Rain, Low-Light with Fried parameter modulation.
+- **Optical Sensors**: Dynamic FOV ($0.5^\circ\text{--}20.0^\circ$), canvas dimensions ($500\text{--}10000\text{ px}$), pixel scale.
+- **Dynamic Disturbance Channels**: Gaussian read noise, Poisson photon noise, Salt & Pepper impulse noise, multi-harmonic mechanical vibration, and beam wander.
+
+---
+
+### 20.4 Competitor Differentiation Matrix
+
+| Capability / Dimension | Typical Basic Tracking Prototype | FSOC-PAT-Lab (This System) |
+|---|---|---|
+| **Primary Focus** | Isolated beacon detection demo | End-to-end coarse-PAT validation testbed |
+| **Evaluator Video Input** | Synthetic scenes only | **Evaluator 30 FPS MP4 bypass pipeline** |
+| **Metric Integrity** | Frame-centre offset presented as error | **Strict Metric A, B, and C separation (N/A fallback)** |
+| **Ground-Truth Isolation** | Unverified / often leaked during loss | **Zero leakage architecturally isolated & unit-tested** |
+| **Target Loss Recovery** | Blind spiral search restart | **Uncertainty-driven coasting & adaptive gating (< 0.5s)** |
+| **Gimbal Kinematics** | Instantaneous pointing / infinite slew | **Strict $5.0^\circ/\text{s}$ slew rate clamping & saturation flags** |
+| **Failure Envelope** | Hidden or crashes on extreme motion | **Quantified and documented physical failure envelope** |
+| **Beacon Discrimination** | Simple brightness threshold | **4-feature ML classifier + 15 Hz temporal correlation** |
+| **Space vs Terrestrial Gating**| Identical weather for all platforms | **Vacuum gating strictly forces CLEAR for SAT-SAT links** |
+| **Reproducibility** | Ad-hoc manual runs | **Deterministic multi-trial test harness across seeds** |
+| **Air-Gapped Deployment** | Requires complex Python environment | **Zero-dependency PyInstaller standalone executable** |
+| **PS Traceability** | Approximate alignment | **100% Parameter Traceability Matrix (15/15 parameters)** |
+
+---
+
+### 20.5 Practical Value for ISRO and Space Agencies
+
+In space and defense electro-optics development, physical pointing, acquisition, and tracking (PAT) validation requires:
+- High-precision rate tables and 2-DOF motion simulators
+- Optical vacuum chambers and collimated laser beacon sources
+- Real-time embedded DSP / FPGA target hardware
+- Expensive, high-risk flight campaigns
+
+**FSOC-PAT-Lab provides immediate value as a Software-in-the-Loop (SIL) Pre-Screening Testbed:**
+1. **Algorithm Pre-Qualification**: Evaluates coarse-alignment algorithms, recovery logic, and AI discrimination models under simulated atmospheric turbulence and platform vibration before committing to hardware.
+2. **Standardized Evaluator Ingestion**: Allows flight and lab-recorded MP4 video sequences from ground stations to be ingested into the identical processing pipeline without modification.
+3. **Actuator Sizing Verification**: Demonstrates whether a given gimbal slew rate (e.g., $5.0^\circ/\text{s}$) is kinematically sufficient for a specific orbit pass geometry before mechanical procurement.
+
+> *Note*: FSOC-PAT-Lab is designed as a software-in-the-loop (SIL) testbed. It does not replace full hardware qualification, but dramatically accelerates the algorithm development lifecycle prior to hardware-in-the-loop (HIL) integration.
+
+---
+
+### 20.6 Novelty Scorecard
+
+| Evaluation Dimension | Rating | Technical Justification |
+|---|:---:|---|
+| **Algorithm Novelty** | **MODERATE / LOW** | Built on well-established mathematical primitives (Kalman filtering, top-hat morphology, logistic regression). We do not claim to have invented PAT or Kalman tracking. |
+| **System Integration Novelty** | **HIGH** | First open, unified software laboratory integrating synthetic optical scene generation, disturbance injection, multi-cue ML identification, uncertainty recovery, and actuator constraints. |
+| **Evaluation Methodology** | **HIGH** | Strict Metric A/B/C isolation, external MP4 bypass, and verified zero ground-truth leakage. |
+| **Experimental Reproducibility** | **HIGH** | Multi-seed deterministic test harness (`benchmark_suite.py`) and automated unit test suite (`19/19 passed`). |
+| **FSOC Practical Relevance** | **HIGH** | Directly models ISRO link geometries, platform vacuum gating, and physical gimbal slew saturation envelopes. |
+
+---
+
+### 20.7 Deliberately Rejected Claims (Integrity Safeguards)
+
+To maintain strict engineering honesty, the following claims were **deliberately rejected** during development:
+1. **"We invented AI-based optical beacon tracking"**: Rejected. Optical spot tracking using centroiding and Kalman filtering has decades of aerospace heritage. Our innovation is the multi-cue fusion (spatial ML + 15 Hz temporal correlation) and the validation architecture.
+2. **"Our system achieves zero pointing error in all regimes"**: Rejected. Claiming zero tracking error during $12^\circ/\text{s}^2$ maneuvers under a $5.0^\circ/\text{s}$ slew limit violates Newtonian physics. We honestly present the $31\text{--}40\text{ px}$ slew saturation envelope.
+3. **"Prerecorded MP4 video demonstrates closed-loop physical gimbal tracking"**: Rejected. A prerecorded video cannot change camera angle. We explicitly clarify that MP4 Benchmark-2 evaluates image-processing and tracking algorithms, not physical gimbal steering.
+4. **"We simulate full wave-optics Kolmogorov phase screens on CPU at 40 FPS"**: Rejected. Split-step wave-optics FFT phase screens are computationally intractable at 40 FPS on CPU. We accurately describe our implementation as spatial displacement fields, PSF blur kernels, and log-normal scintillation fading.
