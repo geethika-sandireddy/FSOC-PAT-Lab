@@ -373,7 +373,7 @@ DIFFICULTY_PRESETS = {
     ),
 }
 
-PRESET_ORDER = ["EASY", "MODERATE", "HARD", "SEVERE", "ADVERSARIAL"]
+PRESET_ORDER = ["EASY", "MODERATE", "HARD", "SEVERE", "ADVERSARIAL", "ISRO_RX"]
 
 # ---------------------------------------------------------------------------
 # Logging
