@@ -63,7 +63,9 @@ class PerformanceTracker:
     def record_frame(self, sim):
         """sim: core.simulator.Simulator (just stepped)."""
         self.frame_count += 1
-        r = sim.last_result
+        r = getattr(sim, "last_result", None)
+        if r is None:
+            return
 
         # FPS measurement
         now = time.time()

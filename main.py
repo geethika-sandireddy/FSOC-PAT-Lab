@@ -300,23 +300,37 @@ class App:
             self.atmos_chips[atm].rect = pygame.Rect(ax, chip_y, cw, chip_h)
             ax += cw + chip_gap
 
-        # Right Panel Cards vertical rhythm (proportional & spacious, zero overflow)
+        # Right Panel Cards vertical rhythm (proportional & spacious, ZERO OVERFLOW on any resolution)
         pnl_avail = (h - self.FOOTER_H - 4) - (self.HDR_TOTAL_H + 4)
-        card_gap = 6
-        self.pnl_state_h = max(78, int(pnl_avail * 0.12))
-        self.pnl_mission_h = max(76, int(pnl_avail * 0.11))
-        self.pnl_perf_h = max(116, int(pnl_avail * 0.18))
-        self.pnl_geom_h = max(108, int(pnl_avail * 0.17))
-        self.pnl_dist_h = max(162, int(pnl_avail * 0.25))
-        self.pnl_ctrl_h = pnl_avail - (self.pnl_state_h + self.pnl_mission_h + self.pnl_perf_h + self.pnl_geom_h + self.pnl_dist_h + card_gap * 5)
-        if self.pnl_ctrl_h < 82:
-            self.pnl_ctrl_h = 82
+        card_gap = 4 if h < 820 else 6
+        show_mission_card = (h >= 800)
+        num_cards = 6 if show_mission_card else 5
+        usable_h = pnl_avail - card_gap * (num_cards - 1)
+        
+        self.pnl_ctrl_h = 82 if h >= 780 else 74
+        cards_pool = max(240, usable_h - self.pnl_ctrl_h)
+
+        if show_mission_card:
+            self.pnl_state_h = max(66, int(cards_pool * 0.14))
+            self.pnl_mission_h = max(44, int(cards_pool * 0.12))
+            self.pnl_perf_h = max(98, int(cards_pool * 0.22))
+            self.pnl_geom_h = max(92, int(cards_pool * 0.22))
+            self.pnl_dist_h = cards_pool - (self.pnl_state_h + self.pnl_mission_h + self.pnl_perf_h + self.pnl_geom_h)
+        else:
+            self.pnl_mission_h = 0
+            self.pnl_state_h = max(60, int(cards_pool * 0.18))
+            self.pnl_perf_h = max(86, int(cards_pool * 0.26))
+            self.pnl_geom_h = max(82, int(cards_pool * 0.26))
+            self.pnl_dist_h = cards_pool - (self.pnl_state_h + self.pnl_perf_h + self.pnl_geom_h)
 
         pnl_y = self.HDR_TOTAL_H + 4
         self.pnl_state_y = pnl_y
         pnl_y += self.pnl_state_h + card_gap
-        self.pnl_mission_y = pnl_y
-        pnl_y += self.pnl_mission_h + card_gap
+        if self.pnl_mission_h > 0:
+            self.pnl_mission_y = pnl_y
+            pnl_y += self.pnl_mission_h + card_gap
+        else:
+            self.pnl_mission_y = -999
         self.pnl_perf_y = pnl_y
         pnl_y += self.pnl_perf_h + card_gap
         self.pnl_geom_y = pnl_y
@@ -325,21 +339,21 @@ class App:
         pnl_y += self.pnl_dist_h + card_gap
         self.pnl_ctrl_y = pnl_y
 
-        # Sliders inside Disturbance card
-        slider_start_y = self.pnl_dist_y + 24
-        slider_gap = max(25, (self.pnl_dist_h - 28) // 5)
+        # Sliders inside Disturbance card (proportional spacing)
+        slider_start_y = self.pnl_dist_y + 22
+        slider_gap = max(18, (self.pnl_dist_h - 26) // 5)
         _sx, _sw = self.PNL_INN + 6, self.PNL_IW - 12
         for idx, key in enumerate(["turbulence", "vibration", "sensor_noise", "jerk_prob", "beacon_fade"]):
             sy = slider_start_y + idx * slider_gap
             if key in self.sliders:
-                self.sliders[key].rect = pygame.Rect(_sx, sy, _sw, 18)
+                self.sliders[key].rect = pygame.Rect(_sx, sy, _sw, 16)
 
-        # Control buttons inside Controls card
+        # Control buttons inside Controls card (compact fit guaranteed on small screens)
         bw = (self.PNL_IW - 20) // 3
-        bh = 24
+        bh = 22 if h < 800 else 24
         bx0 = self.PNL_INN + 6
-        r1_y = self.pnl_ctrl_y + 24
-        r2_y = self.pnl_ctrl_y + 52
+        r1_y = self.pnl_ctrl_y + 22
+        r2_y = self.pnl_ctrl_y + 22 + bh + 4
         if "PAUSE" in self.buttons:
             self.buttons["PAUSE"].rect = pygame.Rect(bx0, r1_y, bw, bh)
             self.buttons["RESET"].rect = pygame.Rect(bx0 + bw + 4, r1_y, bw, bh)
@@ -885,14 +899,15 @@ class App:
         # Cyan top accent line
         pygame.draw.rect(surf, T.C.CYAN_ELEC, (self.SIDEBAR_W, 0, hdr_w, 2))
 
-        # Title & Subtitle
-        T.text(surf, (self.SIDEBAR_W + 16, 6), "FSOC MISSION CONTROL CONSOLE", 15, T.C.TEXT, bold=True)
-        T.text(surf, (self.SIDEBAR_W + 16, 25), "PAT LAB · ISRO CHALLENGE PS 26169", 11.5, T.C.CYAN_ELEC, bold=True)
+        # Title & Subtitle (dynamically scaled for narrower screens)
+        title_str = "FSOC MISSION CONTROL CONSOLE" if self.W >= 1480 else "FSOC MISSION CONTROL"
+        T.text(surf, (self.SIDEBAR_W + 16, 6), title_str, 15 if self.W >= 1480 else 14, T.C.TEXT, bold=True)
+        T.text(surf, (self.SIDEBAR_W + 16, 25), "PAT LAB · ISRO PS 26169", 11, T.C.CYAN_ELEC, bold=True)
 
-        # Link State badge
+        # Link State badge (positioned after title with clean clearance)
         st = hist_pt.get("state", "ESTABLISHED")
         st_col = T.C.STATE.get(st, T.C.GREEN)
-        badge_x = self.SIDEBAR_W + (210 if self.W < 1440 else 300)
+        badge_x = self.SIDEBAR_W + (285 if self.W >= 1480 else 235)
         badge_w = 126
         badge_h = 34
         badge_y = 6
@@ -1128,12 +1143,14 @@ class App:
         bp = self._est_pixel(self.sim.gimbal.pan, self.sim.gimbal.tilt)
         if bp is not None:
             bx, by = to_screen(bp[0], bp[1])
-            rc = (60, 140, 205)
+            is_locked = (st in LOCKED_STATES)
+            rc = (0, 255, 136) if is_locked else (50, 120, 180)
             ret_r = int(18 * sc)
-            # Clean open circular reticle - ZERO center lines crossing center!
+            
+            # Sleek open reticle ring
             pygame.draw.circle(surf, rc, (bx, by), ret_r, 1)
-            pygame.draw.circle(surf, (0, 220, 255), (bx, by), 1)  # Tiny pin-point center dot
-            # 4 sleek external tick marks outside the circle
+            
+            # 4 external tick marks (open center allows clear view of beacon!)
             t_start = ret_r + 3
             t_end   = ret_r + 9
             pygame.draw.line(surf, rc, (bx + t_start, by), (bx + t_end, by), 2)
@@ -1154,8 +1171,8 @@ class App:
                 pygame.draw.circle(surf, (0, 230, 255), arr_tip, 3)
                 T.text(surf, (arr_tip[0] + 6, arr_tip[1] - 6), f"SLEW {slew_spd:.2f}°/s", 10, (0, 230, 255), bold=True)
 
-            # Clean unobtrusive label
-            T.text(surf, (bx, by + ret_r + 6), "OPTICAL AXIS (0,0)", 9.5, (70, 130, 185), bold=True, anchor="tc")
+            axis_lbl = "BORESIGHT [CO-ALIGNED]" if is_locked else "OPTICAL AXIS (0,0)"
+            T.text(surf, (bx, by + ret_r + 5), axis_lbl, 9.5, rc, bold=True, anchor="tc")
 
         # ── 2b. Azimuth Heading Tape (Top of camera view) ──
         tape_y = dest.top + 7
@@ -1273,37 +1290,34 @@ class App:
                 pygame.draw.rect(surf, T.C.AMBER, dec_rect, 1, border_radius=3)
                 T.text(surf, (dx, dy - dr - 4), decoy_txt, 10, T.C.AMBER, bold=True, anchor="bc")
 
-        # ── 5. Orbital Ephemeris Prior (Predictive Coast Aid) ──
+        # ── 5. Orbital Ephemeris Prior (Predictive Coast Aid — Anti-Collision) ──
         if getattr(self, "show_ephemeris", True):
             paz = getattr(self, "eph_pred_az", None)
             if paz is not None:
                 pp = self._est_pixel(paz, self.eph_pred_el)
                 if pp is not None:
                     ex, ey = to_screen(pp[0], pp[1])
-                    er = int(14 * sc)
+                    er = int(13 * sc)
                     eph_col = (220, 160, 50)
                     for k in range(0, 360, 30):
                         a1, a2 = math.radians(k), math.radians(k + 14)
                         pygame.draw.line(surf, eph_col,
                                          (ex + er*math.cos(a1), ey + er*math.sin(a1)),
                                          (ex + er*math.cos(a2), ey + er*math.sin(a2)), 2)
-                    eph_txt = "[EPHEMERIS] COARSE PRIOR (PREDICT)"
-                    tw, th = T.font(10, bold=True).size(eph_txt)
-                    tag_below = (b_v is not None and abs(pp[1] - b_v) < 30 and pp[1] < b_v)
-                    if tag_below:
-                        eph_rect = pygame.Rect(ex - tw // 2 - 5, ey + er + 2, tw + 10, th + 4)
+                    
+                    # If locked or close to beacon, show minimal unobtrusive indicator to prevent clutter
+                    is_near_beacon = (b_u is not None and abs(pp[0] - b_u) < 45 and abs(pp[1] - b_v) < 45)
+                    if not (st in LOCKED_STATES and is_near_beacon):
+                        eph_txt = "[EPHEMERIS] COARSE PRIOR"
+                        tw, th = T.font(9.5, bold=True).size(eph_txt)
+                        tag_below = (b_v is not None and pp[1] < b_v)
+                        eph_y = ey + er + 3 if tag_below else ey - er - th - 5
+                        eph_rect = pygame.Rect(ex - tw // 2 - 5, eph_y, tw + 10, th + 4)
                         e_bg = pygame.Surface((eph_rect.w, eph_rect.h), pygame.SRCALPHA)
-                        e_bg.fill((30, 22, 6, 220))
+                        e_bg.fill((28, 18, 6, 220))
                         surf.blit(e_bg, eph_rect.topleft)
                         pygame.draw.rect(surf, eph_col, eph_rect, 1, border_radius=3)
-                        T.text(surf, (ex, ey + er + 4), eph_txt, 10, eph_col, bold=True, anchor="tc")
-                    else:
-                        eph_rect = pygame.Rect(ex - tw // 2 - 5, ey - er - th - 6, tw + 10, th + 4)
-                        e_bg = pygame.Surface((eph_rect.w, eph_rect.h), pygame.SRCALPHA)
-                        e_bg.fill((30, 22, 6, 220))
-                        surf.blit(e_bg, eph_rect.topleft)
-                        pygame.draw.rect(surf, eph_col, eph_rect, 1, border_radius=3)
-                        T.text(surf, (ex, ey - er - 4), eph_txt, 10, eph_col, bold=True, anchor="bc")
+                        T.text(surf, (ex, eph_y + 2), eph_txt, 9.5, eph_col, bold=True, anchor="tc")
 
         # ── 6. Candidate Detections ──
         for c in res.get("cand_list", []):
@@ -1698,7 +1712,8 @@ class App:
             pygame.draw.line(surf, (8, 14, 28), (gx, self.HDR_TOTAL_H), (gx, self.H - self.FOOTER_H), 1)
 
         self._panel_state(surf)
-        self._panel_mission(surf)
+        if self.pnl_mission_h > 0:
+            self._panel_mission(surf)
         self._panel_performance(surf)
         self._panel_geometry(surf)
         self._panel_disturbances(surf)
@@ -1733,7 +1748,10 @@ class App:
         run_col = T.C.AMBER if self.paused else T.C.GREEN
         pygame.draw.circle(surf, run_col, (x + 16, stat_y + 4), 3.5)
         T.text(surf, (x + 24, stat_y), "PAUSED" if self.paused else "SYSTEM ACTIVE", 11, run_col, bold=True)
-        T.text(surf, (x + w - 12, stat_y), f"t = {res.get('t', 0.0):.1f}s", 11, T.C.TEXT_DIM, anchor="tr", mono=True)
+        if self.pnl_mission_h == 0:
+            T.text(surf, (x + w - 12, stat_y), f"{self.preset} · {self._platform_label()}", 10.5, T.C.CYAN_ELEC, anchor="tr", bold=True)
+        else:
+            T.text(surf, (x + w - 12, stat_y), f"t = {res.get('t', 0.0):.1f}s", 11, T.C.TEXT_DIM, anchor="tr", mono=True)
 
     # ── Mission ────────────────────────────────────────────────────────────────
     def _panel_mission(self, surf):

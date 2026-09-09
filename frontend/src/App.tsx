@@ -8,6 +8,8 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { useTelemetry, type Telemetry } from "./hooks/useTelemetry";
+import CameraViewport from "./components/CameraViewport";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -71,7 +73,6 @@ interface EventLogEntry {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const rnd = (base: number, delta: number) => base + (Math.random() - 0.5) * 2 * delta;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const fmt2 = (n: number) => n.toFixed(1);
 const fmtSci = (n: number) => n.toExponential(2);
@@ -169,9 +170,12 @@ const GaugeRing = ({ value, max = 100, size = 88, label, color = "#00d4ff" }: {
 
 // ─── Top Bar ─────────────────────────────────────────────────────────────────
 
-const TopBar = ({ metrics, paused, onPause }: { metrics: LiveMetrics; paused: boolean; onPause: () => void }) => {
+const TopBar = ({ metrics, paused, onPause, state, connected }: { metrics: LiveMetrics; paused: boolean; onPause: () => void; state: string; connected: boolean }) => {
   const [time, setTime] = useState(now());
   useInterval(() => setTime(now()), 1000);
+
+  const isLocked = state === "LOCKED" || state === "ESTABLISHED";
+  const stateColor = !connected ? "#ff2d55" : isLocked ? "#00ff88" : state === "SEARCHING" ? "#ff8c00" : "#00d4ff";
 
   return (
     <div style={{
@@ -198,12 +202,14 @@ const TopBar = ({ metrics, paused, onPause }: { metrics: LiveMetrics; paused: bo
       {/* Link State */}
       <div style={{
         display: "flex", alignItems: "center", gap: 10, padding: "6px 14px",
-        border: "1px solid rgba(0,255,136,0.3)", borderRadius: 4, background: "rgba(0,255,136,0.06)"
+        border: `1px solid ${stateColor}50`, borderRadius: 4, background: `${stateColor}12`
       }}>
-        <div className="status-dot-green" style={{ width: 8, height: 8, borderRadius: "50%", background: "#00ff88" }} />
+        <div style={{ width: 8, height: 8, borderRadius: "50%", background: stateColor }} />
         <div>
-          <div style={{ fontSize: 11, color: "#64748b", fontFamily: "var(--font-display)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>LINK STATE</div>
-          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, letterSpacing: "0.08em", color: "#00ff88", lineHeight: 1 }}>ESTABLISHED</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontFamily: "var(--font-display)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>LINK STATE</div>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, letterSpacing: "0.08em", color: stateColor, lineHeight: 1 }}>
+            {connected ? state : "DISCONNECTED"}
+          </div>
         </div>
       </div>
 
@@ -256,7 +262,7 @@ const TopBar = ({ metrics, paused, onPause }: { metrics: LiveMetrics; paused: bo
 
 // ─── Overview View ────────────────────────────────────────────────────────────
 
-const OverviewView = ({ metrics, history }: { metrics: LiveMetrics; history: TelemetryPoint[] }) => {
+const OverviewView = ({ metrics, history, telemetry, connected }: { metrics: LiveMetrics; history: TelemetryPoint[]; telemetry: Telemetry | null; connected: boolean }) => {
   return (
     <div className="sweep-in" style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
       {/* 4 Big KPI Cards */}
@@ -267,45 +273,48 @@ const OverviewView = ({ metrics, history }: { metrics: LiveMetrics; history: Tel
         <MetricCard label="Pointing Error" value={`${fmt2(metrics.pointingError)}`} unit="µrad" sub="Beam div: 30 µrad" color="#00d4ff" />
       </div>
 
-      {/* Charts & Gauges */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12, flex: 1, minHeight: 280 }}>
-        {/* Real-time Telemetry Trend */}
-        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-dim)", borderRadius: 4, padding: "14px 18px", display: "flex", flexDirection: "column" }}>
-          <SectionHeader>Optical Link Stability Trend (RX Power & SNR)</SectionHeader>
-          <div style={{ flex: 1, minHeight: 200 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={history}>
-                <CartesianGrid strokeDasharray="2 4" />
-                <XAxis dataKey="t" tick={{ fill: "#64748b", fontSize: 11 }} />
-                <YAxis yAxisId="pwr" domain={[-20, -5]} tick={{ fill: "#64748b", fontSize: 11 }} unit=" dBm" />
-                <YAxis yAxisId="snr" orientation="right" domain={[40, 90]} tick={{ fill: "#64748b", fontSize: 11 }} unit=" dB" />
-                <Tooltip content={<ChartTooltip unit="" />} />
-                <Line yAxisId="pwr" type="monotone" dataKey="rxPower" name="RX Power" stroke="#00d4ff" strokeWidth={2} dot={false} isAnimationActive={false} />
-                <Line yAxisId="snr" type="monotone" dataKey="snr" name="SNR" stroke="#00ff88" strokeWidth={2} dot={false} isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
+      {/* Main Grid: Live Virtual Camera Viewport (Left) + Charts/Health (Right) */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 12, flex: 1, minHeight: 340 }}>
+        {/* Real Live Virtual Camera Viewport */}
+        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-dim)", borderRadius: 4, padding: "12px 14px", display: "flex", flexDirection: "column" }}>
+          <SectionHeader>LIVE VIRTUAL SENSOR TRACKING · FOV 2.4° × 1.8°</SectionHeader>
+          <div style={{ flex: 1, minHeight: 280, position: "relative" }}>
+            <CameraViewport telemetry={telemetry} connected={connected} />
           </div>
         </div>
 
-        {/* System Health & Atmosphere */}
-        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-dim)", borderRadius: 4, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
-          <SectionHeader>System Health Matrix</SectionHeader>
-          <div style={{ display: "flex", justifyContent: "space-around", padding: "8px 0" }}>
-            <GaugeRing value={metrics.trackingQuality} label="Tracking" color="#00ff88" />
-            <GaugeRing value={clamp(100 - metrics.pointingError * 2, 0, 100)} label="Alignment" color="#00d4ff" />
-            <GaugeRing value={clamp(metrics.linkMargin / 50 * 100, 0, 100)} label="Margin" color="#bf5af2" />
+        {/* Real-time Telemetry Trend & Health */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-dim)", borderRadius: 4, padding: "12px 16px", flex: 1, display: "flex", flexDirection: "column" }}>
+            <SectionHeader>Optical Link Stability Trend (RX Power & SNR)</SectionHeader>
+            <div style={{ flex: 1, minHeight: 140 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={history}>
+                  <CartesianGrid strokeDasharray="2 4" />
+                  <XAxis dataKey="t" tick={{ fill: "#64748b", fontSize: 10 }} />
+                  <YAxis yAxisId="pwr" domain={[-22, -5]} tick={{ fill: "#64748b", fontSize: 10 }} unit=" dBm" width={45} />
+                  <YAxis yAxisId="snr" orientation="right" domain={[30, 90]} tick={{ fill: "#64748b", fontSize: 10 }} unit=" dB" width={40} />
+                  <Tooltip content={<ChartTooltip unit="" />} />
+                  <Line yAxisId="pwr" type="monotone" dataKey="rxPower" name="RX Power" stroke="#00d4ff" strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line yAxisId="snr" type="monotone" dataKey="snr" name="SNR" stroke="#00ff88" strokeWidth={2} dot={false} isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-          <div style={{ borderTop: "1px solid var(--border-dim)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-dim)", borderRadius: 4, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <SectionHeader>System Health Matrix</SectionHeader>
+            <div style={{ display: "flex", justifyContent: "space-around", padding: "4px 0" }}>
+              <GaugeRing value={metrics.trackingQuality} label="Tracking" color="#00ff88" />
+              <GaugeRing value={clamp(100 - metrics.pointingError * 2, 0, 100)} label="Alignment" color="#00d4ff" />
+              <GaugeRing value={clamp(metrics.linkMargin / 50 * 100, 0, 100)} label="Margin" color="#bf5af2" />
+            </div>
+            <div style={{ borderTop: "1px solid var(--border-dim)", paddingTop: 8, display: "flex", justifyContent: "space-between", fontSize: 11 }}>
               <span style={{ color: "var(--text-secondary)" }}>Atmospheric Loss:</span>
               <span style={{ fontFamily: "var(--font-mono)", color: "#ff8c00", fontWeight: 600 }}>{fmt2(metrics.atmLoss)} dB</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-              <span style={{ color: "var(--text-secondary)" }}>Temperature / Humidity:</span>
-              <span style={{ fontFamily: "var(--font-mono)", color: "#00d4ff" }}>{fmt2(metrics.temperature)}°C / {Math.round(metrics.humidity)}%</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-              <span style={{ color: "var(--text-secondary)" }}>Crosswind Speed:</span>
+              <span style={{ color: "var(--text-secondary)" }}>Temp:</span>
+              <span style={{ fontFamily: "var(--font-mono)", color: "#00d4ff" }}>{fmt2(metrics.temperature)}°C</span>
+              <span style={{ color: "var(--text-secondary)" }}>Wind:</span>
               <span style={{ fontFamily: "var(--font-mono)", color: "#00d4ff" }}>{fmt2(metrics.windSpeed)} m/s</span>
             </div>
           </div>
@@ -941,7 +950,8 @@ export default function App() {
       turb: "Turbulence Burst", sig: "Signal Interruption", false: "False Lock Condition",
     };
     addEvent("WARNING", "STRESS_CTRL", `Scenario toggled: ${names[id]}`);
-  }, [addEvent]);
+    triggerStress(id);
+  }, [addEvent, triggerStress]);
 
   // Keyboard shortcut C to collapse/expand sidebar
   useEffect(() => {
@@ -954,46 +964,51 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Live simulation tick
-  useInterval(() => {
-    if (paused) return;
-    tickRef.current += 1;
-    const t = tickRef.current;
+  // Real simulator telemetry integration via WebSocket
+  const {
+    telemetry,
+    history: wsHistory,
+    connected,
+    retryCount,
+    setPreset,
+    resetSim,
+    toggleRunning,
+    setDisturbance,
+    setOpticalParams,
+    triggerStress,
+  } = useTelemetry();
 
-    const activeIds = scenarios.filter(s => s.active).map(s => s.id);
-    const hasTurb = activeIds.includes("turb");
-    const hasAtm = activeIds.includes("atm");
-    const hasBeam = activeIds.includes("beam");
-    const hasSig = activeIds.includes("sig");
+  // Unified single source of truth from real simulator telemetry
+  useEffect(() => {
+    if (telemetry) {
+      setMetrics({
+        rxPower: telemetry.rx_power,
+        snr: telemetry.snr,
+        ber: telemetry.ber,
+        linkMargin: telemetry.margin,
+        pointingError: telemetry.pointing_error_urad,
+        trackingQuality: telemetry.tracking_quality,
+        temperature: telemetry.temperature,
+        humidity: telemetry.humidity,
+        windSpeed: telemetry.wind_speed,
+        visibility: 15.0,
+        wavelength: telemetry.wavelength,
+        distance: telemetry.distance,
+        dataRate: telemetry.data_rate,
+        oit: 1.0,
+        atmLoss: telemetry.atm_loss,
+      });
 
-    const turbMult = hasTurb ? 3 : 1;
-    const atmExtra = hasAtm ? Math.sin(t * 0.05) * 1.5 + 1.0 : 0;
-    const beamExtra = hasBeam ? Math.min(t * 0.01, 8) : 0;
-    const sigDrop = hasSig && t % 40 < 6 ? -8 : 0;
+      if (telemetry.false_lock) {
+        addEvent("CRITICAL", "FALSE_LOCK", "False lock detected: Carrier lock without spatial alignment!");
+      }
+      if (telemetry.ber > 1e-6) {
+        addEvent("WARNING", "MODEM", `BER threshold exceeded: ${fmtSci(telemetry.ber)}`);
+      }
+    }
+  }, [telemetry, addEvent]);
 
-    const rxPower = clamp(rnd(-11.7 - atmExtra * 0.4 + sigDrop, 0.15 * turbMult) - beamExtra * 0.05, -18, -10);
-    const snr = clamp(rnd(73.3 - atmExtra * 0.8 + sigDrop * 4, 0.2 * turbMult), 15, 80);
-    const ber = Math.max(1e-15, rnd(1e-12, 2e-13 * turbMult) * (hasSig && t % 40 < 6 ? 1e4 : 1));
-    const pointingError = clamp(rnd(1.73 + beamExtra * 0.5, 0.1 * turbMult), 0, 50);
-    const linkMargin = clamp(38.3 + rxPower - (-11.7), 0, 50);
-    const trackingQuality = clamp(rnd(96 - beamExtra * 2 - (hasTurb ? 5 : 0), 0.5), 40, 100);
-    const atmLoss = clamp(1.5 + atmExtra * 0.4, 0.5, 8);
-
-    setMetrics(prev => ({
-      ...prev, rxPower, snr, ber, linkMargin, pointingError, trackingQuality, atmLoss,
-      temperature: clamp(rnd(prev.temperature, 0.02), 15, 40),
-      humidity: clamp(rnd(prev.humidity, 0.3), 30, 90),
-      windSpeed: clamp(rnd(prev.windSpeed, 0.05), 0, 20),
-    }));
-
-    setHistory(prev => {
-      const next = [...prev.slice(-119), { t, rxPower, snr, ber, pointingError, atmLoss }];
-      return next;
-    });
-
-    if (ber > 1e-9 && Math.random() < 0.05) addEvent("WARNING", "MODEM", `BER threshold exceeded: ${fmtSci(ber)}`);
-    if (linkMargin < 6 && Math.random() < 0.1) addEvent("CRITICAL", "LINK_CTRL", `Link margin critical: ${fmt2(linkMargin)} dB`);
-  }, 250);
+  const history = wsHistory.length > 0 ? wsHistory : [];
 
   const navItems: { view: View; label: string; abbr: string; num: string; icon: string }[] = [
     { view: "overview", label: "OVERVIEW", abbr: "OVR", num: "01", icon: "⬡" },
@@ -1012,7 +1027,47 @@ export default function App() {
       background: "var(--bg-base)", overflow: "hidden", position: "relative",
     }}>
       {/* Top Header */}
-      <TopBar metrics={metrics} paused={paused} onPause={() => setPaused(p => !p)} />
+      <TopBar
+        metrics={metrics}
+        paused={paused}
+        onPause={() => {
+          setPaused(p => !p);
+          toggleRunning();
+        }}
+        state={telemetry?.state ?? "OFFLINE"}
+        connected={connected}
+      />
+
+      {/* Offline Status Banner */}
+      {!connected && (
+        <div style={{
+          background: "rgba(255, 45, 85, 0.12)",
+          borderBottom: "1px solid rgba(255, 45, 85, 0.4)",
+          padding: "8px 20px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          color: "#ff2d55",
+          fontFamily: "var(--font-mono)",
+          fontSize: 12,
+          flexShrink: 0,
+          zIndex: 30,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 14 }}>⚠️</span>
+            <strong style={{ letterSpacing: "0.06em" }}>SIMULATOR OFFLINE / DISCONNECTED</strong>
+            <span style={{ color: "var(--text-secondary)" }}>
+              Waiting for live telemetry on ws://localhost:8000/ws (Attempt #{retryCount})...
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>START BACKEND:</span>
+            <code style={{ background: "#0a1020", color: "#00d4ff", padding: "2px 8px", borderRadius: 3, border: "1px solid var(--border-dim)" }}>
+              python server.py
+            </code>
+          </div>
+        </div>
+      )}
 
       {/* Body Area */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
@@ -1118,12 +1173,15 @@ export default function App() {
 
           {/* View Content */}
           <div style={{ flex: 1, overflow: "hidden" }}>
-            {view === "overview" && <OverviewView metrics={metrics} history={history} />}
+            {view === "overview" && <OverviewView metrics={metrics} history={history} telemetry={telemetry} connected={connected} />}
             {view === "telemetry" && <TelemetryView history={history} />}
             {view === "simulation" && (
               <SimulationView
                 params={simParams}
-                onChange={(k, v) => setSimParams(p => ({ ...p, [k]: v }))}
+                onChange={(k, v) => {
+                  setSimParams(p => ({ ...p, [k]: v }));
+                  setOpticalParams({ [k]: v });
+                }}
                 metrics={metrics}
               />
             )}

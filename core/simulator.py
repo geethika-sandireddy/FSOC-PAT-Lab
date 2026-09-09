@@ -97,6 +97,7 @@ class Simulator:
         self.dt = dt
         self.t = 0.0
         self.frame = None
+        self.last_result = None
         # brightness history of the associated object (for the scope HUD)
         self.intensity_hist = deque(maxlen=240)
         # structured PAT state-transition journal (event-only, one entry per

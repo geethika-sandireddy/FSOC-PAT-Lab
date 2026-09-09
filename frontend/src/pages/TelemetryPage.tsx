@@ -4,13 +4,16 @@ interface TelemetryPageProps {
   telemetry: any
 }
 
-const mockData = Array.from({ length: 60 }, (_, i) => ({
-  time: i,
-  rxPower: -11.4 - Math.random() * 2,
-  snr: 73.6 + Math.random() * 3 - 1.5,
-  ber: Math.pow(10, -15 + Math.random() * 5),
-  pointError: 1.5 + Math.random() * 2,
-}))
+const nominalData = Array.from({ length: 60 }, (_, i) => {
+  const t = i * 0.5;
+  return {
+    time: i,
+    rxPower: -11.4 - Math.sin(t * 0.1) * 0.8,
+    snr: 73.6 + Math.cos(t * 0.15) * 1.2,
+    ber: 1e-12,
+    pointError: 1.5 + Math.sin(t * 0.08) * 0.4,
+  };
+});
 
 export default function TelemetryPage({ telemetry }: TelemetryPageProps) {
   return (
@@ -20,7 +23,7 @@ export default function TelemetryPage({ telemetry }: TelemetryPageProps) {
         <div className="panel p-4">
           <div className="panel-header">Optical Power – RX vs Margin</div>
           <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={mockData}>
+            <LineChart data={telemetry?.history && telemetry.history.length > 0 ? telemetry.history : nominalData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="time" stroke="#64748b" />
               <YAxis stroke="#64748b" />
@@ -34,7 +37,7 @@ export default function TelemetryPage({ telemetry }: TelemetryPageProps) {
         <div className="panel p-4">
           <div className="panel-header">Bit Error Rate – Log Scale</div>
           <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={mockData}>
+            <LineChart data={telemetry?.history && telemetry.history.length > 0 ? telemetry.history : nominalData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="time" stroke="#64748b" />
               <YAxis stroke="#64748b" scale="log" />
@@ -48,7 +51,7 @@ export default function TelemetryPage({ telemetry }: TelemetryPageProps) {
         <div className="panel p-4">
           <div className="panel-header">Signal-to-Noise Ratio</div>
           <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={mockData}>
+            <LineChart data={telemetry?.history && telemetry.history.length > 0 ? telemetry.history : nominalData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="time" stroke="#64748b" />
               <YAxis stroke="#64748b" />
@@ -62,7 +65,7 @@ export default function TelemetryPage({ telemetry }: TelemetryPageProps) {
         <div className="panel p-4">
           <div className="panel-header">Pointing Error & Atmospheric Loss</div>
           <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={mockData}>
+            <LineChart data={telemetry?.history && telemetry.history.length > 0 ? telemetry.history : nominalData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="time" stroke="#64748b" />
               <YAxis stroke="#64748b" />

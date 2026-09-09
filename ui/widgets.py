@@ -64,9 +64,9 @@ def badge(surf, rect, s, color):
 
 # ------------------------------------------------------------------ slider
 class Slider:
-    TRACK_H = 6
-    KNOB_W  = 10
-    KNOB_H  = 16
+    TRACK_H = 4
+    KNOB_W  = 6
+    KNOB_H  = 10
 
     def __init__(self, rect, label, value=0, color=T.C.CYAN,
                  fmt="{:>3d}", enabled=True, unit=""):
@@ -115,7 +115,7 @@ class Slider:
                bold=True, anchor="tr")
 
         # Track sits neatly below label
-        ty = self.rect.y + 16
+        ty = self.rect.y + 13
         track = pygame.Rect(self.rect.x, ty, self.rect.w, self.TRACK_H)
         pygame.draw.rect(surf, (12, 20, 36), track, border_radius=2)
         w = int(round(track.w * self.frac))
@@ -141,7 +141,7 @@ class Slider:
     def _draw_disabled(self, surf, value_text=None):
         T.text(surf, (self.rect.x, self.rect.y),
                self.label + "  (N/A)", 10, T.C.TEXT_FAINT, bold=True)
-        ty = self.rect.y + 16
+        ty = self.rect.y + 13
         track = pygame.Rect(self.rect.x, ty, self.rect.w, self.TRACK_H)
         pygame.draw.rect(surf, (8, 14, 24), track, border_radius=2)
         pygame.draw.rect(surf, T.C.BORDER_DIM, track, 1, border_radius=2)
