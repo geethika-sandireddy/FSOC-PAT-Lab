@@ -26,3 +26,6 @@ Thumbs.db
 
 # Allow built frontend to be opened without Node.js
 !frontend/dist/
+
+# Scratch verification screenshots
+scratch_screenshots/

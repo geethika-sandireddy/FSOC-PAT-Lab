@@ -293,9 +293,26 @@ def _build_telemetry(result: dict, sim: Simulator, perf: PerformanceTracker, opt
         "distance": optical.distance_km,
         "data_rate": optical.data_rate_gbps,
         "beacon_uv": beacon_uv,
-        "boresight_uv": [320, 240],
         "distractors_uv": distractors_uv,
         "cand_list_uv": cand_list_uv,
+        "candidates_detail": result.get("candidates_detail", []),
+        "screen_w": config.SCREEN_SIZE_W,
+        "screen_h": config.SCREEN_SIZE_H,
+        "cam_center_uv": [config.SCREEN_CANVAS_CX, config.SCREEN_CANVAS_CY],
+        "hfov_deg": round(config.HFOV_DEG, 2),
+        "vfov_deg": round(config.VFOV_DEG, 2),
+        "platform_mode": getattr(sim, "platform_mode", None) or "SATELLITE_SATELLITE",
+        "atmosphere_name": getattr(sim, "atmosphere_name", "CLEAR"),
+        "atmosphere_allowed": getattr(sim, "atmosphere_allowed", True),
+        "target_shape": getattr(sim.scene.beacon, "shape", "SQUARE"),
+        "target_size": getattr(sim.scene.beacon, "size_px", 10),
+        "target_count": getattr(sim.scene, "num_targets", 1),
+        "motion_type": getattr(sim.scene.orbit, "_motion_type", "straight_line"),
+        "gimbal_max_pan": round(getattr(sim.gimbal, "max_pan_deg_s", 5.0), 1),
+        "gimbal_max_tilt": round(getattr(sim.gimbal, "max_tilt_deg_s", 5.0), 1),
+        "noise_types": list(getattr(sim.disturbance, "noise_types", ["gaussian"])),
+        "last_reacq_s": perf_stats.get("last_reacq_s"),
+        "mean_reacq_s": perf_stats.get("mean_reacq_s"),
         "fps": round(loop_fps, 1),
         "acq_time": round(acq_t, 2) if acq_t is not None else None,
         "retention_pct": round(ret_pct, 1),
@@ -432,6 +449,57 @@ async def _handle_command(cmd: dict):
         sid = cmd.get("scenario_id")
         if _stress and sid in _stress.scenarios:
             _stress.toggle(sid)
+    elif action == "set_platform":
+        pm = cmd.get("platform", "SATELLITE_SATELLITE")
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.set_platform_mode(pm)
+    elif action == "set_atmosphere":
+        atm = cmd.get("atmosphere", "CLEAR")
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.set_atmosphere(atm)
+    elif action == "set_fov":
+        hfov = float(cmd.get("hfov", 4.0))
+        vfov = float(cmd.get("vfov", 3.0)) if "vfov" in cmd else None
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.set_fov(hfov, vfov)
+    elif action == "set_screen_size":
+        w = int(cmd.get("w", 2000))
+        h = int(cmd.get("h", 2000))
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.set_screen_size(w, h)
+    elif action == "set_motion":
+        m = cmd.get("motion", "straight_line")
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.set_motion_type(m)
+    elif action == "set_target":
+        shape = cmd.get("shape")
+        size = cmd.get("size")
+        count = cmd.get("count")
+        initial = cmd.get("initial")
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.set_target_params(shape=shape, size_px=size, count=count, initial=initial)
+    elif action == "set_gimbal":
+        pan = cmd.get("max_pan")
+        tilt = cmd.get("max_tilt")
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.set_gimbal_limits(max_pan=pan, max_tilt=tilt)
+    elif action == "set_noise_types":
+        ntypes = cmd.get("noise_types", ["gaussian"])
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.set_noise_types(ntypes)
+    elif action == "inject_occlusion":
+        dur = float(cmd.get("duration", 1.0))
+        with SIM_LOCK:
+            if _sim is not None:
+                _sim.inject_target_loss(duration_s=dur)
 
 
 async def _broadcast_loop():

@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import type { Telemetry } from "@/hooks/useTelemetry";
 
 interface CameraViewportProps {
@@ -8,6 +8,7 @@ interface CameraViewportProps {
 
 export default function CameraViewport({ telemetry, connected }: CameraViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -118,127 +119,115 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
 
       ctx.font = "bold 10px 'DM Mono', monospace";
       ctx.textAlign = "left";
-      ctx.fillText(`SLEW ${spd.toFixed(2)}°/s`, tipX + 6, tipY - 4);
+      ctx.fillStyle = "#00d4ff";
+      ctx.fillText(`${spd.toFixed(1)}°/s SLEW`, tipX + 6, tipY + 3);
     }
 
-    // Boresight label
-    ctx.fillStyle = boresightCol;
-    ctx.font = "bold 10px 'DM Mono', monospace";
-    ctx.textAlign = "center";
-    ctx.fillText(isLocked ? "BORESIGHT [CO-ALIGNED]" : "OPTICAL AXIS (0,0)", cx, cy + br + 16);
+    // 3. Rejected Distractor Decoys
+    if (telemetry.distractors_uv && telemetry.distractors_uv.length > 0) {
+      telemetry.distractors_uv.forEach(([dx, dy, modFreq]) => {
+        ctx.strokeStyle = "#f59e0b";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(dx - 8, dy - 8, 16, 16);
 
-    // 3. Candidate Detections (Blobs)
-    if (telemetry.cand_list_uv) {
+        ctx.fillStyle = "#f59e0b";
+        ctx.font = "9px 'DM Mono', monospace";
+        ctx.textAlign = "left";
+        ctx.fillText(`DECOY [${modFreq.toFixed(0)}Hz] REJECTED`, dx + 12, dy - 2);
+      });
+    }
+
+    // 4. Candidate Detection Blobs
+    if (telemetry.cand_list_uv && telemetry.cand_list_uv.length > 0) {
       ctx.strokeStyle = "rgba(0, 212, 255, 0.4)";
       ctx.lineWidth = 1;
       telemetry.cand_list_uv.forEach(([cu, cv]) => {
-        ctx.strokeRect(cu - 6, cv - 6, 12, 12);
-      });
-    }
-
-    // 4. Distractor Decoys (Rejected by AI)
-    if (telemetry.distractors_uv) {
-      telemetry.distractors_uv.forEach(([du, dv, freq]) => {
-        const dr = 14;
-        ctx.strokeStyle = "#ff8c00";
-        ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(du, dv - dr);
-        ctx.lineTo(du + dr, dv);
-        ctx.lineTo(du, dv + dr);
-        ctx.lineTo(du - dr, dv);
-        ctx.closePath();
+        ctx.arc(cu, cv, 6, 0, Math.PI * 2);
         ctx.stroke();
-
-        ctx.fillStyle = "rgba(30, 20, 5, 0.85)";
-        ctx.fillRect(du - 55, dv - dr - 20, 110, 16);
-        ctx.strokeStyle = "#ff8c00";
-        ctx.strokeRect(du - 55, dv - dr - 20, 110, 16);
-
-        ctx.fillStyle = "#ff8c00";
-        ctx.font = "bold 9px 'DM Mono', monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`[DECOY] ${freq.toFixed(0)} Hz [AI REJECTED]`, du, dv - dr - 8);
       });
     }
 
-    // 5. Target Beacon (Active Optical Carrier)
-    if (telemetry.beacon_uv) {
+    // 5. Target Beacon & Lock Graphics
+    if (telemetry.beacon_uv && telemetry.beacon_visible) {
       const [bx, by] = telemetry.beacon_uv;
-      const distPx = Math.hypot(bx - cx, by - cy);
-      const isAligned = distPx < 10.0;
-      const targetCol = isAligned ? "#00ff88" : isLocked ? "#00d4ff" : "#ff8c00";
 
-      // Radial laser core glow
-      const grad = ctx.createRadialGradient(bx, by, 2, bx, by, 22);
-      grad.addColorStop(0, "rgba(255, 255, 255, 0.95)");
-      grad.addColorStop(0.3, isAligned ? "rgba(0, 255, 136, 0.7)" : "rgba(0, 212, 255, 0.7)");
-      grad.addColorStop(1, "transparent");
-      ctx.fillStyle = grad;
+      // Glow Core
+      const rad = 14;
+      const glow = ctx.createRadialGradient(bx, by, 2, bx, by, rad);
+      glow.addColorStop(0, "rgba(0, 255, 136, 1)");
+      glow.addColorStop(0.4, "rgba(0, 212, 255, 0.6)");
+      glow.addColorStop(1, "rgba(0, 212, 255, 0)");
+      ctx.fillStyle = glow;
       ctx.beginPath();
-      ctx.arc(bx, by, 22, 0, Math.PI * 2);
+      ctx.arc(bx, by, rad, 0, Math.PI * 2);
       ctx.fill();
 
-      // Targeting Corner L-brackets
-      const tr = 22;
-      const arm = 8;
-      ctx.strokeStyle = targetCol;
+      // Precision Corner Lock Brackets
+      const bw = 16;
+      const bl = 6;
+      ctx.strokeStyle = stateCol;
       ctx.lineWidth = 2;
 
-      // 4 Corners
-      [
-        [-1, -1],
-        [1, -1],
-        [-1, 1],
-        [1, 1],
-      ].forEach(([sx, sy]) => {
-        const px = bx + sx * tr;
-        const py = by + sy * tr;
-        ctx.beginPath();
-        ctx.moveTo(px, py);
-        ctx.lineTo(px - sx * arm, py);
-        ctx.moveTo(px, py);
-        ctx.lineTo(px, py - sy * arm);
-        ctx.stroke();
-      });
-
-      // Target Tactical Callout Card
-      const cardW = 230;
-      const cardH = 50;
-      const cardX = bx + tr + 20 + cardW < W ? bx + tr + 15 : bx - tr - cardW - 15;
-      const cardY = Math.max(10, Math.min(H - cardH - 10, by - cardH / 2));
-
-      // Leader line
-      ctx.strokeStyle = targetCol;
-      ctx.lineWidth = 1.5;
+      // Top-Left
       ctx.beginPath();
-      ctx.moveTo(bx + (cardX > bx ? tr : -tr), by);
-      ctx.lineTo(cardX > bx ? cardX : cardX + cardW, cardY + cardH / 2);
+      ctx.moveTo(bx - bw, by - bw + bl);
+      ctx.lineTo(bx - bw, by - bw);
+      ctx.lineTo(bx - bw + bl, by - bw);
       ctx.stroke();
 
-      // Card Body
-      ctx.fillStyle = "rgba(4, 18, 14, 0.92)";
-      ctx.fillRect(cardX, cardY, cardW, cardH);
-      ctx.strokeStyle = targetCol;
-      ctx.strokeRect(cardX, cardY, cardW, cardH);
+      // Top-Right
+      ctx.beginPath();
+      ctx.moveTo(bx + bw - bl, by - bw);
+      ctx.lineTo(bx + bw, by - bw);
+      ctx.lineTo(bx + bw, by - bw + bl);
+      ctx.stroke();
 
-      // Card Accent Bar
-      ctx.fillStyle = targetCol;
-      ctx.fillRect(cardX, cardY, 3, cardH);
+      // Bottom-Left
+      ctx.beginPath();
+      ctx.moveTo(bx - bw, by + bw - bl);
+      ctx.lineTo(bx - bw, by + bw);
+      ctx.lineTo(bx - bw + bl, by + bw);
+      ctx.stroke();
 
-      // Card Texts
-      ctx.fillStyle = targetCol;
-      ctx.font = "bold 11px 'DM Mono', monospace";
+      // Bottom-Right
+      ctx.beginPath();
+      ctx.moveTo(bx + bw - bl, by + bw);
+      ctx.lineTo(bx + bw, by + bw);
+      ctx.lineTo(bx + bw, by + bw - bl);
+      ctx.stroke();
+
+      // Sleek Angled Leader Line to Target Card
+      const cardX = bx > W - 180 ? bx - 170 : bx + 28;
+      const cardY = by > H - 70 ? by - 55 : by - 25;
+
+      ctx.strokeStyle = "rgba(0, 212, 255, 0.7)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(bx + (bx > W - 180 ? -bw : bw), by);
+      ctx.lineTo(cardX, cardY + 20);
+      ctx.stroke();
+
+      // Target Metadata Card
+      ctx.fillStyle = "rgba(6, 14, 26, 0.85)";
+      ctx.strokeStyle = stateCol;
+      ctx.lineWidth = 1;
+      ctx.fillRect(cardX, cardY, 150, 52);
+      ctx.strokeRect(cardX, cardY, 150, 52);
+
+      const isAligned = telemetry.pointing_err_deg * 160 < 10;
+      ctx.fillStyle = stateCol;
+      ctx.font = "bold 10px 'DM Mono', monospace";
       ctx.textAlign = "left";
-      ctx.fillText("[TARGET BEACON] · 15 Hz FSOC", cardX + 10, cardY + 16);
+      ctx.fillText(`TARGET BEACON [${st}]`, cardX + 8, cardY + 14);
 
-      ctx.fillStyle = "#f8fafc";
-      ctx.font = "bold 10.5px 'DM Mono', monospace";
-      ctx.fillText(`RESIDUAL: ${distPx.toFixed(1)} px (${(telemetry.pointing_err_deg * 1000).toFixed(1)} mdeg)`, cardX + 10, cardY + 31);
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "9px 'DM Mono', monospace";
+      ctx.fillText(`LOS: ${telemetry.truth_az.toFixed(2)}°, ${telemetry.truth_el.toFixed(2)}°`, cardX + 8, cardY + 28);
 
-      ctx.fillStyle = isAligned ? "#00ff88" : "#ff8c00";
+      ctx.fillStyle = isAligned ? "#00ff88" : "#f59e0b";
       ctx.font = "bold 9.5px 'DM Mono', monospace";
-      ctx.fillText(`ISRO SPEC: ${isAligned ? "PASS < 10 px" : "ALIGNING..."} · CONF ${Math.round(telemetry.confidence * 100)}%`, cardX + 10, cardY + 44);
+      ctx.fillText(`RESIDUAL: ${(telemetry.pointing_err_deg * 160).toFixed(1)} px (${isAligned ? "PASS" : "ALIGNING"})`, cardX + 8, cardY + 42);
     }
 
     // 6. Viewport Corner Marks
@@ -254,7 +243,7 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
       ctx.moveTo(x, y);
       ctx.lineTo(x + sx * 20, y);
       ctx.moveTo(x, y);
-      ctx.lineTo(x, y + sy * 20);
+      ctx.lineTo(x + sy * 20);
       ctx.stroke();
     });
   }, [telemetry, connected]);
@@ -262,12 +251,13 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
   const st = telemetry?.state ?? "SEARCHING";
   const isLocked = st === "LOCKED" || st === "DEGRADED_LOCK";
   const confPct = telemetry ? Math.round(telemetry.confidence * 100) : 0;
+  const candidates = telemetry?.candidates_detail || [];
 
   return (
     <div className="w-full h-full flex flex-col relative bg-[#040814] rounded overflow-hidden border border-[var(--border-dim)]">
       {/* Top Overlay Strip */}
       <div className="absolute top-2 left-3 right-3 flex justify-between items-center z-10 pointer-events-none">
-        <div className="flex items-center gap-2 bg-[#060e1a]/90 border border-[var(--border-dim)] px-2.5 py-1 rounded">
+        <div className="flex items-center gap-2 bg-[#060e1a]/90 border border-[var(--border-dim)] px-2.5 py-1 rounded pointer-events-auto">
           <span className="w-2 h-2 rounded-full" style={{ background: connected ? (isLocked ? "#00ff88" : "#00d4ff") : "#ff2d55" }} />
           <span className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">
             {connected ? st : "DISCONNECTED"}
@@ -279,9 +269,21 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
           )}
         </div>
 
-        <div className="flex items-center gap-3 bg-[#060e1a]/90 border border-[var(--border-dim)] px-2.5 py-1 rounded font-mono text-xs text-slate-400">
-          <span>FOV: 2.4° × 1.8°</span>
+        <div className="flex items-center gap-2 bg-[#060e1a]/90 border border-[var(--border-dim)] px-2.5 py-1 rounded font-mono text-xs text-slate-400 pointer-events-auto">
+          <span>FOV: {telemetry?.hfov_deg?.toFixed(1) ?? "4.0"}° × {telemetry?.vfov_deg?.toFixed(1) ?? "3.0"}°</span>
           <span className="text-cyan-400">640×480 @ {telemetry?.fps ?? 30} FPS</span>
+          <button
+            onClick={() => setShowDiagnostics(!showDiagnostics)}
+            className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold"
+            style={{
+              background: showDiagnostics ? "rgba(0,212,255,0.25)" : "rgba(15,23,42,0.8)",
+              border: `1px solid ${showDiagnostics ? "#00d4ff" : "#334155"}`,
+              color: showDiagnostics ? "#00d4ff" : "#94a3b8",
+              cursor: "pointer",
+            }}
+          >
+            {showDiagnostics ? "HIDE DIAGNOSTICS" : `CV DIAGNOSTICS (${candidates.length})`}
+          </button>
         </div>
       </div>
 
@@ -294,6 +296,58 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
           className="max-w-full max-h-full object-contain"
           style={{ imageRendering: "pixelated" }}
         />
+
+        {/* Real Candidate Detection & AI Classifier Diagnostics Overlay */}
+        {showDiagnostics && (
+          <div
+            className="absolute top-12 right-3 w-80 max-h-80 bg-[#060e1a]/95 border border-[var(--border-dim)] rounded p-3 overflow-y-auto font-mono text-xs shadow-2xl z-20"
+          >
+            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+              <span className="text-cyan-400 font-bold">REAL CV & AI DIAGNOSTICS</span>
+              <span className="text-[10px] text-slate-400">{candidates.length} CANDIDATES</span>
+            </div>
+
+            {/* Honest AI Description */}
+            <div className="mb-2.5 p-2 rounded bg-[#0a1220] border border-slate-800">
+              <div className="text-[10px] text-emerald-400 font-bold mb-1">
+                AI CLASSIFIER: Lightweight Logistic Regression
+              </div>
+              <div className="text-[9px] text-slate-400 leading-relaxed">
+                4-Feature appearance classifier: Normalized Area · Circularity · Peak SNR · Circular Hue Distance.
+              </div>
+            </div>
+
+            {/* Candidates Table */}
+            {candidates.length === 0 ? (
+              <div className="text-[11px] text-slate-500 py-3 text-center">No bright blobs detected in frame</div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {candidates.map((c, i) => (
+                  <div
+                    key={i}
+                    className="p-1.5 rounded bg-[#0a0f1c] border border-slate-800/80 flex justify-between items-center text-[10px]"
+                  >
+                    <div>
+                      <span className="text-cyan-400 font-bold">#{c.track_id ?? i + 1}</span>
+                      <span className="text-slate-400 ml-1.5">({c.u.toFixed(0)}, {c.v.toFixed(0)})</span>
+                      <div className="text-[9px] text-slate-500 mt-0.5">
+                        Area: {c.area}px² · Circ: {c.circularity.toFixed(2)} · SNR: {c.snr.toFixed(1)}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-emerald-400 font-bold">
+                        ML: {(c.ml_score * 100).toFixed(1)}%
+                      </div>
+                      <div className="text-[9px] text-slate-500">
+                        Age: {c.track_age ?? 1} fr
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Bottom Telemetry Bar */}
@@ -304,7 +358,10 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
             PAN {telemetry?.gimbal_pan?.toFixed(2) ?? "0.00"}° · TILT {telemetry?.gimbal_tilt?.toFixed(2) ?? "0.00"}°
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
+          <span className="text-slate-500">
+            RATE: {telemetry?.slew_spd?.toFixed(2) ?? "0.00"}°/s (MAX {telemetry?.gimbal_max_pan?.toFixed(1) ?? "5.0"}°/s)
+          </span>
           <span className="text-slate-500">ISRO SPEC:</span>
           <span className={telemetry && telemetry.pointing_err_deg * 160 < 10 ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
             {telemetry ? `${(telemetry.pointing_err_deg * 160).toFixed(1)} px / ${(telemetry.pointing_err_deg * 1000).toFixed(1)} mdeg` : "--"}

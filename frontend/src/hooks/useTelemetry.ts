@@ -10,6 +10,17 @@ export type TrackState =
   | "LOST"
   | "DISCONNECTED";
 
+export interface CandidateDetail {
+  u: number;
+  v: number;
+  area: number;
+  circularity: number;
+  snr: number;
+  ml_score: number;
+  track_id?: number | null;
+  track_age?: number;
+}
+
 export interface Telemetry {
   t: number;
   state: TrackState | string;
@@ -62,11 +73,29 @@ export interface Telemetry {
   wavelength: number;
   distance: number;
   data_rate: number;
-  // Real camera viewport
+  // Real camera viewport & PS diagnostics
   beacon_uv: [number, number] | null;
   boresight_uv: [number, number];
   distractors_uv: [number, number, number][];
   cand_list_uv: [number, number][];
+  candidates_detail?: CandidateDetail[];
+  screen_w?: number;
+  screen_h?: number;
+  cam_center_uv?: [number, number];
+  hfov_deg?: number;
+  vfov_deg?: number;
+  platform_mode?: string;
+  atmosphere_name?: string;
+  atmosphere_allowed?: boolean;
+  target_shape?: string;
+  target_size?: number;
+  target_count?: number;
+  motion_type?: string;
+  gimbal_max_pan?: number;
+  gimbal_max_tilt?: number;
+  noise_types?: string[];
+  last_reacq_s?: number | null;
+  mean_reacq_s?: number | null;
   // Performance KPIs
   fps: number;
   acq_time: number | null;
@@ -155,6 +184,69 @@ export function useTelemetry() {
   const triggerStress = useCallback(
     (scenarioId: string) => {
       sendCmd({ action: "trigger_stress", scenario_id: scenarioId });
+    },
+    [sendCmd]
+  );
+
+  const setPlatformMode = useCallback(
+    (platform: string) => {
+      sendCmd({ action: "set_platform", platform });
+    },
+    [sendCmd]
+  );
+
+  const setAtmosphere = useCallback(
+    (atmosphere: string) => {
+      sendCmd({ action: "set_atmosphere", atmosphere });
+    },
+    [sendCmd]
+  );
+
+  const setFov = useCallback(
+    (hfov: number, vfov?: number) => {
+      sendCmd({ action: "set_fov", hfov, vfov });
+    },
+    [sendCmd]
+  );
+
+  const setScreenSize = useCallback(
+    (w: number, h: number) => {
+      sendCmd({ action: "set_screen_size", w, h });
+    },
+    [sendCmd]
+  );
+
+  const setMotionType = useCallback(
+    (motion: string) => {
+      sendCmd({ action: "set_motion", motion });
+    },
+    [sendCmd]
+  );
+
+  const setTargetParams = useCallback(
+    (params: { shape?: string; size?: number; count?: number; initial?: any }) => {
+      sendCmd({ action: "set_target", ...params });
+    },
+    [sendCmd]
+  );
+
+  const setGimbalLimits = useCallback(
+    (max_pan?: number, max_tilt?: number) => {
+      sendCmd({ action: "set_gimbal", max_pan, max_tilt });
+    },
+    [sendCmd]
+  );
+
+  const setNoiseTypes = useCallback(
+    (noise_types: string[]) => {
+      sendCmd({ action: "set_noise_types", noise_types });
+    },
+    [sendCmd]
+  );
+
+  const injectOcclusion = useCallback(
+    (duration: number = 1.0) => {
+      sendCmd({ action: "inject_occlusion", duration });
     },
     [sendCmd]
   );
@@ -249,5 +341,14 @@ export function useTelemetry() {
     setDisturbance,
     setOpticalParams,
     triggerStress,
+    setPlatformMode,
+    setAtmosphere,
+    setFov,
+    setScreenSize,
+    setMotionType,
+    setTargetParams,
+    setGimbalLimits,
+    setNoiseTypes,
+    injectOcclusion,
   };
 }

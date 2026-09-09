@@ -196,7 +196,48 @@ class Scene3D:
             d.advance(dt, bz, bel)
         for o in self.obstacles:
             o.advance(self._t, bz, bel)
-        return self
+    def set_motion_type(self, motion_type):
+        """Update target motion type dynamically (PS 26169: straight_line, circular, figure_eight, random, etc.)."""
+        from core.orbital import RelativeOrbitModel
+        self.orbit = RelativeOrbitModel(
+            az_amp=self.orbit.az_amp, el_amp=self.orbit.el_amp,
+            speed=self.orbit.speed,
+            motion_type=motion_type,
+            initial=self.orbit.initial,
+            user_pos=getattr(self.orbit, "_user_pos", None)
+        )
+        self.beacon.orbit = self.orbit
+
+    def set_target_params(self, shape=None, size_px=None, count=None, initial=None):
+        """Dynamically update target shape (SQUARE/CIRCLE/SPOT), size (5-20 px), count (1-5), or initial pos."""
+        if shape is not None:
+            self.beacon.shape = str(shape).upper()
+        if size_px is not None:
+            sz = int(max(5, min(20, size_px)))
+            self.beacon.size_px = sz
+            self.beacon.size_py = sz
+        if initial is not None:
+            from core.orbital import RelativeOrbitModel
+            self.orbit = RelativeOrbitModel(
+                az_amp=self.orbit.az_amp, el_amp=self.orbit.el_amp,
+                speed=self.orbit.speed,
+                motion_type=self.orbit._motion_type,
+                initial=initial
+            )
+            self.beacon.orbit = self.orbit
+        if count is not None:
+            count = max(1, min(5, int(count)))
+            self.num_targets = count
+            from core.orbital import RelativeOrbitModel
+            self.beacons = [self.beacon]
+            for i in range(1, count):
+                extra_orbit = RelativeOrbitModel(
+                    az_amp=self.orbit.az_amp, el_amp=self.orbit.el_amp,
+                    speed=self.orbit.speed, seed=31 * i + 7,
+                    motion_type="random", initial="RANDOM")
+                extra = Beacon(extra_orbit, shape=self.beacon.shape,
+                               size_px=self.beacon.size_px, size_py=self.beacon.size_py)
+                self.beacons.append(extra)
 
     @property
     def time(self):

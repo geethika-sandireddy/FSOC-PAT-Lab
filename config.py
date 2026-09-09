@@ -66,6 +66,33 @@ PRINCIPAL_U = CAM_VIEW_W / 2.0
 PRINCIPAL_V = CAM_VIEW_H / 2.0
 FOCAL_PX = (CAM_VIEW_W / 2.0) / __import__("math").tan(__import__("math").radians(HFOV_DEG / 2.0))
 
+
+def update_fov(hfov_deg, vfov_deg=None):
+    """Dynamically update camera FOV and recalculate derived optical quantities."""
+    global HFOV_DEG, VFOV_DEG, CAMERA_FOV_H_DEG, CAMERA_FOV_V_DEG, PIXELS_PER_DEG, FOCAL_PX
+    HFOV_DEG = float(max(0.5, min(20.0, hfov_deg)))
+    CAMERA_FOV_H_DEG = HFOV_DEG
+    PIXELS_PER_DEG = CAM_VIEW_W / HFOV_DEG
+    if vfov_deg is not None:
+        VFOV_DEG = float(max(0.5, min(20.0, vfov_deg)))
+    else:
+        VFOV_DEG = CAM_VIEW_H / PIXELS_PER_DEG
+    CAMERA_FOV_V_DEG = VFOV_DEG
+    import math
+    FOCAL_PX = (CAM_VIEW_W / 2.0) / math.tan(math.radians(HFOV_DEG / 2.0))
+    return HFOV_DEG, VFOV_DEG, PIXELS_PER_DEG, FOCAL_PX
+
+
+def update_screen_size(w, h):
+    """Dynamically update virtual screen size and center coordinates."""
+    global SCREEN_SIZE_W, SCREEN_SIZE_H, SCREEN_CANVAS_CX, SCREEN_CANVAS_CY
+    SCREEN_SIZE_W = int(max(500, min(10000, w)))
+    SCREEN_SIZE_H = int(max(500, min(10000, h)))
+    SCREEN_CANVAS_CX = SCREEN_SIZE_W / 2.0
+    SCREEN_CANVAS_CY = SCREEN_SIZE_H / 2.0
+    return SCREEN_SIZE_W, SCREEN_SIZE_H, SCREEN_CANVAS_CX, SCREEN_CANVAS_CY
+
+
 # ---------------------------------------------------------------------------
 # World / orbital geometry
 # ---------------------------------------------------------------------------

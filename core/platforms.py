@@ -25,6 +25,10 @@ backend and the GUI so a disabled disturbance can never sneak in through a
 configuration path.
 """
 
+SATELLITE_SATELLITE = "SATELLITE_SATELLITE"
+UAV_SATELLITE = "UAV_SATELLITE"
+UAV_UAV = "UAV_UAV"
+
 PLATFORM_MODES = {
     "SATELLITE_SATELLITE": {
         "description": "LEO/MEO satellite-to-satellite FSOC link (vacuum)",

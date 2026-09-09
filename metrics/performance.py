@@ -119,9 +119,16 @@ class PerformanceTracker:
                     self.acquisition_time_s = sim_t
                     self.acquisition_frame = self.frame_count
                 self.lock_events += 1
-                if self.lock_lost_at_frame is not None:
+                if getattr(self, "lock_lost_at_time", None) is not None:
+                    dt_reacq = max(0.0, sim_t - self.lock_lost_at_time)
+                    self.reacquisition_times.append(dt_reacq)
+                    self.last_reacq_time = dt_reacq
+                    self.lock_lost_at_time = None
+                    self.lock_lost_at_frame = None
+                elif self.lock_lost_at_frame is not None:
                     dt_reacq = max(0.0, sim_t - (self.lock_lost_at_frame / max(1.0, config.FPS)))
                     self.reacquisition_times.append(dt_reacq)
+                    self.last_reacq_time = dt_reacq
                     self.lock_lost_at_frame = None
 
             err = r["pointing_err_deg"]
@@ -147,6 +154,7 @@ class PerformanceTracker:
         else:
             if self.was_locked:
                 self.lock_lost_at_frame = self.frame_count
+                self.lock_lost_at_time = sim_t
 
         self.was_locked = is_locked
 

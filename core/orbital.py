@@ -36,14 +36,24 @@ from core.motion import MOTION_TYPES
 
 class RelativeOrbitModel:
     def __init__(self, az_amp=1.4, el_amp=0.9, speed=1.15, seed=None,
-                 motion_type=None, initial="RANDOM"):
+                 motion_type=None, initial="RANDOM", user_pos=None):
         """initial: "RANDOM" (PS default) -> beacon appears anywhere in the
-        scene; "CENTER" -> beacon starts at the gimbal boresight (0,0)."""
+        scene; "CENTER" -> beacon starts at the gimbal boresight (0,0);
+        (az, el) tuple or user_pos -> user-defined initial coordinates."""
         rnd = random.Random(seed)
         self.az_amp = az_amp
         self.el_amp = el_amp
         self.speed = speed
         self.initial = initial
+        self._user_pos = None
+
+        if user_pos is not None and isinstance(user_pos, (tuple, list)) and len(user_pos) >= 2:
+            self._user_pos = (float(user_pos[0]), float(user_pos[1]))
+        elif isinstance(initial, (tuple, list)) and len(initial) >= 2:
+            self._user_pos = (float(initial[0]), float(initial[1]))
+        elif initial == "CENTER":
+            self._user_pos = (0.0, 0.0)
+
         # PS-mandated selectable motion type (straight_line, circular, figure_eight, random)
         self._motion_type = motion_type
         if motion_type is not None and motion_type in MOTION_TYPES:
@@ -58,8 +68,7 @@ class RelativeOrbitModel:
             self._is_custom = False
             self._motion_fn = None
         # Parameterised relative-motion model (see module docstring).
-        if self.initial == "CENTER":
-            # beacon starts on the gimbal boresight (0,0); motion still evolves
+        if self._user_pos is not None:
             self.az_omega = rnd.uniform(0.090, 0.120) * speed      # rad/s
             self.el_omega = rnd.uniform(0.045, 0.070) * speed      # rad/s
             self.az_phase = 0.0
@@ -73,7 +82,14 @@ class RelativeOrbitModel:
         self.range_var = rnd.uniform(180.0, 320.0)
         self.range_omega = rnd.uniform(0.03, 0.06)
 
-    def relative_los_az_el(self, t):
+        self._offset_az = 0.0
+        self._offset_el = 0.0
+        if self._user_pos is not None:
+            r0_az, r0_el = self._compute_raw(0.0)
+            self._offset_az = self._user_pos[0] - r0_az
+            self._offset_el = self._user_pos[1] - r0_el
+
+    def _compute_raw(self, t):
         if self._is_custom:
             if self._motion_fn is not None:
                 return self._motion_fn(t)
@@ -83,6 +99,10 @@ class RelativeOrbitModel:
         az = self.az_amp * math.sin(self.az_omega * t + self.az_phase)
         el = self.el_amp * math.sin(self.el_omega * t + self.el_phase)
         return az, el
+
+    def relative_los_az_el(self, t):
+        az, el = self._compute_raw(t)
+        return az + self._offset_az, el + self._offset_el
 
     def range_km(self, t):
         return self.range_base + self.range_var * math.sin(self.range_omega * t)

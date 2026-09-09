@@ -53,7 +53,17 @@ class Gimbal:
         self.pan_cmd = start_pan
         self.tilt_cmd = start_tilt
 
+        self.max_pan_deg_s = float(getattr(config, "CAMERA_MAX_PAN_DEG_S", 5.0))
+        self.max_tilt_deg_s = float(getattr(config, "CAMERA_MAX_TILT_DEG_S", 5.0))
+
         self.disturb_rng = None
+
+    def set_limits(self, max_pan=None, max_tilt=None):
+        """Configure maximum slew rate limits (PS 26169: 5-10 deg/s, default 5 deg/s)."""
+        if max_pan is not None:
+            self.max_pan_deg_s = float(max(0.5, min(20.0, max_pan)))
+        if max_tilt is not None:
+            self.max_tilt_deg_s = float(max(0.5, min(20.0, max_tilt)))
 
     def set_disturb_rng(self, rng):
         self.disturb_rng = rng
@@ -87,13 +97,13 @@ class Gimbal:
         """
         # --- realized attitude slews toward the active setpoint ---
         vel_p, pan, sp = self._follow(self.pan_cmd, self.pan, self.v_pan,
-                                  config.GIMBAL_MAX_SLEW_DEG_S,
-                                  config.GIMBAL_ACCEL_DEG_S2, dt, self.vp_ff)
+                                      self.max_pan_deg_s,
+                                      config.GIMBAL_ACCEL_DEG_S2, dt, self.vp_ff)
         self.pan, self.v_pan = pan, vel_p
         self.pan_sat = sp
         vel_t, tilt, st = self._follow(self.tilt_cmd, self.tilt, self.v_tilt,
-                                   config.GIMBAL_MAX_TILT_DEG_S,
-                                   config.GIMBAL_ACCEL_DEG_S2, dt, self.vt_ff)
+                                       self.max_tilt_deg_s,
+                                       config.GIMBAL_ACCEL_DEG_S2, dt, self.vt_ff)
         self.tilt, self.v_tilt = tilt, vel_t
         self.tilt_sat = st
 

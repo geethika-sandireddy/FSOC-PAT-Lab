@@ -142,12 +142,77 @@ class Simulator:
         return self.atmosphere_name
 
     # ------------------------------------------------------------------
+    def set_fov(self, hfov_deg, vfov_deg=None):
+        """Configure user-defined camera field of view (PS default 4x3 deg)."""
+        h, v, ppd, fpx = config.update_fov(hfov_deg, vfov_deg)
+        return h, v
+
+    def set_screen_size(self, w, h):
+        """Configure user-defined virtual screen size (PS default 2000x2000)."""
+        w, h, cx, cy = config.update_screen_size(w, h)
+        return w, h, cx, cy
+
+    def set_target_params(self, shape=None, size_px=None, count=None, initial=None):
+        """Configure target parameters (shape: Square/Circle/Spot, size: 5-20px, count: 1-5, initial)."""
+        self.scene.set_target_params(shape=shape, size_px=size_px, count=count, initial=initial)
+
+    def set_gimbal_limits(self, max_pan=None, max_tilt=None):
+        """Configure gimbal speed limits (PS default 5 deg/s, range 5-10 deg/s)."""
+        self.gimbal.set_limits(max_pan=max_pan, max_tilt=max_tilt)
+
+    def set_motion_type(self, motion_type):
+        """Configure target trajectory motion (straight_line, circular, figure_eight, random, etc.)."""
+        self.scene.set_motion_type(motion_type)
+
+    def set_platform_mode(self, platform_mode):
+        """Configure platform mode: SATELLITE_SATELLITE, UAV_SATELLITE, UAV_UAV.
+        Enforces vacuum gating for SATELLITE_SATELLITE (no terrestrial atmosphere)."""
+        from core.platforms import PLATFORM_MODES, atmosphere_allowed
+        self.platform_mode = platform_mode
+        self.atmosphere_allowed = atmosphere_allowed(platform_mode)
+        pm = PLATFORM_MODES.get(platform_mode)
+        if pm:
+            self.gimbal.set_limits(max_pan=pm.get("gimbal_max_pan", 5.0),
+                                   max_tilt=pm.get("gimbal_max_tilt", 5.0))
+            if "motion_default" in pm:
+                self.scene.set_motion_type(pm["motion_default"])
+            d = pm.get("disturbances", {})
+            self.disturbance.turbulence = d.get("turbulence", self.disturbance.turbulence)
+            self.disturbance.vibration = d.get("vibration", self.disturbance.vibration)
+            self.disturbance.sensor_noise = d.get("sensor_noise", self.disturbance.sensor_noise)
+            self.disturbance.jerk_prob = d.get("jerk_prob", self.disturbance.jerk_prob)
+            self.disturbance.beacon_fade = d.get("beacon_fade", self.disturbance.beacon_fade)
+            if "noise_types" in pm:
+                self.disturbance.noise_types = list(pm["noise_types"])
+            if not self.atmosphere_allowed:
+                self.atmosphere_name = "CLEAR"
+                self.atmosphere.condition = "CLEAR"
+            else:
+                self.set_atmosphere(pm.get("atmosphere", "CLEAR"))
+        return self.platform_mode
+
+    def set_noise_types(self, noise_types):
+        """Configure active noise channels (gaussian, salt_pepper, poisson)."""
+        self.disturbance.noise_types = [n for n in noise_types if n in ("gaussian", "salt_pepper", "poisson", "hot_pixels")]
+
+    def inject_target_loss(self, duration_s=1.0):
+        """Simulate real target disappearance to test COASTING -> REACQUIRING -> LOCKED reacquisition ladder."""
+        self._target_loss_until = self.t + max(0.1, float(duration_s))
+        for b in getattr(self.scene, "beacons", [getattr(self.scene, "beacon", None)]):
+            if b is not None:
+                b.suppressed = True
+
+    # ------------------------------------------------------------------
     def step(self):
         """Advance one simulation frame.  Returns a dict of measurements the
         caller turns into metrics or HUD + the (possibly disturbed) frame."""
         dt = self.dt
         self.scene.advance(dt)
         self.t += dt
+
+        is_suppressed = self.t < getattr(self, "_target_loss_until", 0.0)
+        for b in getattr(self.scene, "beacons", [self.scene.beacon]):
+            b.suppressed = is_suppressed
 
         basis = self.gimbal.basis()
         frame = self.sensor.render(self.scene, self.gimbal, config.FOCAL_PX,
@@ -207,12 +272,26 @@ class Simulator:
         occ = 0.0
         for o in self.scene.obstacles:
             occ = max(occ, o.crossing(self.scene.time))
-        beacon_visible = occ < 0.55
+        beacon_visible = (occ < 0.55) and not is_suppressed
 
         # is the beacon within the sensor FOV (as projected)?
         import math
         dpan = min(abs(truth_az - self.gimbal.pan), 360 - abs(truth_az - self.gimbal.pan))
         dtilt = min(abs(truth_el - self.gimbal.tilt), 360 - abs(truth_el - self.gimbal.tilt))
+
+        candidates_detail = [
+            dict(
+                u=round(float(c.u), 1),
+                v=round(float(c.v), 1),
+                area=int(c.area),
+                circularity=round(float(c.circularity), 3),
+                snr=round(float(c.snr), 2),
+                ml_score=round(float(c.ml_score), 3),
+                track_id=getattr(c, "track_id", None),
+                track_age=getattr(c, "track_age", 0),
+            )
+            for c in candidates
+        ]
 
         self.last_result = dict(
             state=state,
@@ -223,6 +302,7 @@ class Simulator:
             est_err_deg=est_err_deg,
             candidates=len(candidates),
             cand_list=candidates,
+            candidates_detail=candidates_detail,
             beacon_visible=beacon_visible,
             dist_pan_deg=dpan, dist_tilt_deg=dtilt,
             in_fov=(dpan < config.HFOV_DEG / 2.0 + 0.1 and

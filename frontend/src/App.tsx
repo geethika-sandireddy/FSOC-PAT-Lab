@@ -10,10 +10,11 @@ import {
 } from "recharts";
 import { useTelemetry, type Telemetry } from "./hooks/useTelemetry";
 import CameraViewport from "./components/CameraViewport";
+import SceneConfigPage from "./components/SceneConfigPage";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type View = "overview" | "telemetry" | "simulation" | "stress" | "falselock" | "eventlog";
+type View = "overview" | "telemetry" | "config" | "simulation" | "stress" | "falselock" | "eventlog";
 
 interface TelemetryPoint {
   t: number;
@@ -976,6 +977,15 @@ export default function App() {
     setDisturbance,
     setOpticalParams,
     triggerStress,
+    setPlatformMode,
+    setAtmosphere,
+    setFov,
+    setScreenSize,
+    setMotionType,
+    setTargetParams,
+    setGimbalLimits,
+    setNoiseTypes,
+    injectOcclusion,
   } = useTelemetry();
 
   // Unified single source of truth from real simulator telemetry
@@ -1013,10 +1023,11 @@ export default function App() {
   const navItems: { view: View; label: string; abbr: string; num: string; icon: string }[] = [
     { view: "overview", label: "OVERVIEW", abbr: "OVR", num: "01", icon: "⬡" },
     { view: "telemetry", label: "TELEMETRY", abbr: "TEL", num: "02", icon: "📈" },
-    { view: "simulation", label: "SIMULATION", abbr: "SIM", num: "03", icon: "⚙" },
-    { view: "stress", label: "STRESS TEST", abbr: "STR", num: "04", icon: "⚡" },
-    { view: "falselock", label: "FALSE LOCK", abbr: "FLK", num: "05", icon: "◎" },
-    { view: "eventlog", label: "EVENT LOG", abbr: "EVT", num: "06", icon: "≡" },
+    { view: "config", label: "PS CONFIG", abbr: "CFG", num: "03", icon: "🛠" },
+    { view: "simulation", label: "OPTICAL LINK", abbr: "OPT", num: "04", icon: "⚙" },
+    { view: "stress", label: "STRESS TEST", abbr: "STR", num: "05", icon: "⚡" },
+    { view: "falselock", label: "FALSE LOCK", abbr: "FLK", num: "06", icon: "◎" },
+    { view: "eventlog", label: "EVENT LOG", abbr: "EVT", num: "07", icon: "≡" },
   ];
 
   const sidebarWidth = sidebarCollapsed ? 54 : 160;
@@ -1188,6 +1199,22 @@ export default function App() {
             {view === "stress" && <StressView scenarios={scenarios} onTrigger={onTrigger} metrics={metrics} history={history} />}
             {view === "falselock" && <FalseLockView metrics={metrics} />}
             {view === "eventlog" && <EventLogView events={events} />}
+            {view === "config" && (
+              <SceneConfigPage
+                currentPreset={telemetry?.preset || "EASY"}
+                onSetPreset={setPreset}
+                onSetDisturbance={setDisturbance}
+                onSetPlatformMode={setPlatformMode}
+                onSetAtmosphere={setAtmosphere}
+                onSetFov={setFov}
+                onSetTargetParams={setTargetParams}
+                onSetMotionType={setMotionType}
+                onSetGimbalLimits={setGimbalLimits}
+                onSetNoiseTypes={setNoiseTypes}
+                onInjectOcclusion={injectOcclusion}
+                telemetry={telemetry}
+              />
+            )}
           </div>
         </div>
       </div>

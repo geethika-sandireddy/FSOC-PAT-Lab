@@ -145,6 +145,9 @@ class VirtualSensor:
         occ = 0.0
         for b in getattr(scene, "beacons", [scene.beacon]):
             u, v = self._viewport_px(b.az_deg, b.el_deg, cam_canvas)
+            if getattr(b, "suppressed", False):
+                b.visible = False
+                continue
             b.visible = (0 <= u < self.w and 0 <= v < self.h)
             amp = b.intensity(b.time)
             if disturbance is not None and getattr(disturbance, "beacon_fade", 0) > 0:
