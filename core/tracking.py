@@ -653,7 +653,7 @@ class Tracker:
         #
         #  * _resid_deg_lead (estimator quality): the observation vs the FUSED
         #    belief (bias-absorbed estimate + velocity lead).  This is what the
-        #    uncertainty estimator and the derived disturbance estimate read:
+        #    the uncertainty estimator and the derived disturbance estimate read:
         #    it stays small by construction, exactly because the bias filter
         #    learns the prior's static error away.  Byte-identical to the
         #    pre-manoeuvre-forward legacy behaviour.
@@ -838,7 +838,14 @@ class Tracker:
         self.search_angle += rate * dt * 2.2
         self.search_radius = min(config.SEARCH_MAX_RADIUS_DEG,
                                  self.search_radius + rate * dt * 0.5)
-        if self.est_az is None:
+        # NOTE: use ephemeris prior as the blind-search anchor whenever the
+        # tracker is in SEARCHING.  The previous implementation anchored the
+        # search to an existing est_az/est_el even after a failed reacquisition
+        # — that stale/extrapolated estimate could be wildly incorrect and
+        # drive the blind search far away from the true prior.  Anchoring to
+        # the ephemeris prior here is the minimal fix that prevents runaway
+        # blind sweeps while preserving targeted REACQUIRING behaviour.
+        if self.est_az is None or self.state == SEARCHING:
             base_az, base_el = self.eph.predict_az_el(t)
         else:
             base_az, base_el = self.est_az, self.est_el
