@@ -48,6 +48,8 @@ class C:
 
     STATE = {
         "SEARCHING":     (255, 185, 0),
+        "CANDIDATE":     (0, 235, 255),
+        "ACQUIRING":     (0, 215, 255),
         "TENTATIVE":     (0, 235, 255),
         "COASTING":      (0, 210, 250),
         "LOCKED":        (0, 255, 140),
@@ -58,6 +60,8 @@ class C:
 
     STATE_FILL = {
         "SEARCHING":     (58, 40, 0),
+        "CANDIDATE":     (0, 38, 64),
+        "ACQUIRING":     (0, 36, 72),
         "TENTATIVE":     (0, 38, 64),
         "COASTING":      (0, 34, 58),
         "LOCKED":        (0, 56, 26),

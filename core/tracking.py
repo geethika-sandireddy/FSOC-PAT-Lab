@@ -40,16 +40,14 @@ from core.trust import (AdaptiveTrustManager, MODE_BALANCED, MODE_VISION,
                         MODE_MODEL)
 
 
-SEARCHING = "SEARCHING"
-COASTING = "COASTING"
-LOCKED = "LOCKED"
-DEGRADED_LOCK = "DEGRADED_LOCK"
-REACQUIRING = "REACQUIRING"
-
-# fine-grained phases (subset of states; phases live inside SEARCHING and the
-# tracked states).  These name the acquisition sub-steps visible in the GUI.
-CANDIDATE = "CANDIDATE"
-ACQUIRING = "ACQUIRING"
+SEARCHING = config.STATE_SEARCHING
+CANDIDATE = config.STATE_CANDIDATE
+ACQUIRING = config.STATE_ACQUIRING
+LOCKED = config.STATE_LOCKED
+DEGRADED_LOCK = config.STATE_DEGRADED_LOCK
+COASTING = config.STATE_COASTING
+REACQUIRING = config.STATE_REACQUIRING
+LOST = config.STATE_LOST
 
 
 class ModulationTrack:
@@ -240,11 +238,52 @@ class Tracker:
         # tracker is on, and how long it has been actively REACQUIRING.
         self.reacq_level = 1
         self.reacq_time = 0.0
+        self.vel_az = 0.0
+        self.vel_el = 0.0
+        self._pv_az = None
+        self._pv_el = None
+        self._pv_u = None
+        self._pv_v = None
+        self._prev_track_az = None
+        self._prev_track_el = None
+        self._prev_track_t = None
+        self._prev_bias_r_az = None
+        self._prev_bias_r_el = None
+        self._prev_bias_az = None
+        self._prev_bias_el = None
         # one-frame handover flag: holds the widened REACQ gate for the frame
         # immediately after a successful promotion from REACQUIRING -> LOCKED/
         # DEGRADED_LOCK so the just-associated candidate is not dropped by the
         # now-smaller LOCKED association gate on the next frame.
         self._reacq_handover = 0
+        self._measurement_valid = False
+        self._consecutive_valid_frames = 0
+        self._reacq_confirm_frames = 0
+        self._lost_time = 0.0
+
+    @property
+    def is_locked(self) -> bool:
+        """True ONLY when the tracker has satisfied its actual lock criteria."""
+        return self.state == LOCKED
+
+    @property
+    def is_degraded(self) -> bool:
+        return self.state == DEGRADED_LOCK
+
+    @property
+    def measurement_valid(self) -> bool:
+        """True if associated observation was valid this frame, False otherwise."""
+        return self._measurement_valid
+
+    @property
+    def measurement_age(self) -> float:
+        """Seconds since the last valid observation was associated."""
+        return self.last_candidate_age
+
+    @property
+    def prediction_only(self) -> bool:
+        """True if currently relying on motion model / Kalman extrapolation without valid measurement."""
+        return self.state in (COASTING, REACQUIRING, LOST) or not self._measurement_valid
 
     # ------------------------------------------------------------------
     def reset(self, az, el):
@@ -272,6 +311,13 @@ class Tracker:
         self.coast_mode = None
         self.reacq_level = 1
         self.reacq_time = 0.0
+        self._reacq_handover = 0
+        self._measurement_valid = False
+        self._consecutive_valid_frames = 0
+        self._reacq_confirm_frames = 0
+        self._lost_time = 0.0
+        self.last_candidate_age = 1e9
+        self.associated = None
 
     # ------------------------------------------------------------------
     def _prior_gate_deg(self, t):
@@ -444,119 +490,131 @@ class Tracker:
     # ------------------------------------------------------------------
     def _on_tentative(self, c, t, dt, p_az, p_el):
         """Build a tentative track: spatial consistency, then modulation ID."""
+        self._measurement_valid = True
         self.candidates_seen += 1
         consistency = config.ACQUIRE_CONSISTENCY_PX / config.PIXELS_PER_DEG
-        self.phase = CANDIDATE if self._tent_frames == 0 else ACQUIRING
-        self._update_conf(c, p_az, p_el)
-        self.trust.update(conf=self.conf, mod_score=0.0, snr=c.snr,
-                          dist_level=self.dist_level_est, visible=True,
-                          mod_enabled=self.use_modulation)
 
         if self._tent_frames == 0:
             self._tent_az, self._tent_el = c.los_az, c.los_el
             self._tent_id = getattr(c, "track_id", None)
             self._tent_frames = 1
+            self._consecutive_valid_frames = 1
             self._tent_dj = 0.0
+            self.state = CANDIDATE
+            self.phase = CANDIDATE
         else:
             d = math.hypot(c.los_az - self._tent_az, c.los_el - self._tent_el)
-            # a fast target (e.g. SEVERE random walk) moves MORE than the
-            # 14 px consistency gate per frame once the search re-engages;
-            # an absolute restart then resets the tentative track forever and
-            # re-acquisition dies.  Judge consistency against the object's own
-            # recent jump (rolling) - slow spatial check for decoys is retained
-            # by the base gate, the modulation cross-check still gates commit.
             tol_base = max(consistency, self._tent_dj * 6.0)
-            if d < consistency:
+            if d < consistency or d < tol_base:
                 self._tent_frames += 1
-            elif d < tol_base:
-                self._tent_frames += 1       # fast-but-continuous: tolerate
+                self._consecutive_valid_frames += 1
+                self.state = ACQUIRING
+                self.phase = ACQUIRING
             elif d > consistency * 3:
-                # object jumped beyond what its own motion explains -> decoy
-                # hop -> restart the tentative track
+                # Decoy hop / jump -> restart tentative track
                 self._tent_az, self._tent_el = c.los_az, c.los_el
                 self._tent_id = getattr(c, "track_id", None)
                 self._tent_frames = 1
+                self._consecutive_valid_frames = 1
                 self.mod.reset()
-            # else: minor jitter, keep counting spaces
+                self.state = CANDIDATE
+                self.phase = CANDIDATE
             self._tent_dj = 0.75 * self._tent_dj + 0.25 * d
+
         self._tent_az, self._tent_el = c.los_az, c.los_el
         self.mod.push(c.u, c.v, c.peak, self._frame, area=c.area)
         c.mod_score = self.mod.corr()
 
+        self._update_conf(c, p_az, p_el)
+        self.trust.update(conf=self.conf, mod_score=0.0, snr=c.snr,
+                          dist_level=self.dist_level_est, visible=True,
+                          mod_enabled=self.use_modulation)
+
         # steer the gimbal toward the tentative target so it stays in view
         self.est_az, self.est_el = c.los_az, c.los_el
         self._pv_u, self._pv_v = c.u, c.v
+        self.confidence = self.conf.overall
 
-        # enough temporally-consistent frames AND enough modulation samples
+        # Qualification for LOCKED:
+        # 1. Minimum consecutive valid observation frames (config.LOCK_CONFIRM_FRAMES = 5)
+        # 2. Overall confidence >= config.LOCK_MIN_CONF (0.70)
+        # 3. Internal uncertainty sigma <= config.LOCK_MAX_UNCERTAINTY_PX (14.0 px)
+        can_lock = (self._consecutive_valid_frames >= config.LOCK_CONFIRM_FRAMES
+                    and self.conf.overall >= config.LOCK_MIN_CONF
+                    and self.unc.sigma_px <= config.LOCK_MAX_UNCERTAINTY_PX)
+
         need_samples = int(config.MOD_CORREL_WIN * 0.8)
-        if self._tent_frames >= config.ACQUIRE_CONFIRM_FRAMES:
-            if self.use_modulation:
-                if len(self.mod.values) < need_samples:
-                    # keep gathering evidence (spatial consistency already proven)
-                    pass
-                elif c.mod_score >= config.MOD_LOCK_THRESHOLD:
-                    self._commit(c.los_az, c.los_el, t)
-                    return self.state, self.est_az, self.est_el, c.mod_score
-                else:
-                    # modulation fails -> not the real beacon, start over
-                    self._reset_tentative()
-            elif self.video_mode:
-                # external-video beacon: appearance + spatial consistency over
-                # ACQUIRE_CONFIRM_FRAMES is enough - no modulation clock to test
+        if self.use_modulation:
+            if len(self.mod.values) < need_samples:
+                # keep gathering evidence in ACQUIRING state
+                return self.state, self.est_az, self.est_el, self.confidence
+            elif can_lock and c.mod_score >= config.MOD_LOCK_THRESHOLD:
                 self._commit(c.los_az, c.los_el, t)
-                return self.state, self.est_az, self.est_el, max(0.5, c.ml_score)
-            else:
-                # synthetic beacon, modulation DISABLED: modulation cannot act as
-                # the decoy discriminator, so the appearance-classifier threshold
-                # (ML_LOCK_THRESHOLD) replaces it as the commit bar.  Spatial
-                # consistency was already proven over ACQUIRE_CONFIRM_FRAMES;
-                # no modulation logic runs and nothing is penalised for a
-                # missing modulation signature.
-                if c.ml_score >= config.ML_LOCK_THRESHOLD:
-                    self._commit(c.los_az, c.los_el, t)
-                    return self.state, self.est_az, self.est_el, max(0.5, c.ml_score)
-                # appearance insufficient -> start over
+                return self.state, self.est_az, self.est_el, self.confidence
+            elif len(self.mod.values) >= need_samples and c.mod_score < config.MOD_LOCK_THRESHOLD:
+                # modulation fails -> not the real beacon, start over
                 self._reset_tentative()
-        return SEARCHING, self.est_az, self.est_el, self.confidence
+                self.state = SEARCHING
+                self.phase = SEARCHING
+                return self.state, self.est_az, self.est_el, self.confidence
+        elif self.video_mode:
+            if can_lock or (self._consecutive_valid_frames >= config.LOCK_CONFIRM_FRAMES and c.ml_score >= 0.50):
+                self._commit(c.los_az, c.los_el, t)
+                return self.state, self.est_az, self.est_el, self.confidence
+        else:
+            # Synthetic beacon, modulation disabled
+            if can_lock and c.ml_score >= config.ML_LOCK_THRESHOLD:
+                self._commit(c.los_az, c.los_el, t)
+                return self.state, self.est_az, self.est_el, self.confidence
+            elif self._consecutive_valid_frames >= config.LOCK_CONFIRM_FRAMES and c.ml_score < config.ML_LOCK_THRESHOLD:
+                self._reset_tentative()
+                self.state = SEARCHING
+                self.phase = SEARCHING
+                return self.state, self.est_az, self.est_el, self.confidence
+
+        return self.state, self.est_az, self.est_el, self.confidence
 
     def _reset_tentative(self):
         self._tent_frames = 0
+        self._consecutive_valid_frames = 0
         self._tent_az = self._tent_el = None
         self._tent_id = None
         self.mod.reset()
 
     def _on_tracked(self, c, t, dt, p_az, p_el):
+        self._measurement_valid = True
         prev_state = self.state
         self.candidates_seen += 1
         self.mod.push(c.u, c.v, c.peak, self._frame, area=c.area)
         c.mod_score = self.mod.corr()
+
+        # If recovering from COASTING or actively in REACQUIRING, candidate must be confirmed
+        if prev_state == COASTING:
+            self.state = REACQUIRING
+            self.phase = REACQUIRING
+            self._reacq_confirm_frames = 1
+        elif prev_state == REACQUIRING:
+            self._reacq_confirm_frames += 1
+
         # continuous modulation verification: a locked object that STOPPED
-        # matching the beacon signature is a false lock -> drop back to search
-        # (modulation disabled / video mode have no modulation clock, so they
-        # rely on the persistent, bright associated blob as the beacon identity
-        # and no modulation-specific rejection rule executes).
+        # matching the beacon signature is a false lock -> drop to COASTING
         if self.use_modulation and c.mod_score < config.MOD_SUSPECT_FLOOR:
             self._suspect += 1
             if self._suspect >= config.MOD_SUSPECT_DROP_FRAMES:
-                # sustained false lock: the locked object stopped matching the
-                # beacon signature -> drop back to a clean search.  Reset the
-                # whole recovery ladder so the next acquisition starts at a
-                # fresh LEVEL 1 coast/reacquire rather than inheriting stale
-                # stage state.
                 self._suspect = 0
                 self.mod.reset()
-                self.state = SEARCHING
-                self.phase = SEARCHING
-                self.search_angle = 0.0
-                self.search_radius = 0.0
+                self.state = COASTING
+                self.phase = COASTING
+                self._measurement_valid = False
                 self.coast_time = 0.0
                 self.reacq_level = 1
                 self.reacq_time = 0.0
-                return SEARCHING, self.est_az, self.est_el, self.confidence
+                self._reacq_confirm_frames = 0
+                return self.state, self.est_az, self.est_el, self.confidence
         else:
             self._suspect = 0
-        self.phase = LOCKED
-        # ---- Phase 2 confidence + trust (this is what the manager consumes) ----
+
+        # ---- Phase 2 confidence + trust ----
         self._update_conf(c, p_az, p_el)
         mode = self.trust.update(conf=self.conf,
                                  mod_score=(0.0 if not self.use_modulation
@@ -568,18 +626,52 @@ class Tracker:
                          centroid_residual_px=self._centroid_jitter_px(c),
                          pred_residual_px=getattr(self, "_resid_deg_lead", 0.0)
                          * config.PIXELS_PER_DEG)
-        # ---- DEGRADED_LOCK banding (design zones: 0.55-0.70 -> DEGRADED_LOCK
-        # hold, >=0.70 -> full LOCKED; below 0.55 left untouched: the existing
-        # suspect/coast machinery owns the transition out of the lock) ----
-        if self.conf.overall >= config.DEGRADED_EXIT_CONF:
-            self.state = DEGRADED_LOCK if prev_state == REACQUIRING else LOCKED
-        elif self.conf.overall >= config.DEGRADED_ENTER_CONF:
-            self.state = DEGRADED_LOCK
+
+        # State determination
+        if prev_state in (COASTING, REACQUIRING):
+            # Staged reacquisition confirmation: must have enough consecutive frames and confidence
+            if (self._reacq_confirm_frames >= config.REACQ_CONFIRM_FRAMES
+                    and self.conf.overall >= config.LOCK_MIN_CONF):
+                self.state = LOCKED
+                self.phase = LOCKED
+                self.coast_time = 0.0
+                self.reacq_time = 0.0
+                self._reacq_confirm_frames = 0
+                self._reacq_handover = 1
+            elif (self._reacq_confirm_frames >= config.REACQ_CONFIRM_FRAMES
+                    and self.conf.overall >= config.DEGRADED_ENTER_CONF):
+                self.state = DEGRADED_LOCK
+                self.phase = DEGRADED_LOCK
+                self.coast_time = 0.0
+                self.reacq_time = 0.0
+                self._reacq_confirm_frames = 0
+                self._reacq_handover = 1
+            else:
+                self.state = REACQUIRING
+                self.phase = REACQUIRING
+        else:
+            # Already in LOCKED or DEGRADED_LOCK
+            if self.conf.overall >= config.LOCK_MIN_CONF:
+                self.state = LOCKED
+                self.phase = LOCKED
+            elif self.conf.overall >= config.DEGRADED_ENTER_CONF:
+                self.state = DEGRADED_LOCK
+                self.phase = DEGRADED_LOCK
+            else:
+                # Immediate lock drop when confidence collapses below 0.55
+                self.state = COASTING
+                self.phase = COASTING
+                self._measurement_valid = False
+                self.coast_time = 0.0
+                self.reacq_time = 0.0
+                self._reacq_confirm_frames = 0
+
         self.confidence = self.conf.overall
-        self.coast_time = 0.0
-        self._tent_az = self._tent_el = None
-        self._tent_frames = 0
-        self._tent_id = None
+        if self.state in (LOCKED, DEGRADED_LOCK):
+            self.coast_time = 0.0
+            self._tent_az = self._tent_el = None
+            self._tent_frames = 0
+            self._tent_id = None
         r_az = c.los_az - p_az
         r_el = c.los_el - p_el
         a = config.ESTIMATOR_ALPHA
@@ -654,6 +746,8 @@ class Tracker:
         self.acquisition_count += 1
         self.coast_time = 0.0
         self._tent_id = None
+        self._consecutive_valid_frames = 0
+        self._reacq_confirm_frames = 0
 
     # ------------------------------------------------------------------
     def _update_conf(self, c, p_az, p_el):
@@ -695,8 +789,10 @@ class Tracker:
         prior_resid_deg = math.hypot(c.los_az - (p_az + self.vel_az * _lead_dt),
                                      c.los_el - (p_el + self.vel_el * _lead_dt))
         self._prior_resid_deg = prior_resid_deg
-        _unexplained_deg = max(0.0, prior_resid_deg
-                               - math.hypot(self.bias_az, self.bias_el))
+        effective_bias = math.hypot(self.bias_az, self.bias_el)
+        if self.state in (CANDIDATE, ACQUIRING) and self._tent_az is not None:
+            effective_bias = math.hypot(self._tent_az - p_az, self._tent_el - p_el)
+        _unexplained_deg = max(0.0, prior_resid_deg - effective_bias)
         self._unexplained_resid_deg = _unexplained_deg
         # how hard must the filter CHASE the ephemeris right now (deg/s)?
         # The bias magnitude can absorb a lot, but the rate at which the bias
@@ -782,26 +878,31 @@ class Tracker:
         return config.REACQ_LEVELS
 
     def _on_miss(self, t, dt):
-        if self.state in (LOCKED, DEGRADED_LOCK, COASTING, REACQUIRING):
+        self._measurement_valid = False
+        self._consecutive_valid_frames = 0
+        self._reacq_confirm_frames = 0
+
+        if self.state in (LOCKED, DEGRADED_LOCK):
             # enter predictive coast on the first missed frame: without this the
-            # ladder has no way to progress LOCKED -> COASTING -> REACQUIRING
-            if self.state in (LOCKED, DEGRADED_LOCK):
-                self.state = COASTING
-                self.phase = COASTING
-                self.coast_time = 0.0
-                self.reacq_time = 0.0
+            # ladder has no way to progress LOCKED -> COASTING -> REACQUIRING -> LOST
+            self.state = COASTING
+            self.phase = COASTING
+            self.coast_time = 0.0
+            self.reacq_time = 0.0
+
+        if self.state in (COASTING, REACQUIRING):
             self.coast_time += dt
             # prediction uncertainty grows (correctly) uncapped while unobserved
             self.unc.coast(dt)
             caz, cel = self._coast_vel()
-            if self.state in (COASTING, REACQUIRING) and self.est_az is not None:
+            if self.est_az is not None:
                 self.est_az += caz * dt
                 self.est_el += cel * dt
 
             # staged reacquisition ladder: once uncertainty is past credible,
             # escalate REACQUIRING LEVEL 1 -> 2 -> 3 (each a wider association
             # gate + faster expanding-spiral growth) until the whole configurable
-            # ladder times out (~1 s) and the loop falls through to blind SEARCH.
+            # ladder times out (~1 s) and the loop falls through to LOST.
             if self.state == COASTING and self.unc.reacquire_threshold_reached():
                 self.state = REACQUIRING
                 self.phase = REACQUIRING
@@ -813,30 +914,46 @@ class Tracker:
                 self.reacq_time += dt
                 self.reacq_level = self._reacq_level_for(self.reacq_time)
                 if self.reacq_time > config.REACQ_TIMEOUT_S:
-                    self.state = SEARCHING
-                    self.phase = SEARCHING
-                    self.search_angle = 0.0
-                    self.search_radius = 0.0
+                    self.state = LOST
+                    self.phase = LOST
+                    self._lost_time = 0.0
             elif self.state == COASTING:
-                self.phase = COASTING
+                # hard ceiling on any single coast leg
+                if self.coast_time > config.COAST_TIMEOUT_S:
+                    self.state = LOST
+                    self.phase = LOST
+                    self._lost_time = 0.0
 
-            # hard ceiling on any single coast/reacq leg (never allowed to ride
-            # a stale prediction indefinitely even if the ladder is generous)
-            if self.state == COASTING and self.coast_time > config.COAST_TIMEOUT_S:
+            self.coast_mode = self.trust.update_coast(False, self.unc)
+
+        elif self.state == LOST:
+            self.phase = LOST
+            self._lost_time += dt
+            self.unc.coast(dt)
+            if self._lost_time >= config.LOST_TIMEOUT_S:
                 self.state = SEARCHING
                 self.phase = SEARCHING
                 self.search_angle = 0.0
                 self.search_radius = 0.0
+                self.coast_time = 0.0
+                self.reacq_time = 0.0
             self.coast_mode = self.trust.update_coast(False, self.unc)
-        else:
+
+        elif self.state in (CANDIDATE, ACQUIRING):
+            self._reset_tentative()
+            self.state = SEARCHING
             self.phase = SEARCHING
-            # the blind search is itself unobserved: the estimate keeps getting
-            # LESS certain every frame we sweep without a hit, so keep growing
-            # the internal uncertainty through SEARCH too (display value stays
-            # clamped for the HUD; the reacquisition line was already crossed
-            # on the way in - this is what guarantees a fresh lock attempt).
             self.unc.coast(dt)
             self.coast_mode = self.trust.update_coast(False, self.unc)
+
+        else:  # SEARCHING
+            self.state = SEARCHING
+            self.phase = SEARCHING
+            # the blind search is itself unobserved: the estimate keeps getting
+            # LESS certain every frame we sweep without a hit
+            self.unc.coast(dt)
+            self.coast_mode = self.trust.update_coast(False, self.unc)
+
         self.associated = None
         return self.state, self.est_az, self.est_el, self.confidence
 
@@ -852,14 +969,7 @@ class Tracker:
         self.search_angle += rate * dt * 2.2
         self.search_radius = min(config.SEARCH_MAX_RADIUS_DEG,
                                  self.search_radius + rate * dt * 0.5)
-        # NOTE: use ephemeris prior as the blind-search anchor whenever the
-        # tracker is in SEARCHING.  The previous implementation anchored the
-        # search to an existing est_az/est_el even after a failed reacquisition
-        # — that stale/extrapolated estimate could be wildly incorrect and
-        # drive the blind search far away from the true prior.  Anchoring to
-        # the ephemeris prior here is the minimal fix that prevents runaway
-        # blind sweeps while preserving targeted REACQUIRING behaviour.
-        if self.est_az is None or self.state == SEARCHING:
+        if self.est_az is None or self.state in (SEARCHING, LOST):
             base_az, base_el = self.eph.predict_az_el(t)
         else:
             base_az, base_el = self.est_az, self.est_el

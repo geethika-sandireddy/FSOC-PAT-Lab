@@ -31,7 +31,7 @@ export default function Header({ isRunning, onToggle }: HeaderProps) {
           <div className="flex gap-6 text-center">
             <div>
               <p className="text-xs text-slate-400 uppercase tracking-wider">Link State</p>
-              <p className="text-lg font-bold text-green-400 mt-1 pulse-glow">● ESTABLISHED</p>
+              <p className="text-lg font-bold text-slate-400 mt-1">STANDBY</p>
             </div>
             <div>
               <p className="text-xs text-slate-400 uppercase tracking-wider">RX Power</p>

@@ -47,7 +47,7 @@ class OpticalLinkModel:
         self.pointing_error_urad = round(0.85 * self.pointing_error_urad + 0.15 * live_ptg_urad, 2)
 
         conf = sim_result.get("confidence", 0.95)
-        state = sim_result.get("state", "ESTABLISHED" if sim_result.get("state") == "LOCKED" else sim_result.get("state", "ESTABLISHED"))
+        state = sim_result.get("state", "SEARCHING")
 
         # Apply stress test beam misalignment if active
         if stress_mgr and stress_mgr.scenarios["beam_mis"]["active"]:
@@ -651,8 +651,12 @@ def render_stress_test_page(surf, rect, stress_mgr: StressTestManager, opt: Opti
     T.card(surf, r1_rect, fill=C.PANEL_2, border=C.BORDER)
     T.section_title(surf, right_x + 16, main_y + 12, "SYSTEM RESPONSE (REAL-TIME)", C.CYAN_ELEC)
 
+    cur_st = hist_pt.get("state", "SEARCHING")
+    link_lbl = cur_st if cur_st != "LOCKED" else ("DEGRADED" if hist_pt.get("ber", 1e-12) >= 1e-6 else "LOCKED")
+    link_col = C.GREEN if link_lbl == "LOCKED" else (C.AMBER if link_lbl in ("DEGRADED", "DEGRADED_LOCK", "SEARCHING", "COASTING", "CANDIDATE", "ACQUIRING") else C.RED)
+
     res_rows = [
-        ("Link State", "ESTABLISHED" if hist_pt.get("ber", 1e-12) < 1e-6 else "DEGRADED", C.GREEN if hist_pt.get("ber", 1e-12) < 1e-6 else C.AMBER),
+        ("Link State", link_lbl, link_col),
         ("RX Optical Power", f"{hist_pt['rx_power']:.1f} dBm", C.CYAN_ELEC),
         ("Carrier SNR", f"{hist_pt['snr']:.1f} dB", C.CYAN_ELEC),
         ("Bit Error Rate", f"{hist_pt['ber']:.2e}", C.GREEN if hist_pt['ber'] < 1e-6 else C.RED),

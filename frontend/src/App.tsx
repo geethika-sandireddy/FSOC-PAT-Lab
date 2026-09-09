@@ -176,8 +176,16 @@ const TopBar = ({ metrics, paused, onPause, state, connected }: { metrics: LiveM
   const [time, setTime] = useState(now());
   useInterval(() => setTime(now()), 1000);
 
-  const isLocked = state === "LOCKED" || state === "ESTABLISHED";
-  const stateColor = !connected ? "#ff2d55" : isLocked ? "#00ff88" : state === "SEARCHING" ? "#ff8c00" : "#00d4ff";
+  const isLocked = state === "LOCKED";
+  const stateColor = !connected ? "#ff2d55"
+    : state === "LOCKED" ? "#00ff88"
+    : state === "DEGRADED_LOCK" ? "#eab308"
+    : state === "ACQUIRING" || state === "CANDIDATE" ? "#00d4ff"
+    : state === "COASTING" ? "#38bdf8"
+    : state === "REACQUIRING" ? "#a855f7"
+    : state === "LOST" ? "#ef4444"
+    : state === "SEARCHING" ? "#ff8c00"
+    : "#64748b";
 
   return (
     <div style={{
@@ -685,7 +693,7 @@ const StressView = ({
         <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-dim)", borderRadius: 4, padding: "14px 18px" }}>
           <SectionHeader>SYSTEM RESPONSE</SectionHeader>
           {[
-            { l: "Link State", v: metrics.ber > 1e-9 ? "DEGRADED" : "ESTABLISHED", c: metrics.ber > 1e-9 ? "#ff8c00" : "#00ff88" },
+            { l: "Link State", v: state === "LOCKED" ? (metrics.ber > 1e-9 ? "DEGRADED" : "LOCKED") : state, c: state === "LOCKED" ? (metrics.ber > 1e-9 ? "#ff8c00" : "#00ff88") : (state === "SEARCHING" ? "#ff8c00" : (state === "LOST" ? "#ef4444" : "#00d4ff")) },
             { l: "RX Power", v: `${fmt2(metrics.rxPower)} dBm`, c: "#00d4ff" },
             { l: "SNR", v: `${fmt2(metrics.snr)} dB`, c: "#00d4ff" },
             { l: "BER", v: fmtSci(metrics.ber), c: metrics.ber > 1e-9 ? "#ff2d55" : "#00ff88" },
@@ -719,7 +727,7 @@ const StressView = ({
             DEMO SEQUENCE
           </div>
           {[
-            "1. Start with nominal state — show judge ESTABLISHED link",
+            "1. Start with nominal state — show judge LOCKED link",
             "2. Trigger Atmospheric Degradation — watch SNR fall",
             "3. Observe DEGRADED — alert sequence triggered",
             "4. Trigger False Lock — demonstrate detection matrix",
@@ -1042,7 +1050,7 @@ export default function App() {
   ]);
 
   const [events, setEvents] = useState<EventLogEntry[]>([
-    { id: 1, level: "INFO", timestamp: "14:54:38", subsystem: "LINK_CTRL", event: "Carrier acquisition confirmed. Lock state: ESTABLISHED" },
+    { id: 1, level: "INFO", timestamp: "14:54:38", subsystem: "LINK_CTRL", event: "Carrier acquisition confirmed. Lock state: LOCKED" },
     { id: 2, level: "INFO", timestamp: "14:54:39", subsystem: "TRACKING", event: "Fine pointing loop engaged. Tracking error: 1.73 µrad" },
     { id: 3, level: "INFO", timestamp: "14:54:40", subsystem: "TELEMETRY", event: "Telemetry stream active. Update rate: 30 Hz" },
   ]);

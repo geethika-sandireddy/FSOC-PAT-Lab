@@ -49,9 +49,7 @@ from ui.mission_pages import (
 
 APP_W, APP_H = 1600, 900
 CAM_W, CAM_H = config.CAM_VIEW_W, config.CAM_VIEW_H
-DISPLAY_CAP  = 60
-
-LOCKED_STATES = ("LOCKED", "DEGRADED_LOCK")
+LOCKED_STATES = ("LOCKED",)
 
 # Reference layout defaults (for class attributes and headless mode)
 SIDEBAR_W = 150
@@ -752,7 +750,7 @@ class App:
         cur_st = hist_pt.get("state", res.get("state", "SEARCHING"))
         if cur_st != self._last_state:
             ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
-            lvl = "INFO" if cur_st in LOCKED_STATES or cur_st == "ESTABLISHED" else ("WARNING" if cur_st in ("COASTING", "REACQUIRING", "DEGRADED") else "CRITICAL")
+            lvl = "INFO" if cur_st == "LOCKED" else ("WARNING" if cur_st in ("COASTING", "REACQUIRING", "DEGRADED_LOCK", "CANDIDATE", "ACQUIRING") else "CRITICAL")
             self.events_list.insert(0, (ts_str, lvl, "TRACKER", f"State transition: {self._last_state} -> {cur_st} (error: {res.get('pointing_err_deg', 0)*1000:.1f} mdeg)"))
             if len(self.events_list) > 100:
                 self.events_list.pop()
@@ -905,20 +903,20 @@ class App:
         T.text(surf, (self.SIDEBAR_W + 16, 25), "PAT LAB · ISRO PS 26169", 11, T.C.CYAN_ELEC, bold=True)
 
         # Link State badge (positioned after title with clean clearance)
-        st = hist_pt.get("state", "ESTABLISHED")
+        st = hist_pt.get("state", res.get("state", "SEARCHING"))
         st_col = T.C.STATE.get(st, T.C.GREEN)
         badge_x = self.SIDEBAR_W + (285 if self.W >= 1480 else 235)
         badge_w = 126
         badge_h = 34
         badge_y = 6
-        badge_bg = (44, 14, 18) if st in ("FALSE LOCK", "SIGNAL LOSS") else ((44, 30, 8) if st == "DEGRADED" else (6, 36, 26))
+        badge_bg = (44, 14, 18) if st in ("FALSE LOCK", "SIGNAL LOSS", "LOST") else ((44, 30, 8) if st in ("DEGRADED", "DEGRADED_LOCK") else (6, 36, 26))
         pygame.draw.rect(surf, badge_bg, (badge_x, badge_y, badge_w, badge_h), border_radius=4)
         pygame.draw.rect(surf, st_col, (badge_x, badge_y, badge_w, badge_h), 1, border_radius=4)
         T.text(surf, (badge_x + 10, badge_y + 3), "LINK STATE", 10, T.C.TEXT_FAINT, bold=True)
 
         # Pulsing indicator dot
         p_alpha = int(180 + 75 * math.sin(time.time() * 5.0))
-        dot_col = (0, min(255, p_alpha), 120) if st in LOCKED_STATES or st == "ESTABLISHED" else st_col
+        dot_col = (0, min(255, p_alpha), 120) if st == "LOCKED" else st_col
         pygame.draw.circle(surf, dot_col, (badge_x + 14, badge_y + 22), 4)
         T.text(surf, (badge_x + 24, badge_y + 16), st, 12.5, st_col, bold=True)
 

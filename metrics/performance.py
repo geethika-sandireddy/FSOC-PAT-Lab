@@ -79,7 +79,7 @@ class PerformanceTracker:
         state = r["state"]
         self.state_time[state] = self.state_time.get(state, 0) + 1
 
-        is_locked = state in (LOCKED, DEGRADED_LOCK)
+        is_locked = state == LOCKED
         visible = r.get("beacon_visible", False)
 
         # Adaptive trust / uncertainty log (Phase 2 evidence)

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 
 export type TrackState =
   | "SEARCHING"
+  | "CANDIDATE"
+  | "ACQUIRING"
   | "TENTATIVE"
   | "LOCKED"
   | "DEGRADED_LOCK"
@@ -24,6 +26,15 @@ export interface CandidateDetail {
 export interface Telemetry {
   t: number;
   state: TrackState | string;
+  tracking_state?: TrackState | string;
+  tracking_phase?: string;
+  is_locked?: boolean;
+  is_degraded?: boolean;
+  measurement_valid?: boolean;
+  measurement_age?: number;
+  prediction_only?: boolean;
+  boresight_error_px?: number | null;
+  centroid_error_px?: number | null;
   preset: string;
   confidence: number;
   pointing_err_deg: number;

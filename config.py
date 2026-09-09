@@ -186,6 +186,37 @@ ASSOC_GATE_DEG = 0.30                # candidate->track association gate
 # clamped to ASSOC_MAX_GATE_DEG.  Uses the INTERNAL uncertainty estimator (the
 # HUD display cap must never gate loop behaviour).  Video mode keeps its own
 # wide field-facing gate and is not clamped here.
+# ---------------------------------------------------------------------------
+# Authoritative Primary Tracking States (Part 2: Single Source of Truth)
+# ---------------------------------------------------------------------------
+STATE_SEARCHING = "SEARCHING"
+STATE_CANDIDATE = "CANDIDATE"
+STATE_ACQUIRING = "ACQUIRING"
+STATE_LOCKED = "LOCKED"
+STATE_DEGRADED_LOCK = "DEGRADED_LOCK"
+STATE_COASTING = "COASTING"
+STATE_REACQUIRING = "REACQUIRING"
+STATE_LOST = "LOST"
+
+ALL_TRACKING_STATES = (
+    STATE_SEARCHING,
+    STATE_CANDIDATE,
+    STATE_ACQUIRING,
+    STATE_LOCKED,
+    STATE_DEGRADED_LOCK,
+    STATE_COASTING,
+    STATE_REACQUIRING,
+    STATE_LOST,
+)
+
+# Lock qualification thresholds (Part 3 & 4)
+LOCK_CONFIRM_FRAMES = 5         # consecutive frames of valid observation to achieve initial LOCKED
+REACQ_CONFIRM_FRAMES = 3        # consecutive frames of valid observation to re-achieve LOCKED from REACQUIRING
+LOCK_MIN_CONF = 0.70            # overall confidence must be >= this for full LOCKED
+LOCK_MAX_UNCERTAINTY_PX = 14.0  # uncertainty must be <= this for full LOCKED
+LOCK_MAX_RESIDUAL_PX = 18.0     # observation-prediction residual must be <= this for full LOCKED
+LOST_TIMEOUT_S = 0.35           # duration to hold LOST before resetting to SEARCHING
+
 ASSOC_UNCERTAINTY_FACTOR = 0.5       # gate grows with internal sigma (px)
 ASSOC_LATENCY_MARGIN_FACTOR = 1.0    # gate grows with predicted motion over the
                                      # GIMBAL_LATENCY_FRAMES delay (deg)

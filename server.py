@@ -203,7 +203,7 @@ def _build_telemetry(result: dict, sim: Simulator, perf: PerformanceTracker, opt
 
     state = result["state"]
     false_lock = (
-        state in ("LOCKED", "DEGRADED_LOCK")
+        state == "LOCKED"
         and result.get("beacon_visible", True)
         and (result.get("est_err_deg", 0.0) or 0.0) > 0.35
     )
@@ -250,6 +250,15 @@ def _build_telemetry(result: dict, sim: Simulator, perf: PerformanceTracker, opt
     return {
         "t": round(result["t"], 3),
         "state": state,
+        "tracking_state": result.get("tracking_state", state),
+        "tracking_phase": result.get("tracking_phase", getattr(tr, "phase", state)),
+        "is_locked": bool(result.get("is_locked", getattr(tr, "is_locked", state == "LOCKED"))),
+        "is_degraded": bool(result.get("is_degraded", getattr(tr, "is_degraded", state == "DEGRADED_LOCK"))),
+        "measurement_valid": bool(result.get("measurement_valid", getattr(tr, "measurement_valid", False))),
+        "measurement_age": round(float(result.get("measurement_age", getattr(tr, "measurement_age", 0.0))), 3),
+        "prediction_only": bool(result.get("prediction_only", getattr(tr, "prediction_only", False))),
+        "boresight_error_px": round(float(result["boresight_error_px"]), 2) if result.get("boresight_error_px") is not None else None,
+        "centroid_error_px": round(float(result["centroid_error_px"]), 2) if result.get("centroid_error_px") is not None else None,
         "preset": sim.preset_name,
         "confidence": round(result["confidence"], 3),
         "pointing_err_deg": round(result["pointing_err_deg"], 4),

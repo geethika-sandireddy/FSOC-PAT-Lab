@@ -56,8 +56,8 @@ class PointingController:
         """Return (pan_deg, tilt_deg) set-point for this frame."""
         st = self.tracker.state
 
-        if st == "SEARCHING" and self.tracker.last_candidate_age < 0.35 \
-                and self.tracker.last_candidate_az is not None:
+        if st in ("CANDIDATE", "ACQUIRING") or (st == "SEARCHING" and self.tracker.last_candidate_age < 0.35
+                and self.tracker.last_candidate_az is not None):
             # a promising candidate exists: chase it while confirming
             self.pan = self.tracker.last_candidate_az
             self.tilt = self.tracker.last_candidate_el

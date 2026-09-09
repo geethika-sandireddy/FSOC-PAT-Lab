@@ -273,8 +273,34 @@ class Simulator:
             for c in candidates
         ]
 
+        # Centroid metrics (Metric B: optical offset / boresight error; Metric C: true centroid error)
+        cam_cx = config.CAM_VIEW_W / 2.0
+        cam_cy = config.CAM_VIEW_H / 2.0
+        detected_cx = assoc.u if assoc is not None else None
+        detected_cy = assoc.v if assoc is not None else None
+        boresight_error_px = (
+            round(math.hypot(detected_cx - cam_cx, detected_cy - cam_cy), 2)
+            if detected_cx is not None else None
+        )
+        cam_canvas = self.sensor._canvas_xy(self.gimbal.pan, self.gimbal.tilt)
+        gt_u, gt_v = self.sensor._viewport_px(truth_az, truth_el, cam_canvas)
+        in_frame = (0 <= gt_u < config.CAM_VIEW_W and 0 <= gt_v < config.CAM_VIEW_H)
+        centroid_error_px = (
+            round(math.hypot(detected_cx - gt_u, detected_cy - gt_v), 2)
+            if (detected_cx is not None and in_frame) else None
+        )
+
         self.last_result = dict(
             state=state,
+            tracking_state=state,
+            tracking_phase=getattr(self.tracker, "phase", state),
+            is_locked=getattr(self.tracker, "is_locked", state == "LOCKED"),
+            is_degraded=getattr(self.tracker, "is_degraded", state == "DEGRADED_LOCK"),
+            measurement_valid=getattr(self.tracker, "measurement_valid", assoc is not None),
+            measurement_age=getattr(self.tracker, "measurement_age", 0.0),
+            prediction_only=getattr(self.tracker, "prediction_only", False),
+            boresight_error_px=boresight_error_px,
+            centroid_error_px=centroid_error_px,
             est_az=est_az, est_el=est_el,
             confidence=confidence,
             truth_az=truth_az, truth_el=truth_el,
@@ -402,7 +428,7 @@ class VideoInputSimulator:
 
     @property
     def is_locked(self):
-        return self.tracker.state in ("LOCKED", "DEGRADED_LOCK")
+        return self.tracker.is_locked
 
     def step(self):
         """Read one video frame and close the detection -> track -> control loop.
@@ -476,7 +502,7 @@ class VideoInputSimulator:
         self.lock_history.append((self.frame_idx, state))
 
         # --- State, Acquisition & Reacquisition Statistics ---
-        is_locked = state in ("LOCKED", "DEGRADED_LOCK")
+        is_locked = (state == "LOCKED")
         if is_locked:
             self.locked_frames += 1
             if self.acquisition_time_s is None:
@@ -521,6 +547,15 @@ class VideoInputSimulator:
 
         self.last_result = dict(
             state=state,
+            tracking_state=state,
+            tracking_phase=getattr(self.tracker, "phase", state),
+            is_locked=getattr(self.tracker, "is_locked", state == "LOCKED"),
+            is_degraded=getattr(self.tracker, "is_degraded", state == "DEGRADED_LOCK"),
+            measurement_valid=getattr(self.tracker, "measurement_valid", detected_cx is not None),
+            measurement_age=getattr(self.tracker, "measurement_age", 0.0),
+            prediction_only=getattr(self.tracker, "prediction_only", False),
+            boresight_error_px=optical_offset_px,
+            centroid_error_px=true_centroid_err_px,
             est_az=est_az,
             est_el=est_el,
             confidence=confidence,

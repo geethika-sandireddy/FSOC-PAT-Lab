@@ -70,8 +70,15 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
     }
 
     const st = telemetry.state;
-    const isLocked = st === "LOCKED" || st === "DEGRADED_LOCK";
-    const stateCol = isLocked ? "#00ff88" : st === "SEARCHING" ? "#ff8c00" : "#00d4ff";
+    const isLocked = st === "LOCKED";
+    const stateCol = st === "LOCKED" ? "#00ff88"
+      : st === "DEGRADED_LOCK" ? "#eab308"
+      : st === "ACQUIRING" || st === "CANDIDATE" ? "#00d4ff"
+      : st === "COASTING" ? "#38bdf8"
+      : st === "REACQUIRING" ? "#a855f7"
+      : st === "LOST" ? "#ef4444"
+      : st === "SEARCHING" ? "#ff8c00"
+      : "#64748b";
 
     // 2. Optical Boresight (Camera Center LOS)
     const boresightCol = isLocked ? "#00ff88" : "#3b82f6";
@@ -164,71 +171,74 @@ export default function CameraViewport({ telemetry, connected }: CameraViewportP
       ctx.arc(bx, by, rad, 0, Math.PI * 2);
       ctx.fill();
 
-      // Precision Corner Lock Brackets
-      const bw = 16;
-      const bl = 6;
-      ctx.strokeStyle = stateCol;
-      ctx.lineWidth = 2;
+      // Lock / Tracking Brackets & Annotation Card (Only when actually tracked/acquiring)
+      if (isLocked || st === "DEGRADED_LOCK" || st === "ACQUIRING" || st === "CANDIDATE") {
+        // Precision Corner Brackets
+        const bw = 16;
+        const bl = 6;
+        ctx.strokeStyle = stateCol;
+        ctx.lineWidth = isLocked ? 2 : 1.5;
 
-      // Top-Left
-      ctx.beginPath();
-      ctx.moveTo(bx - bw, by - bw + bl);
-      ctx.lineTo(bx - bw, by - bw);
-      ctx.lineTo(bx - bw + bl, by - bw);
-      ctx.stroke();
+        // Top-Left
+        ctx.beginPath();
+        ctx.moveTo(bx - bw, by - bw + bl);
+        ctx.lineTo(bx - bw, by - bw);
+        ctx.lineTo(bx - bw + bl, by - bw);
+        ctx.stroke();
 
-      // Top-Right
-      ctx.beginPath();
-      ctx.moveTo(bx + bw - bl, by - bw);
-      ctx.lineTo(bx + bw, by - bw);
-      ctx.lineTo(bx + bw, by - bw + bl);
-      ctx.stroke();
+        // Top-Right
+        ctx.beginPath();
+        ctx.moveTo(bx + bw - bl, by - bw);
+        ctx.lineTo(bx + bw, by - bw);
+        ctx.lineTo(bx + bw, by - bw + bl);
+        ctx.stroke();
 
-      // Bottom-Left
-      ctx.beginPath();
-      ctx.moveTo(bx - bw, by + bw - bl);
-      ctx.lineTo(bx - bw, by + bw);
-      ctx.lineTo(bx - bw + bl, by + bw);
-      ctx.stroke();
+        // Bottom-Left
+        ctx.beginPath();
+        ctx.moveTo(bx - bw, by + bw - bl);
+        ctx.lineTo(bx - bw, by + bw);
+        ctx.lineTo(bx - bw + bl, by + bw);
+        ctx.stroke();
 
-      // Bottom-Right
-      ctx.beginPath();
-      ctx.moveTo(bx + bw - bl, by + bw);
-      ctx.lineTo(bx + bw, by + bw);
-      ctx.lineTo(bx + bw, by + bw - bl);
-      ctx.stroke();
+        // Bottom-Right
+        ctx.beginPath();
+        ctx.moveTo(bx + bw - bl, by + bw);
+        ctx.lineTo(bx + bw, by + bw);
+        ctx.lineTo(bx + bw, by + bw - bl);
+        ctx.stroke();
 
-      // Sleek Angled Leader Line to Target Card
-      const cardX = bx > W - 180 ? bx - 170 : bx + 28;
-      const cardY = by > H - 70 ? by - 55 : by - 25;
+        // Sleek Angled Leader Line to Target Card
+        const cardX = bx > W - 180 ? bx - 170 : bx + 28;
+        const cardY = by > H - 70 ? by - 55 : by - 25;
 
-      ctx.strokeStyle = "rgba(0, 212, 255, 0.7)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(bx + (bx > W - 180 ? -bw : bw), by);
-      ctx.lineTo(cardX, cardY + 20);
-      ctx.stroke();
+        ctx.strokeStyle = "rgba(0, 212, 255, 0.7)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(bx + (bx > W - 180 ? -bw : bw), by);
+        ctx.lineTo(cardX, cardY + 20);
+        ctx.stroke();
 
-      // Target Metadata Card
-      ctx.fillStyle = "rgba(6, 14, 26, 0.85)";
-      ctx.strokeStyle = stateCol;
-      ctx.lineWidth = 1;
-      ctx.fillRect(cardX, cardY, 150, 52);
-      ctx.strokeRect(cardX, cardY, 150, 52);
+        // Target Metadata Card
+        ctx.fillStyle = "rgba(6, 14, 26, 0.85)";
+        ctx.strokeStyle = stateCol;
+        ctx.lineWidth = 1;
+        ctx.fillRect(cardX, cardY, 150, 52);
+        ctx.strokeRect(cardX, cardY, 150, 52);
 
-      const isAligned = telemetry.pointing_err_deg * 160 < 10;
-      ctx.fillStyle = stateCol;
-      ctx.font = "bold 10px 'DM Mono', monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(`TARGET BEACON [${st}]`, cardX + 8, cardY + 14);
+        const isAligned = telemetry.pointing_err_deg * 160 < 10;
+        ctx.fillStyle = stateCol;
+        ctx.font = "bold 10px 'DM Mono', monospace";
+        ctx.textAlign = "left";
+        ctx.fillText(`TARGET BEACON [${st}]`, cardX + 8, cardY + 14);
 
-      ctx.fillStyle = "#94a3b8";
-      ctx.font = "9px 'DM Mono', monospace";
-      ctx.fillText(`LOS: ${telemetry.truth_az.toFixed(2)}°, ${telemetry.truth_el.toFixed(2)}°`, cardX + 8, cardY + 28);
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "9px 'DM Mono', monospace";
+        ctx.fillText(`LOS: ${telemetry.truth_az.toFixed(2)}°, ${telemetry.truth_el.toFixed(2)}°`, cardX + 8, cardY + 28);
 
-      ctx.fillStyle = isAligned ? "#00ff88" : "#f59e0b";
-      ctx.font = "bold 9.5px 'DM Mono', monospace";
-      ctx.fillText(`RESIDUAL: ${(telemetry.pointing_err_deg * 160).toFixed(1)} px (${isAligned ? "PASS" : "ALIGNING"})`, cardX + 8, cardY + 42);
+        ctx.fillStyle = isAligned ? "#00ff88" : "#f59e0b";
+        ctx.font = "bold 9.5px 'DM Mono', monospace";
+        ctx.fillText(`RESIDUAL: ${(telemetry.pointing_err_deg * 160).toFixed(1)} px (${isAligned ? "PASS" : "ALIGNING"})`, cardX + 8, cardY + 42);
+      }
     }
 
     // 6. Viewport Corner Marks

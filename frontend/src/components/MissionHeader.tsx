@@ -3,6 +3,8 @@ import type { Telemetry } from "@/hooks/useTelemetry";
 
 const STATE_COLOR: Record<string, string> = {
   SEARCHING:    "var(--state-SEARCHING)",
+  CANDIDATE:    "var(--state-TENTATIVE)",
+  ACQUIRING:    "var(--state-TENTATIVE)",
   TENTATIVE:    "var(--state-TENTATIVE)",
   LOCKED:       "var(--state-LOCKED)",
   DEGRADED_LOCK:"var(--state-DEGRADED_LOCK)",
@@ -11,12 +13,12 @@ const STATE_COLOR: Record<string, string> = {
   LOST:         "var(--state-LOST)",
 };
 const STATE_DOT: Record<string, string> = {
-  SEARCHING:"dot-warning", TENTATIVE:"dot-coast", LOCKED:"dot-locked",
+  SEARCHING:"dot-warning", CANDIDATE:"dot-coast", ACQUIRING:"dot-coast", TENTATIVE:"dot-coast", LOCKED:"dot-locked",
   DEGRADED_LOCK:"dot-degraded", COASTING:"dot-coast",
   REACQUIRING:"dot-reacq", LOST:"dot-critical",
 };
 const STATE_BG: Record<string, string> = {
-  SEARCHING:"#30240000", TENTATIVE:"#00244800", LOCKED:"#00302000",
+  SEARCHING:"#30240000", CANDIDATE:"#00244800", ACQUIRING:"#00244800", TENTATIVE:"#00244800", LOCKED:"#00302000",
   DEGRADED_LOCK:"#00241800", COASTING:"#00203000",
   REACQUIRING:"#20104000", LOST:"#30080800",
 };
