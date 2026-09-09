@@ -233,26 +233,6 @@ class Simulator:
         self.intensity_hist.append(assoc.peak if assoc is not None else None)
 
         pan, tilt = self.controller.compute_setpoint(self.t, dt)
-
-        # DIAG: per-frame snapshot (read-only diagnostics)
-        print(
-            f"[DIAG t={self.t:.3f}] "
-            f"truth={self.scene.beacon.az_deg:.3f},{self.scene.beacon.el_deg:.3f} "
-            f"state={self.tracker.state} "
-            f"est={self.tracker.est_az},{self.tracker.est_el} "
-            f"last_age={getattr(self.tracker,'last_candidate_age',None)} "
-            f"last_cand={getattr(self.tracker,'last_candidate_az',None)},"
-            f"{getattr(self.tracker,'last_candidate_el',None)} "
-            f"setpoint={pan:.3f},{tilt:.3f} "
-            f"gimbal_cmd={self.gimbal.pan_cmd:.3f},{self.gimbal.tilt_cmd:.3f} "
-            f"gimbal_actual={self.gimbal.pan:.3f},{self.gimbal.tilt:.3f} "
-            f"velocity={self.gimbal.v_pan:.3f},{self.gimbal.v_tilt:.3f} "
-            f"sat={self.gimbal.pan_sat:.3f},{self.gimbal.tilt_sat:.3f} "
-            f"sigma={getattr(self.tracker.unc,'sigma_px',None)}"
-        )
-
-        pan, tilt = pan, tilt
-        self.gimbal.command_attitude(pan, tilt)
         self.gimbal.step(dt, self.disturbance)
 
         # ----- ground-truth view (metrics only, never into the pipeline) -----
