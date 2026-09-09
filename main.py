@@ -904,6 +904,7 @@ class App:
         T.text(surf, (self.SIDEBAR_W + 16, 25), "PAT LAB · ISRO PS 26169", 11, T.C.CYAN_ELEC, bold=True)
 
         # Link State badge (positioned after title with clean clearance)
+        res = getattr(self.sim, "last_result", {}) or {}
         st = hist_pt.get("state", res.get("state", "SEARCHING"))
         st_col = T.C.STATE.get(st, T.C.GREEN)
         badge_x = self.SIDEBAR_W + (285 if self.W >= 1480 else 235)
