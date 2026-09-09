@@ -140,8 +140,29 @@ class PointingController:
         sign_pan = 1.0 if d_pan_signed >= 0.0 else -1.0
         sign_tilt = 1.0 if d_tilt_signed >= 0.0 else -1.0
 
-        step_pan = min(d_pan, allowed_pan_delta) * sign_pan
-        step_tilt = min(d_tilt, allowed_tilt_delta) * sign_tilt
+        # --- IMPROVEMENT: anticipate target motion during catch-up time
+        # If we cannot reach the predicted LOS within the short horizon, the
+        # target will continue moving; compute where it will be after
+        # time_to_reach (eff / max_rate) and step toward that future position.
+        vaz = getattr(self.tracker, "vel_az", 0.0) or 0.0
+        velt = getattr(self.tracker, "vel_el", 0.0) or 0.0
+
+        time_to_reach_pan = eff_pan / max_pan_rate if max_pan_rate > 1e-9 else 0.0
+        time_to_reach_tilt = eff_tilt / max_tilt_rate if max_tilt_rate > 1e-9 else 0.0
+
+        future_pan = pred_pan + vaz * time_to_reach_pan
+        future_tilt = pred_tilt + velt * time_to_reach_tilt
+
+        d_future_pan_signed = self._short_ang_diff(future_pan, cur_pan)
+        d_future_tilt_signed = self._short_ang_diff(future_tilt, cur_tilt)
+        d_future_pan = abs(d_future_pan_signed)
+        d_future_tilt = abs(d_future_tilt_signed)
+
+        sign_future_pan = 1.0 if d_future_pan_signed >= 0.0 else -1.0
+        sign_future_tilt = 1.0 if d_future_tilt_signed >= 0.0 else -1.0
+
+        step_pan = min(d_future_pan, allowed_pan_delta) * sign_future_pan
+        step_tilt = min(d_future_tilt, allowed_tilt_delta) * sign_future_tilt
 
         intermediate_pan = cur_pan + step_pan
         intermediate_tilt = cur_tilt + step_tilt
