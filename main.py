@@ -49,6 +49,7 @@ from ui.mission_pages import (
 
 APP_W, APP_H = 1600, 900
 CAM_W, CAM_H = config.CAM_VIEW_W, config.CAM_VIEW_H
+DISPLAY_CAP = getattr(config, "FPS", 60)
 LOCKED_STATES = ("LOCKED",)
 
 # Reference layout defaults (for class attributes and headless mode)
