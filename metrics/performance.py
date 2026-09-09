@@ -80,7 +80,7 @@ class PerformanceTracker:
         self.state_time[state] = self.state_time.get(state, 0) + 1
 
         is_locked = state in (LOCKED, DEGRADED_LOCK)
-        visible = r["beacon_visible"]
+        visible = r.get("beacon_visible", False)
 
         # Adaptive trust / uncertainty log (Phase 2 evidence)
         trk = sim.tracker
@@ -134,7 +134,7 @@ class PerformanceTracker:
             err = r["pointing_err_deg"]
             if err is not None:
                 self.errors_deg.append(err)
-            if r["est_err_deg"] is not None:
+            if r.get("est_err_deg") is not None:
                 self.est_errors_deg.append(r["est_err_deg"])
 
             if visible and r["in_fov"]:

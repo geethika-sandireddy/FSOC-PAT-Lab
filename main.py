@@ -722,7 +722,7 @@ class App:
         extra = {"preset": self.preset}
         if self.video_mode:
             extra["input_video"] = os.path.basename(self.video_path)
-            errs = [e[1] for e in self.sim.centroid_err_log]
+            errs = [e[1] for e in self.sim.centroid_log]
             if errs:
                 extra["centroiding_error_mean_px"]  = round(float(np.mean(errs)), 2)
                 extra["centroiding_error_rms_px"]   = round(
@@ -1273,8 +1273,16 @@ class App:
             T.text(surf, (card_x + 10, card_y + 36), f"ISRO SPEC: {pass_str} · CONF: {int(res.get('confidence',0)*100)}%", 10, T.C.GREEN if is_aligned else T.C.AMBER, bold=True)
 
         # ── 4. Distractor Decoys (AI Discrimination Showcase) ──
-        cam_canvas = self.sim.sensor._canvas_xy(self.sim.gimbal.pan, self.sim.gimbal.tilt)
-        for d in getattr(self.sim.scene, "distractors", []):
+        if hasattr(self.sim, "sensor"):
+          cam_canvas = self.sim.sensor._canvas_xy(
+        self.sim.gimbal.pan,
+        self.sim.gimbal.tilt
+          )
+        else:
+            cam_canvas = (0, 0)
+
+        scene = getattr(self.sim, "scene", None)
+        for d in getattr(scene, "distractors", []):
             du, dv = self.sim.sensor._viewport_px(d.az, d.el, cam_canvas)
             if 0 <= du < 640 and 0 <= dv < 480:
                 dx, dy = to_screen(du, dv)
@@ -1584,7 +1592,7 @@ class App:
             T.text(surf, (now_x - 8, max(plot.y + 2, now_y - 12)),
                    f"{cur_v*1000:.0f} m°", 11, cur_col, bold=True, anchor="tr", mono=True)
 
-        if not self.sim.last_result["beacon_visible"]:
+        if not self.sim.last_result.get("beacon_visible", False):
             pygame.draw.rect(surf, (54, 14, 14), (plot.right - 4, plot.y, 4, plot.h))
 
         self._draw_state_timeline(surf, plot)
