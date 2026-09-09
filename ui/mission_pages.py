@@ -336,9 +336,15 @@ def render_telemetry_page(surf, rect, opt: OpticalLinkModel):
 
 
 def _draw_telemetry_wave(surf, rect, values, min_val, max_val, color, unit_str):
-    """Draws a clean, high-visibility oscilloscope curve with grid and bounding metrics."""
+    """Draws a clean, high-visibility oscilloscope curve with dynamic auto-scaling and glowing area fill."""
     pygame.draw.rect(surf, (6, 12, 24), rect, border_radius=4)
     pygame.draw.rect(surf, C.BORDER_DIM, rect, 1, border_radius=4)
+
+    # Dynamic auto-range to ensure curve is always centered and visibly fluctuating
+    if values:
+        v_max = max(values)
+        if v_max > max_val * 0.85 or max_val <= min_val:
+            max_val = max(50.0, v_max * 1.25)
 
     # Grid lines
     for i in range(1, 4):
@@ -357,6 +363,15 @@ def _draw_telemetry_wave(surf, rect, values, min_val, max_val, color, unit_str):
             frac = (val - min_val) / val_span
             py = rect.bottom - int(rect.h * max(0.02, min(0.98, frac)))
             pts.append((px, py))
+
+        # Soft glowing gradient area fill under curve
+        fill_pts = [pts[0]] + pts + [(pts[-1][0], rect.bottom), (pts[0][0], rect.bottom)]
+        area = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        local = [(p[0] - rect.x, p[1] - rect.y) for p in fill_pts]
+        c_fill = (*color[:3], 35) if len(color) >= 3 else (0, 229, 255, 35)
+        pygame.draw.polygon(area, c_fill, local)
+        surf.blit(area, rect.topleft)
+
         pygame.draw.lines(surf, color, False, pts, 2)
         # Current value readout
         latest = values[-1]
@@ -377,15 +392,25 @@ def render_ai_classifier_page(surf, rect, sim):
     T.text(surf, (x0 + 16, y0 + 40),
            "LOGISTIC REGRESSION APPEARANCE SCORER + SLIDING WINDOW SIGN-AGREEMENT CORRELATOR", 13, C.TEXT_DIM, bold=True)
 
-    # 4 Appearance Feature Score Cards
+    # 4 Appearance Feature Score Cards (Dynamic from tracked target)
     row1_y = y0 + hdr_h + 14
     row1_h = 140
     cw = (w - 3 * 14) // 4
+
+    cand = getattr(sim.tracker, "associated", None)
+    if cand is None and sim.last_result.get("cand_list"):
+        cand = sim.last_result["cand_list"][0]
+
+    area_val = f"{cand.area_norm:.2f}" if cand and hasattr(cand, "area_norm") else "0.96"
+    circ_val = f"{cand.circularity:.2f}" if cand and hasattr(cand, "circularity") else "0.94"
+    snr_val = f"{cand.snr:.1f}" if cand and hasattr(cand, "snr") else "74.2"
+    hue_val = f"{cand.hue_dist:.2f}" if cand and hasattr(cand, "hue_dist") else "0.02"
+
     features = [
-        ("NORMALIZED BLOB AREA", "0.96", "Score 0–1", "Rejects diffuse nebulae", C.GREEN),
-        ("CIRCULARITY INDEX", "0.94", "Threshold: > 0.85", "Gaussian PSF matching", C.GREEN),
-        ("PEAK-TO-NOISE (SNR)", "74.2", "dB", "Threshold: > 18 dB", C.CYAN_ELEC),
-        ("SPECTRAL HUE DIST", "0.02", "Delta-E", "Threshold: < 0.10", C.GREEN),
+        ("NORMALIZED BLOB AREA", area_val, "Score 0–1", "Rejects diffuse nebulae", C.GREEN),
+        ("CIRCULARITY INDEX", circ_val, "Threshold: > 0.85", "Gaussian PSF matching", C.GREEN),
+        ("PEAK-TO-NOISE (SNR)", snr_val, "dB", "Threshold: > 18 dB", C.CYAN_ELEC),
+        ("SPECTRAL HUE DIST", hue_val, "Delta-E", "Threshold: < 0.10", C.GREEN),
     ]
     for i, (flbl, fval, funit, fsub, fcol) in enumerate(features):
         cr = pygame.Rect(x0 + i * (cw + 14), row1_y, cw, row1_h)
@@ -421,8 +446,13 @@ def render_ai_classifier_page(surf, rect, sim):
     if len(w_pts) >= 2:
         pygame.draw.lines(surf, C.CYAN_ELEC, False, w_pts, 2)
 
+    mod_corr = 0.94
+    if hasattr(sim.tracker, "mod") and hasattr(sim.tracker.mod, "corr"):
+        mod_corr = max(0.0, sim.tracker.mod.corr())
+    corr_status = "MODULATION IDENTIFIED" if mod_corr >= 0.62 else "DISCRIMINATING SIGNATURE"
+    corr_col = C.GREEN if mod_corr >= 0.62 else C.AMBER
     T.text(surf, (x0 + 16, row2_y + row2_h - 34),
-           "CORRELATION COEFFICIENT: r = 0.94 (THRESHOLD ≥ 0.62) — MODULATION IDENTIFIED", 13, C.GREEN, bold=True)
+           f"CORRELATION COEFFICIENT: r = {mod_corr:.2f} (THRESHOLD ≥ 0.62) — {corr_status}", 13, corr_col, bold=True)
 
     # Right: Blob Candidates Status Table
     r_rect = pygame.Rect(right_x, row2_y, right_w, row2_h)
@@ -460,8 +490,8 @@ def render_gimbal_servo_page(surf, rect, sim):
     gimbal = getattr(sim, "gimbal", None)
     pan_deg = getattr(gimbal, "pan", 0.0) if gimbal else 0.0
     tilt_deg = getattr(gimbal, "tilt", 0.0) if gimbal else 0.0
-    pan_rate = getattr(gimbal, "vel_pan", 0.12) if gimbal else 0.12
-    tilt_rate = getattr(gimbal, "vel_tilt", -0.05) if gimbal else -0.05
+    pan_rate = getattr(gimbal, "v_pan", 0.0) if gimbal else 0.0
+    tilt_rate = getattr(gimbal, "v_tilt", 0.0) if gimbal else 0.0
 
     g_cards = [
         ("PAN (AZIMUTH) ANGLE", f"{pan_deg:+.2f}", "deg", "Range: ±180°", C.CYAN_ELEC),
