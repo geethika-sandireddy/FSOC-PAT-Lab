@@ -67,6 +67,25 @@ class Gimbal:
 
         self.disturb_rng = None
 
+    def reset(self, start_pan=0.0, start_tilt=0.0):
+        """Reset gimbal state and clear latency buffer."""
+        self.pan_cmd = start_pan
+        self.tilt_cmd = start_tilt
+        self.vp_ff = 0.0
+        self.vt_ff = 0.0
+        self.pan = start_pan
+        self.tilt = start_tilt
+        self.v_pan = 0.0
+        self.v_tilt = 0.0
+        self.pan_sat = 0.0
+        self.tilt_sat = 0.0
+        self._latency.clear()
+        self._n = 0
+        self.fsm_pan_urad = 0.0
+        self.fsm_tilt_urad = 0.0
+        self.fsm_active = False
+        self.fsm_sat = 0.0
+
     def set_limits(self, max_pan=None, max_tilt=None):
         """Configure maximum slew rate limits (PS 26169: 5-10 deg/s, default 5 deg/s)."""
         if max_pan is not None:

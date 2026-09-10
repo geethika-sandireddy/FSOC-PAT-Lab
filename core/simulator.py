@@ -491,32 +491,7 @@ class VideoInputSimulator:
         # frame are zero-padded (black). This keeps the change minimal and
         # reuses the existing detection/tracker/controller/gimbal stack.
         basis = self.gimbal.basis()  # encoder basis for pixel->world mapping
-
-        # Compute integer pixel translation so that a point at
-        # (cx,cy) = (self.cu + pan*px/deg, self.cv - tilt*px/deg) moves to
-        # the frame centre (self.cu, self.cv). Positive pan moves content
-        # left (beacon appears more right in image), so translate by
-        # tx = round(self.cu - cx) = round(-pan * px_per_deg)
-        px_per_deg = self.pixels_per_deg
-        cx = self.cu + (self.gimbal.pan * px_per_deg)
-        cy = self.cv - (self.gimbal.tilt * px_per_deg)
-        tx = int(round(self.cu - cx))
-        ty = int(round(self.cv - cy))
-
-        # Shift the MP4 frame by (ty, tx). Use np.roll then zero-pad the
-        # regions that wrapped around to avoid artifactual tiling.
-        shifted = np.roll(frame, shift=(ty, tx), axis=(0, 1))
-        h, w = frame.shape[:2]
-        if ty > 0:
-            shifted[:ty, :, :] = 0
-        elif ty < 0:
-            shifted[h + ty:, :, :] = 0
-        if tx > 0:
-            shifted[:, :tx, :] = 0
-        elif tx < 0:
-            shifted[:, w + tx:, :] = 0
-
-        candidates = self.detector.detect(shifted, basis, self.focal_px,
+        candidates = self.detector.detect(frame, basis, self.focal_px,
                                           cu=self.cu, cv=self.cv)
         state, est_az, est_el, confidence = self.tracker.update(
             candidates, self.t, self.dt)
@@ -567,7 +542,7 @@ class VideoInputSimulator:
         self.lock_history.append((self.frame_idx, state))
 
         # --- State, Acquisition & Reacquisition Statistics ---
-        is_locked = (state == "LOCKED")
+        is_locked = (state in (LOCKED, DEGRADED_LOCK))
         if is_locked:
             self.locked_frames += 1
             if self.acquisition_time_s is None:
@@ -645,6 +620,9 @@ class VideoInputSimulator:
             # Telemetry compatibility
             pointing_err_deg=true_centroid_err_deg if true_centroid_err_deg is not None else optical_offset_deg,
             in_fov=detected_cx is not None,
+            beacon_visible=(detected_cx is not None),
+            est_err_deg=true_centroid_err_deg if self.ground_truth_available else None,
+            primary_target_id="TARGET-01",
         )
         # --- Closed-loop actuation: feed the tracker output into the
         #     existing controller+gimbal, then advance the gimbal so the
@@ -653,36 +631,30 @@ class VideoInputSimulator:
         self.gimbal.step(self.dt, self.disturbance)
 
         # --- Prevent the camera from panning/tilting beyond the angular
-        #     extent represented by the source MP4 (avoid infinite orbit).
-        # Compute available angular half-widths for centres so the virtual
-        # viewport (config.HFOV_DEG x config.VFOV_DEG) stays fully inside
-        # the MP4 angular canvas (self.video_fov_deg x video_vfov_deg).
-        video_hfov = self.video_fov_deg
+        #     extent of the video sensor canvas (avoid infinite orbit).
+        max_center_pan = self.video_fov_deg / 2.0
         video_vfov = (self.video_h / float(self.video_w)) * self.video_fov_deg
-        max_center_pan = max(0.0, (video_hfov - config.HFOV_DEG) / 2.0)
-        max_center_tilt = max(0.0, (video_vfov - config.VFOV_DEG) / 2.0)
+        max_center_tilt = video_vfov / 2.0
 
-        # clamp realized attitude and commanded attitude to remain inside
-        # the representable region of the MP4 source.
-        if max_center_pan == 0.0:
-            self.gimbal.pan = 0.0
-            self.gimbal.pan_cmd = 0.0
-        else:
-            self.gimbal.pan = max(-max_center_pan, min(max_center_pan, self.gimbal.pan))
-            self.gimbal.pan_cmd = max(-max_center_pan, min(max_center_pan, self.gimbal.pan_cmd))
-        if max_center_tilt == 0.0:
-            self.gimbal.tilt = 0.0
-            self.gimbal.tilt_cmd = 0.0
-        else:
-            self.gimbal.tilt = max(-max_center_tilt, min(max_center_tilt, self.gimbal.tilt))
-            self.gimbal.tilt_cmd = max(-max_center_tilt, min(max_center_tilt, self.gimbal.tilt_cmd))
+        self.gimbal.pan = max(-max_center_pan, min(max_center_pan, self.gimbal.pan))
+        self.gimbal.pan_cmd = max(-max_center_pan, min(max_center_pan, self.gimbal.pan_cmd))
+        self.gimbal.tilt = max(-max_center_tilt, min(max_center_tilt, self.gimbal.tilt))
+        self.gimbal.tilt_cmd = max(-max_center_tilt, min(max_center_tilt, self.gimbal.tilt_cmd))
 
         # Update telemetry with the applied setpoint/realized attitude
-        self.last_result.update(dict(cmd_pan=pan, cmd_tilt=tilt,
-                                     gimbal_pan=self.gimbal.pan,
-                                     gimbal_tilt=self.gimbal.tilt,
-                                     gimbal_v_pan=self.gimbal.v_pan,
-                                     gimbal_v_tilt=self.gimbal.v_tilt))
+        self.last_result.update(dict(
+            cmd_pan=pan, cmd_tilt=tilt,
+            gimbal_pan=self.gimbal.pan,
+            gimbal_tilt=self.gimbal.tilt,
+            gimbal_v_pan=self.gimbal.v_pan,
+            gimbal_v_tilt=self.gimbal.v_tilt,
+            gimbal_sat_pan=self.gimbal.pan_sat,
+            gimbal_sat_tilt=self.gimbal.tilt_sat,
+            fsm_pan_urad=getattr(self.gimbal, "fsm_pan_urad", 0.0),
+            fsm_tilt_urad=getattr(self.gimbal, "fsm_tilt_urad", 0.0),
+            fsm_active=getattr(self.gimbal, "fsm_active", False),
+            fsm_sat=getattr(self.gimbal, "fsm_sat", 0.0),
+        ))
         return self.last_result
 
     def close(self):
@@ -699,10 +671,26 @@ class VideoInputSimulator:
             self.cap.set(1, 0)  # cv2.CAP_PROP_POS_FRAMES = 1
         self.frame_idx = 0
         self.t = 0.0
-        self.tracker = Tracker(
-            detector_type="hybrid",
-            fov_deg=(self.hfov_deg, self.vfov_deg),
-            pixels_per_deg=self.pixels_per_deg,
-            cu=self.cu,
-            cv=self.cv,
-        )
+        self.gimbal.reset()
+        self.tracker = Tracker(self.eph, seed=None, video_mode=True,
+                               gate_deg=self.video_fov_deg * 0.95,
+                               cu=self.cu, cv=self.cv)
+        self.tracker.reset(0.0, 0.0)
+        from core.control import PointingController
+        self.controller = PointingController(self.gimbal, self.tracker)
+        self.centroid_log.clear()
+        self.optical_offset_log.clear()
+        self.true_err_log.clear()
+        self.estimate_log.clear()
+        self.lock_history.clear()
+        self.acquisition_time_s = None
+        self.lock_lost_at = None
+        self.reacq_times.clear()
+        self._was_locked = False
+        self.locked_frames = 0
+        self.lost_frames = 0
+        self.reacq_attempts = 0
+        self.reacq_successes = 0
+        self._false_lock_count = 0
+        self.false_lock_events = 0
+        self.last_result = None

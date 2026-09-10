@@ -136,6 +136,8 @@ class App:
         self.video_path       = video_path
         self.video_done       = False
         self.video_seed       = video_seed
+        self.video_dt_accum   = 0.0
+        self._video_report_saved = False
 
         if video_path:
             from core.simulator import VideoInputSimulator
@@ -448,19 +450,31 @@ class App:
                     self._mouse_move(self._logical_mouse_pos(ev.pos), ev.buttons)
 
             if not self.paused and not self.video_done:
-                res = self.sim.step()
-                if res is None:
-                      print("VIDEO ENDED - returning to normal application", flush=True)
-                      self.video_mode = False
-                      self.video_done = False
-                      self.preset = getattr(self, "normal_preset", "EASY")
-                      self._reset(self.preset)
-                      
-                      continue
-                self.perf.record_frame(self.sim)
-                # Always record pointing error so the acquisition curve is live
-                self.error_spark.append(res["pointing_err_deg"])
-                self.eph_pred_az, self.eph_pred_el = self.sim.eph.predict_az_el(res["t"])
+                step_now = True
+                if self.video_mode:
+                    v_fps = max(1.0, float(getattr(self.sim, "video_fps", 30.0)))
+                    target_dt = 1.0 / v_fps
+                    self.video_dt_accum += dt_w
+                    if self.video_dt_accum < target_dt:
+                        step_now = False
+                    else:
+                        self.video_dt_accum = min(target_dt * 2.0, self.video_dt_accum - target_dt)
+
+                if step_now:
+                    res = self.sim.step()
+                    if res is None:
+                        self.video_done = True
+                        self.paused = True
+                        if "PAUSE" in self.buttons:
+                            self.buttons["PAUSE"].label = "REPLAY"
+                        if not getattr(self, "_video_report_saved", False):
+                            self._final_report()
+                            self._video_report_saved = True
+                    else:
+                        self.perf.record_frame(self.sim)
+                        # Always record pointing error so the acquisition curve is live
+                        self.error_spark.append(res["pointing_err_deg"])
+                        self.eph_pred_az, self.eph_pred_el = self.sim.eph.predict_az_el(res["t"])
             self.apply_sliders()
             self._draw()
             pygame.display.flip()
@@ -478,8 +492,11 @@ class App:
             self.show_ps_modal = not getattr(self, "show_ps_modal", False)
             return True
         if pygame.K_SPACE == key:
-            self.paused = not self.paused
-            self.buttons["PAUSE"].label = "RESUME" if self.paused else "PAUSE"
+            if self.video_mode and self.video_done:
+                self._reset()
+            else:
+                self.paused = not self.paused
+                self.buttons["PAUSE"].label = "RESUME" if self.paused else "PAUSE"
         elif pygame.K_TAB == key:
             self.active_tab = (self.active_tab + 1) % len(self.SIDEBAR_TABS)
             self._recompute_layout()
@@ -609,8 +626,11 @@ class App:
 
         # 3. Check top header pause toggle
         if button == 1 and hasattr(self, "hdr_pause_rect") and self.hdr_pause_rect.collidepoint(pos):
-            self.paused = not self.paused
-            self.buttons["PAUSE"].label = "RESUME" if self.paused else "PAUSE"
+            if self.video_mode and self.video_done:
+                self._reset()
+            else:
+                self.paused = not self.paused
+                self.buttons["PAUSE"].label = "RESUME" if self.paused else "PAUSE"
             return
 
         # 3. Handle active view controls
@@ -618,8 +638,11 @@ class App:
             for name, b in self.buttons.items():
                 if button == 1 and b.hit(pos):
                     if name == "PAUSE":
-                        self.paused = not self.paused
-                        b.label = "RESUME" if self.paused else "PAUSE"
+                        if self.video_mode and self.video_done:
+                            self._reset()
+                        else:
+                            self.paused = not self.paused
+                            b.label = "RESUME" if self.paused else "PAUSE"
                     elif name == "RESET":
                         self._reset()
                     elif name == "SHOT":
@@ -750,6 +773,8 @@ class App:
                 self.video_path, seed=self.video_seed,
                 truth_csv=truth if os.path.isfile(truth) else None)
             self.video_done = False
+            self.video_dt_accum = 0.0
+            self._video_report_saved = False
             self.perf = PerformanceTracker()
             self.error_spark.clear()
             self.sync_sliders()
@@ -817,6 +842,8 @@ class App:
             return
         self.video_mode  = True
         self.video_done  = False
+        self.video_dt_accum = 0.0
+        self._video_report_saved = False
         self.preset      = "VIDEO"
         self.perf        = PerformanceTracker()
         self.error_spark.clear()
@@ -838,15 +865,26 @@ class App:
         extra = {"preset": self.preset}
         if self.video_mode:
             extra["input_video"] = os.path.basename(self.video_path)
-            errs = [e[1] for e in self.sim.centroid_log]
-            if errs:
-                extra["centroiding_error_mean_px"]  = round(float(np.mean(errs)), 2)
-                extra["centroiding_error_rms_px"]   = round(
-                    float(np.sqrt(np.mean(np.array(errs) ** 2))), 2)
-                extra["centroiding_error_p95_px"]   = round(
-                    float(np.percentile(errs, 95)), 2)
-                extra["centroiding_error_max_px"]   = round(float(np.max(errs)), 2)
-                extra["centroiding_frames"]          = len(errs)
+            # Metric B: Optical-axis / Frame-centre offset
+            b_errs = [e[1] for e in getattr(self.sim, "optical_offset_log", []) if e[1] is not None]
+            if b_errs:
+                extra["metric_b_optical_offset_mean_px"] = round(float(np.mean(b_errs)), 2)
+                extra["metric_b_optical_offset_rms_px"]  = round(float(np.sqrt(np.mean(np.array(b_errs) ** 2))), 2)
+                extra["metric_b_optical_offset_max_px"]  = round(float(np.max(b_errs)), 2)
+
+            # Metric C: True Centroiding Error (Only valid if ground-truth CSV provided)
+            if getattr(self.sim, "ground_truth_available", False) and len(getattr(self.sim, "true_err_log", [])) > 0:
+                c_errs = [e[1] for e in self.sim.true_err_log if e[1] is not None]
+                if c_errs:
+                    extra["centroiding_error_mean_px"] = round(float(np.mean(c_errs)), 2)
+                    extra["centroiding_error_rms_px"]  = round(float(np.sqrt(np.mean(np.array(c_errs) ** 2))), 2)
+                    extra["centroiding_error_p95_px"]  = round(float(np.percentile(c_errs, 95)), 2)
+                    extra["centroiding_error_max_px"]  = round(float(np.max(c_errs)), 2)
+                    extra["centroiding_frames"]        = len(c_errs)
+            else:
+                extra["centroiding_error_mean_px"] = "n/a (no ground truth)"
+                extra["centroiding_error_rms_px"]  = "n/a (no ground truth)"
+
             extra["reacquisition_count_video"] = len(self.sim.reacq_times)
             extra["video_false_lock_events"]   = self.sim.false_lock_events
         self.perf.write_log(p, extra_info=extra)
@@ -1096,10 +1134,10 @@ class App:
 
         # PAUSE Button
         self.hdr_pause_rect = pygame.Rect(self.W - 78, 8, 70, 30)
-        btn_col = T.C.AMBER
-        pygame.draw.rect(surf, (44, 28, 6), self.hdr_pause_rect, border_radius=3)
+        btn_col = T.C.GREEN if (getattr(self, "video_mode", False) and getattr(self, "video_done", False)) else T.C.AMBER
+        pygame.draw.rect(surf, (14, 38, 24) if (getattr(self, "video_mode", False) and getattr(self, "video_done", False)) else (44, 28, 6), self.hdr_pause_rect, border_radius=3)
         pygame.draw.rect(surf, btn_col, self.hdr_pause_rect, 1, border_radius=3)
-        pause_label = "RESUME" if self.paused else "PAUSE"
+        pause_label = "REPLAY" if (getattr(self, "video_mode", False) and getattr(self, "video_done", False)) else ("RESUME" if self.paused else "PAUSE")
         T.text(surf, (self.hdr_pause_rect.centerx, self.hdr_pause_rect.centery),
                pause_label, 12, btn_col, bold=True, anchor="cc")
 
@@ -1353,6 +1391,7 @@ class App:
 
         cam_cu = float(getattr(self.sim, "cu", 320.0)) if getattr(self, "video_mode", False) else float(getattr(config, "PRINCIPAL_U", 320.0))
         cam_cv = float(getattr(self.sim, "cv", 240.0)) if getattr(self, "video_mode", False) else float(getattr(config, "PRINCIPAL_V", 240.0))
+        fw, fh = self._frame_dims()
 
         dist_px = math.hypot(b_u - cam_cu, b_v - cam_cv) if (b_u is not None and b_v is not None) else res.get("boresight_error_px")
         if dist_px is None and getattr(self, "video_mode", False):
@@ -1461,7 +1500,7 @@ class App:
         pri_idx = getattr(self, "primary_target_idx", 0)
         pri_id_str = f"TRG-{pri_idx+1:02d}"
 
-        if b_u is not None and 0 <= b_u < 640 and 0 <= b_v < 480:
+        if b_u is not None and 0 <= b_u < fw and 0 <= b_v < fh:
             tx, ty = to_screen(b_u, b_v)
             degraded = (st == "DEGRADED_LOCK")
             target_col = T.C.AMBER if degraded else (T.C.GREEN if is_optically_locked else T.C.CYAN_ELEC)
@@ -1508,7 +1547,7 @@ class App:
                 if b_idx == cur_pri:
                     continue
                 eu, ev = self.sim.sensor._viewport_px(extra_b.az_deg, extra_b.el_deg, cam_canvas)
-                if 0 <= eu < 640 and 0 <= ev < 480:
+                if 0 <= eu < fw and 0 <= ev < fh:
                     ex_s, ey_s = to_screen(eu, ev)
                     sec_r = int(14 * sc)
                     sec_arm = int(5 * sc)
@@ -1534,7 +1573,7 @@ class App:
 
         for d in getattr(scene, "distractors", []):
             du, dv = self.sim.sensor._viewport_px(d.az, d.el, cam_canvas)
-            if 0 <= du < 640 and 0 <= dv < 480:
+            if 0 <= du < fw and 0 <= dv < fh:
                 dx, dy = to_screen(du, dv)
                 dr = int(10 * sc)
                 diamond_pts = [(dx, dy - dr), (dx + dr, dy), (dx, dy + dr), (dx - dr, dy)]
@@ -1671,6 +1710,16 @@ class App:
                 pygame.draw.line(surf, T.C.PURPLE, (gx-12, gy), (gx+12, gy), 1)
                 pygame.draw.line(surf, T.C.PURPLE, (gx, gy-12), (gx, gy+12), 1)
                 T.text(surf, (gx, gy + 12), "GROUND TRUTH", 9, T.C.PURPLE, bold=True, anchor="tc")
+
+        # ── 10. Video Playback Completed Banner ──
+        if getattr(self, "video_mode", False) and getattr(self, "video_done", False):
+            done_w, done_h = min(540, dest.w - 40), 34
+            done_r = pygame.Rect(cx - done_w // 2, cy - done_h // 2, done_w, done_h)
+            d_surf = pygame.Surface((done_w, done_h), pygame.SRCALPHA)
+            d_surf.fill((6, 28, 20, 235))
+            surf.blit(d_surf, done_r.topleft)
+            pygame.draw.rect(surf, T.C.GREEN, done_r, 1, border_radius=4)
+            T.text(surf, (cx, done_r.centery), "VIDEO PLAYBACK COMPLETE  ·  [SPACE]/[R]: REPLAY  ·  [L]: LOAD MP4", 10.5, T.C.GREEN, bold=True, anchor="cc")
 
     def _cam_space(self):
         if self.video_mode:

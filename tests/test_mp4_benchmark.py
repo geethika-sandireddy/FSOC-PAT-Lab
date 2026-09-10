@@ -124,6 +124,56 @@ class TestMp4Benchmark(unittest.TestCase):
         self.assertIsNotNone(tracked_pos[1])
         sim.close()
 
+    def test_05_video_telemetry_and_reset(self):
+        """Verify beacon_visible, gimbal telemetry, and VideoInputSimulator.reset()."""
+        sim = VideoInputSimulator(self.test_vid, truth_path=self.test_truth)
+        res = sim.step()
+        self.assertIsNotNone(res)
+        self.assertIn("beacon_visible", res)
+        self.assertIsInstance(res["beacon_visible"], bool)
+        self.assertIn("gimbal_sat_pan", res)
+        self.assertIn("gimbal_sat_tilt", res)
+        self.assertIn("fsm_pan_urad", res)
+
+        # Step 20 frames
+        for _ in range(20):
+            r = sim.step()
+            if r is None:
+                break
+
+        # Test reset()
+        sim.reset()
+        self.assertEqual(sim.frame_idx, 0)
+        self.assertEqual(sim.t, 0.0)
+        self.assertEqual(len(sim.centroid_log), 0)
+        self.assertEqual(len(sim.optical_offset_log), 0)
+        self.assertEqual(sim.gimbal.pan, 0.0)
+        self.assertEqual(sim.gimbal.tilt, 0.0)
+
+        # Step again after reset
+        res2 = sim.step()
+        self.assertIsNotNone(res2)
+        self.assertEqual(sim.frame_idx, 1)
+        sim.close()
+
+    def test_06_video_performance_tracking_rates(self):
+        """Verify performance logger records non-zero success rate and retention in video mode."""
+        from metrics.performance import PerformanceTracker
+        sim = VideoInputSimulator(self.test_vid, truth_path=self.test_truth)
+        perf = PerformanceTracker()
+
+        while True:
+            r = sim.step()
+            if r is None:
+                break
+            perf.record_frame(sim)
+
+        stats = perf.live_stats()
+        self.assertGreater(stats["success_rate_pct"], 0.0, "Video tracking success rate must not be 0.0%")
+        self.assertGreater(stats["retention_visible_pct"], 0.0, "Lock retention on visible frames must not be 0.0%")
+        self.assertGreater(stats["retention_total_pct"], 0.0, "Lock retention total must not be 0.0%")
+        sim.close()
+
 
 if __name__ == "__main__":
     unittest.main()
