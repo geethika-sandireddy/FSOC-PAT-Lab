@@ -523,7 +523,10 @@ class App:
         elif pygame.K_n == key:
             self._randomize_scenario()
         elif pygame.K_m == key:
-            self._cycle_motion()
+            if self.active_tab == 2:
+                self._toggle_ai_model()
+            else:
+                self._cycle_motion()
         elif pygame.K_t == key:
             self._cycle_primary_target()
         elif key in (pygame.K_PLUS, pygame.K_EQUALS, getattr(pygame, "K_KP_PLUS", 270)):
@@ -702,6 +705,12 @@ class App:
                     s.dragging = True
                     s.drag_to(pos[0])
         
+        elif self.active_tab == 2:
+            btn = getattr(self.sim, "ai_model_btn_rect", None)
+            if button == 1 and btn and btn.collidepoint(pos):
+                self._toggle_ai_model()
+                return
+
         elif self.active_tab == 4:
             self.stress_mgr.handle_click(pos, self.events_list)
 
@@ -762,6 +771,17 @@ class App:
         self._reset(self.preset, seed=None)
         ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
         self.events_list.insert(0, (ts_str, "INFO", "SCENE", "New randomized trajectory generated"))
+        if len(self.events_list) > 100:
+            self.events_list.pop()
+
+    def _toggle_ai_model(self):
+        import ai.classifier as ai_clf
+        cur = getattr(ai_clf, "ACTIVE_MODEL", "LINEAR")
+        new_model = "DEEP_MLP" if cur == "LINEAR" else "LINEAR"
+        ai_clf.set_active_model(new_model)
+        ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
+        arch = "2-Layer Deep MLP (4->16->8->1, 225 weights)" if new_model == "DEEP_MLP" else "Linear Logistic Regression (5 weights)"
+        self.events_list.insert(0, (ts_str, "INFO", "AI-ENGINE", f"Inference engine switched to {new_model} [{arch}]"))
         if len(self.events_list) > 100:
             self.events_list.pop()
 

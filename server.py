@@ -336,6 +336,7 @@ def _build_telemetry(result: dict, sim: Simulator, perf: PerformanceTracker, opt
         "fps": round(loop_fps, 1),
         "acq_time": round(acq_t, 2) if acq_t is not None else None,
         "retention_pct": round(ret_pct, 1),
+        "active_ai_model": getattr(__import__("ai.classifier").classifier, "ACTIVE_MODEL", "LINEAR"),
         "connected": True,
     }
 
@@ -593,6 +594,15 @@ async def _handle_command(cmd: dict):
         with SIM_LOCK:
             if _sim is not None:
                 _sim.inject_target_loss(duration_s=dur)
+    elif action == "set_ai_model":
+        m = cmd.get("model", "LINEAR")
+        from ai.classifier import set_active_model
+        set_active_model(m)
+    elif action == "set_primary_target":
+        tidx = int(cmd.get("target_idx", 0))
+        with SIM_LOCK:
+            if _sim is not None and hasattr(_sim, "set_primary_target"):
+                _sim.set_primary_target(tidx)
 
 
 async def _broadcast_loop():

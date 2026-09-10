@@ -213,7 +213,7 @@ class Simulator:
                 self.tracker.eph.orbit = self.scene.beacon.orbit
             paz, pel = self.tracker.eph.predict_az_el(self.t)
             self.tracker.reset(paz, pel)
-            self.gimbal.pan, self.gimbal.tilt = paz, pel
+            # Physical slew command: gimbal slews at rate limit (no instant teleportation)
             self.gimbal.pan_cmd, self.gimbal.tilt_cmd = paz, pel
             return idx, tid
         return 0, "TARGET-01"

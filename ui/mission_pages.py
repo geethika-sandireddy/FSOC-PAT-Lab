@@ -386,13 +386,39 @@ def _draw_telemetry_wave(surf, rect, values, min_val, max_val, color, unit_str):
 def render_ai_classifier_page(surf, rect, sim):
     x0, y0, w, h = rect.x, rect.y, rect.w, rect.h
 
+    import ai.classifier as ai_clf
+    active_model = getattr(ai_clf, "ACTIVE_MODEL", "LINEAR")
+    is_deep = (active_model == "DEEP_MLP")
+
     # Top Header
     hdr_h = 76
     hdr_rect = pygame.Rect(x0, y0, w, hdr_h)
     T.card(surf, hdr_rect, fill=C.PANEL_2, border=C.BORDER)
     T.section_title(surf, x0 + 16, y0 + 12, "AI BEACON CLASSIFIER & 15 Hz MODULATION DISCRIMINATOR", C.CYAN_ELEC)
-    T.text(surf, (x0 + 16, y0 + 40),
-           "LOGISTIC REGRESSION APPEARANCE SCORER + SLIDING WINDOW SIGN-AGREEMENT CORRELATOR", 13, C.TEXT_DIM, bold=True)
+    
+    sub_title = (
+        "DEEP MULTI-LAYER PERCEPTRON (4 -> 16 [ReLU] -> 8 [ReLU] -> 1 [Sigmoid], 225 W) + 15 Hz CORRELATOR"
+        if is_deep else
+        "EXPLAINABLE LOGISTIC REGRESSION (4 INPUTS + 1 BIAS, 5 WEIGHTS) + 15 Hz SIGN-AGREEMENT CORRELATOR"
+    )
+    T.text(surf, (x0 + 16, y0 + 40), sub_title, 12, C.TEXT_DIM, bold=True)
+
+    # Interactive Model Selector Button
+    btn_w = 240
+    btn_h = 44
+    btn_rect = pygame.Rect(hdr_rect.right - btn_w - 16, y0 + 16, btn_w, btn_h)
+    setattr(sim, "ai_model_btn_rect", btn_rect)
+
+    btn_bg = (14, 38, 28) if is_deep else (12, 28, 48)
+    btn_border = C.GREEN if is_deep else C.CYAN_ELEC
+    pygame.draw.rect(surf, btn_bg, btn_rect, border_radius=4)
+    pygame.draw.rect(surf, btn_border, btn_rect, 1, border_radius=4)
+
+    model_title = "ENGINE: DEEP MLP (225 W)" if is_deep else "ENGINE: LINEAR (5 W)"
+    latency_txt = "LATENCY: 2.4 µs · [CLICK TO TOGGLE]" if is_deep else "LATENCY: 0.8 µs · [CLICK TO TOGGLE]"
+    model_color = C.GREEN if is_deep else C.CYAN_ELEC
+    T.text(surf, (btn_rect.centerx, btn_rect.y + 11), model_title, 12, model_color, bold=True, anchor="cc")
+    T.text(surf, (btn_rect.centerx, btn_rect.y + 28), latency_txt, 10, C.TEXT_DIM, bold=False, anchor="cc")
 
     # 4 Appearance Feature Score Cards (Dynamic from tracked target)
     row1_y = y0 + hdr_h + 14
