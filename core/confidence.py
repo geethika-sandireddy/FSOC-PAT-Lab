@@ -68,13 +68,14 @@ class ConfidenceState:
         stab_c = max(0.0, min(1.0, 1.0 - self._centroid_rms_px / 6.0))
         self.position = 0.7 * snr_c + 0.3 * stab_c
         # uncertainty-aware penalty: internal sigma past the nominal base pulls
-        # position confidence down, reaching zero at the credibility line
-        if unc_sigma_px is not None:
+        # position confidence down smoothly as it approaches the credibility line
+        if unc_sigma_px is not None and unc_sigma_px > config.UNCERTAINTY_BASE_PX:
             unc_span = max(1e-9, config.REACQUIRE_UNCERTAINTY_PX
                            - config.UNCERTAINTY_BASE_PX)
             unc_frac = max(0.0, (unc_sigma_px - config.UNCERTAINTY_BASE_PX)
                            / unc_span)
-            self.position = min(self.position, 1.0 - min(1.0, unc_frac))
+            unc_penalty = (unc_frac ** 1.5) * 0.50
+            self.position = max(0.0, self.position * (1.0 - unc_penalty))
 
         # Prediction: residual between model prior and observation, scaled by
         # the residual scale and suppressed by the disturbance level.  A target
@@ -98,7 +99,8 @@ class ConfidenceState:
         prod = self.identity * self.position * self.prediction
         geom_mean = prod ** (1.0 / 3.0) if prod > 0 else 0.0
         if self.identity >= 0.50 and self.position >= 0.45:
-            vis_cue = math.sqrt(self.identity * self.position)
+            vis_cue = max(math.sqrt(self.identity * self.position),
+                          0.55 * self.identity + 0.45 * self.position)
             self.overall = max(geom_mean, vis_cue)
         else:
             self.overall = geom_mean

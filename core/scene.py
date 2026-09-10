@@ -42,13 +42,14 @@ class Beacon:
         self.target_id = target_id
         self.orbit = orbit_model
         self.motion_model = getattr(orbit_model, "_motion_type", "straight_line")
-        self.az_deg = 0.0
-        self.el_deg = 0.0
+        self._time = -abs(phase_offset)   # delayed start: enters later in a run
+        self.az_deg, self.el_deg = self.orbit.relative_los_az_el(self._time)
         self.vel_az = 0.0
         self.vel_el = 0.0
-        self.range_km = 1000.0
-        self.pos = (0.0, 0.0, 1000.0)
-        self._time = -abs(phase_offset)   # delayed start: enters later in a run
+        self.range_km = self.orbit.range_km(self._time)
+        q = geometry.azel_unit(self.az_deg, self.el_deg)
+        r = self.range_km * 1000.0
+        self.pos = (q[0] * r, q[1] * r, q[2] * r)
         self.visible = True
         self.shape = shape          # PS: Square (default), Circle, Spot, Ellipse
         self.size_px = size_px      # PS: 5-20 pixels, default 10
@@ -173,14 +174,18 @@ class Scene3D:
                              shape=shape, size_px=tsize, size_py=tsize,
                              target_id="TARGET-01")
         self.beacons = [self.beacon]
+        p_az0, p_el0 = self.beacon.az_deg, self.beacon.el_deg
         for i in range(1, self.num_targets):
-            extra_orbit = RelativeOrbitModel(az_amp=az_amp, el_amp=el_amp,
-                                             speed=speed, seed=(seed or 7) * 31 + i,
-                                             motion_type="random",
-                                             initial="RANDOM")
+            ang = (i * 2.0 * math.pi / max(1, self.num_targets))
+            offset_pos = (p_az0 + 1.4 * math.cos(ang), p_el0 + 1.4 * math.sin(ang))
+            extra_orbit = RelativeOrbitModel(
+                az_amp=az_amp, el_amp=el_amp, speed=speed,
+                seed=(seed or 7) * 31 + i,
+                motion_type=self.orbit._motion_type,
+                initial="CUSTOM", user_pos=offset_pos)
             extra = Beacon(extra_orbit, seed=(seed or 7) + i,
                            shape=shape, size_px=tsize, size_py=tsize,
-                           phase_offset=0.0, target_id=f"TARGET-{i+1:02d}")
+                           target_id=f"TARGET-{i+1:02d}")
             self.beacons.append(extra)
         self.stars = Starfield(config.NUM_STARS, seed=seed)
         self.distractors = []
@@ -248,11 +253,15 @@ class Scene3D:
             self.num_targets = count
             from core.orbital import RelativeOrbitModel
             self.beacons = [self.beacon]
+            p_az0, p_el0 = self.beacon.az_deg, self.beacon.el_deg
             for i in range(1, count):
+                ang = (i * 2.0 * math.pi / max(1, count))
+                offset_pos = (p_az0 + 1.4 * math.cos(ang), p_el0 + 1.4 * math.sin(ang))
                 extra_orbit = RelativeOrbitModel(
                     az_amp=self.orbit.az_amp, el_amp=self.orbit.el_amp,
                     speed=self.orbit.speed, seed=31 * i + 7,
-                    motion_type="random", initial="RANDOM")
+                    motion_type=self.orbit._motion_type,
+                    initial="CUSTOM", user_pos=offset_pos)
                 extra = Beacon(extra_orbit, shape=self.beacon.shape,
                                size_px=self.beacon.size_px, size_py=self.beacon.size_py,
                                target_id=f"TARGET-{i+1:02d}")

@@ -233,6 +233,35 @@ class TestPSCompliance(unittest.TestCase):
         self.assertIsInstance(j_p, float)
         self.assertIsInstance(j_t, float)
 
+    def test_11_multi_target_locking_and_handover(self):
+        """PS Requirement Item 8: Multi-Target (1 to 5) tracking lock stability and handover."""
+        # 1. Verify stable locking across 1, 3, 5 targets
+        for count in [1, 3, 5]:
+            sim = Simulator(preset_name="MODERATE", seed=42)
+            sim.scene.set_target_params(count=count)
+            states = [sim.step()["state"] for _ in range(80)]
+            locked_count = sum(1 for s in states if s == "LOCKED")
+            self.assertGreaterEqual(locked_count, 60, f"Failed locking with count={count}")
+            self.assertEqual(states[-1], "LOCKED")
+
+        # 2. Verify clean target handover between multiple targets
+        sim = Simulator(preset_name="MODERATE", seed=42)
+        sim.scene.set_target_params(count=3)
+        # Lock on TARGET-01
+        for _ in range(40):
+            sim.step()
+        self.assertEqual(sim.tracker.state, "LOCKED")
+        self.assertEqual(sim.scene.beacon.target_id, "TARGET-01")
+
+        # Handover to TARGET-02
+        idx, tid = sim.set_primary_target(1)
+        self.assertEqual(tid, "TARGET-02")
+        for _ in range(40):
+            sim.step()
+        self.assertEqual(sim.tracker.state, "LOCKED")
+        self.assertEqual(sim.scene.beacon.target_id, "TARGET-02")
+
 
 if __name__ == "__main__":
     unittest.main()
+

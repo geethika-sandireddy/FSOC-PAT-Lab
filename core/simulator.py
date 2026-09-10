@@ -207,8 +207,14 @@ class Simulator:
         """Designate which target is primary (PS Item 8 Multi-Target Handover)."""
         if hasattr(self, "scene"):
             idx, tid = self.scene.set_primary_target(target_idx)
-            paz, pel = self.scene.beacon.orbit.relative_los_az_el(self.t)
+            if hasattr(self, "eph") and hasattr(self.scene.beacon, "orbit"):
+                self.eph.orbit = self.scene.beacon.orbit
+            if hasattr(self.tracker, "eph") and hasattr(self.scene.beacon, "orbit"):
+                self.tracker.eph.orbit = self.scene.beacon.orbit
+            paz, pel = self.tracker.eph.predict_az_el(self.t)
             self.tracker.reset(paz, pel)
+            self.gimbal.pan, self.gimbal.tilt = paz, pel
+            self.gimbal.pan_cmd, self.gimbal.tilt_cmd = paz, pel
             return idx, tid
         return 0, "TARGET-01"
 

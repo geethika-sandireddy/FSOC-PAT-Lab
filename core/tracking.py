@@ -306,7 +306,11 @@ class Tracker:
         self._prev_track_az = self._prev_track_el = None
         self._prev_track_t = None
         self._prev_bias_r_az = self._prev_bias_r_el = None
-        self._prev_bias_az = self._prev_bias_el = None
+        self._prev_bias_az = self._prev_bias_el = 0.0
+        self._prev_los_az = self._prev_los_el = None
+        self._jit_px = 0.0
+        self.last_candidate_az = None
+        self.last_candidate_el = None
         self.phase = SEARCHING
         self.conf = ConfidenceState()
         self.unc = UncertaintyEstimator()
@@ -395,31 +399,18 @@ class Tracker:
                                                         REACQUIRING)
 
         if has_track:
-            # prefer the true 15 Hz blinker: the fused mod boost in the score
-            # loop gives a persistent area-modulated blob a strong edge over
-            # static beacon-like decoys without ever wrong-restricting (all
-            # candidates remain eligible, so no coast-loss when mod dips).
-            # Video mode (Benchmark-2): the DetectionEngine's own persistent
-            # track IDs are the identity - bind to the last associated ID so a
-            # high-scoring noise blob cannot steal a lock once the beacon is
-            # being tracked.
             best = None
-            if self.video_mode and self.associated is not None:
+            # Track continuity: if we are already actively tracking a target with a persistent track_id,
+            # bind to that track_id so adjacent/crossing secondary targets or noise cannot steal the lock.
+            if self.associated is not None:
                 held_id = getattr(self.associated, "track_id", None)
                 if held_id is not None:
-                    # The DetectionEngine guarantees at most one candidate per
-                    # track ID per frame, so the held ID already names the
-                    # beacon.  Among candidates that share it (defensive), keep
-                    # the one closest to the beacon's last-known position - a
-                    # beacon cannot hop tens of pixels in one frame, so this is
-                    # both the physically correct choice and fully independent
-                    # of detection component ordering.
                     ref_az = self.last_candidate_az if self.last_candidate_az is not None \
                         else getattr(self.associated, "los_az", None)
                     ref_el = self.last_candidate_el if self.last_candidate_el is not None \
                         else getattr(self.associated, "los_el", None)
                     if ref_az is not None:
-                        d_best = self.gate_deg
+                        d_best = self._assoc_gate_deg()
                         for c in candidates:
                             if getattr(c, "track_id", None) == held_id:
                                 d = math.hypot(c.los_az - ref_az,
@@ -440,19 +431,20 @@ class Tracker:
                 # appearance/modulation verification before LOCKED.
                 gate = self._assoc_gate_deg()
                 if self.state == REACQUIRING or getattr(self, "_reacq_handover", 0) > 0:
-                    # staged reacquisition: the association gate widens with the
-                    # current recovery LEVEL (1..N) around the predicted LOS.  A
-                    # widened gate never by-passes identity - _on_tracked still
-                    # runs the full appearance/modulation verification before
-                    # LOCKED is re-committed.
                     gate *= config.REACQ_LEVEL_GATE_MULT[
                         max(0, min(config.REACQ_LEVELS - 1, self.reacq_level - 1))]
                     if getattr(self, "_reacq_handover", 0) > 0:
                         self._reacq_handover = 0
+                best_metric = -1e9
                 for c in candidates:
                     d = math.hypot(c.los_az - self.est_az, c.los_el - self.est_el)
                     if d < gate:
-                        if best is None or c._assoc_score > best._assoc_score:
+                        # GNN / Distance-penalized metric: strongly penalize targets far from estimated track
+                        d_norm = d / max(1e-6, gate)
+                        dist_factor = 1.0 / (1.0 + 4.0 * d_norm * d_norm)
+                        metric = c._assoc_score * dist_factor
+                        if metric > best_metric:
+                            best_metric = metric
                             best = c
             if best is not None:
                 self.last_candidate_age = 0.0
@@ -474,12 +466,18 @@ class Tracker:
                 if held is not None:
                     best = held
             if best is None:
+                best_score = -1e9
                 for c in candidates:
                     if c.ml_score < config.ML_FLOOR_SCORE:
                         continue
-                    if math.hypot(c.los_az - prior_az, c.los_el - prior_el) > self._prior_gate_deg(t):
+                    d_prior = math.hypot(c.los_az - prior_az, c.los_el - prior_el)
+                    if d_prior > self._prior_gate_deg(t):
                         continue
-                    if best is None or c.fusion_score > best.fusion_score:
+                    # Primary acquisition priority: candidate nearest to ephemeris prior
+                    d_norm = d_prior / max(1e-6, self._prior_gate_deg(t))
+                    score = c.fusion_score / (1.0 + 3.0 * d_norm * d_norm)
+                    if score > best_score:
+                        best_score = score
                         best = c
             if best is not None:
                 self.last_candidate_age = 0.0
@@ -744,6 +742,8 @@ class Tracker:
         p_az, p_el = self.eph.predict_az_el(t)
         self.bias_az = az - p_az
         self.bias_el = el - p_el
+        self._prev_bias_az = self.bias_az
+        self._prev_bias_el = self.bias_el
         self.est_az = az
         self.est_el = el
         self.state = LOCKED
