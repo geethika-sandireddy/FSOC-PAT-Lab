@@ -258,6 +258,20 @@ class Scene3D:
                                target_id=f"TARGET-{i+1:02d}")
                 self.beacons.append(extra)
 
+    def set_primary_target(self, target_idx):
+        """Designate which target is primary (PS Item 8 Multi-Target Handover)."""
+        idx = max(0, min(len(self.beacons) - 1, int(target_idx)))
+        self.beacon = self.beacons[idx]
+        return idx, self.beacon.target_id
+
+    @property
+    def targets(self):
+        return self.beacons
+
+    @property
+    def active_target_idx(self):
+        return self.beacons.index(self.beacon) if self.beacon in self.beacons else 0
+
     @property
     def time(self):
         return self._t

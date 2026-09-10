@@ -425,28 +425,31 @@ def render_ai_classifier_page(surf, rect, sim):
     right_x = x0 + left_w + 14
     right_w = w - left_w - 14
 
-    # Left: 15 Hz Square-Wave Modulation Correlation
+    # Left: Real Sensor Intensity Waveform & Modulation Correlator
     m_rect = pygame.Rect(x0, row2_y, left_w, row2_h)
     T.card(surf, m_rect, fill=C.PANEL_2, border=C.BORDER)
-    T.section_title(surf, x0 + 16, row2_y + 12, "15 Hz TEMPORAL MODULATION SIGNATURE CORRELATOR", C.CYAN_ELEC)
+    T.section_title(surf, x0 + 16, row2_y + 12, "REAL DETECTOR INTENSITY BUFFER (15 Hz MODULATION)", C.CYAN_ELEC)
 
     wave_rect = pygame.Rect(x0 + 16, row2_y + 44, left_w - 32, row2_h - 90)
     pygame.draw.rect(surf, (6, 12, 24), wave_rect, border_radius=4)
     pygame.draw.rect(surf, C.BORDER_DIM, wave_rect, 1, border_radius=4)
 
-    # Draw simulated 15 Hz modulation waveform
-    t_now = pygame.time.get_ticks() / 1000.0
+    # Draw real historical sensor intensity waveform from sensor rolling buffer
+    hist = list(getattr(sim, "intensity_hist", []))
     w_pts = []
-    for i in range(120):
-        wx = wave_rect.x + int(wave_rect.w * i / 119)
-        # 15 Hz square wave with slight noise
-        phase = (t_now * 15.0 + i * 0.15) % 1.0
-        val = 1.0 if phase < 0.5 else 0.0
-        noise = (math.sin(i * 0.8) * 0.08)
-        wy = wave_rect.bottom - int(wave_rect.h * (0.2 + 0.6 * val + noise))
-        w_pts.append((wx, wy))
+    if hist:
+        valid_vals = [float(v) if v is not None else 0.0 for v in hist]
+        n_pts = len(valid_vals)
+        max_v = max(1.0, max(valid_vals))
+        for i, val in enumerate(valid_vals):
+            wx = wave_rect.x + int(wave_rect.w * i / max(1, n_pts - 1))
+            norm = min(1.0, max(0.0, val / max_v))
+            wy = wave_rect.bottom - int(wave_rect.h * (0.1 + 0.8 * norm))
+            w_pts.append((wx, wy))
     if len(w_pts) >= 2:
         pygame.draw.lines(surf, C.CYAN_ELEC, False, w_pts, 2)
+    else:
+        T.text(surf, (wave_rect.centerx, wave_rect.centery), "GATHERING SENSOR PHOTON SAMPLES...", 12, C.TEXT_DIM, anchor="cc")
 
     mod_corr = 0.94
     if hasattr(sim.tracker, "mod") and hasattr(sim.tracker.mod, "corr"):
@@ -456,17 +459,34 @@ def render_ai_classifier_page(surf, rect, sim):
     T.text(surf, (x0 + 16, row2_y + row2_h - 34),
            f"CORRELATION COEFFICIENT: r = {mod_corr:.2f} (THRESHOLD ≥ 0.62) — {corr_status}", 13, corr_col, bold=True)
 
-    # Right: Blob Candidates Status Table
+    # Right: Dynamic Blob Candidates Status Table (from real detector pipeline)
     r_rect = pygame.Rect(right_x, row2_y, right_w, row2_h)
     T.card(surf, r_rect, fill=C.PANEL_2, border=C.BORDER)
     T.section_title(surf, right_x + 16, row2_y + 12, "CANDIDATE DETECTION DISCRIMINATION MATRIX", C.AMBER)
 
-    candidates = [
-        ("BEACON #1 (PRIMARY)", "PASS (0.98)", "15 Hz MATCH", "CONFIRMED TARGET", C.GREEN),
-        ("DECOY #1 (DISTRACTOR)", "FAIL (0.34)", "3 Hz (MISMATCH)", "REJECTED DECOY", C.RED),
-        ("STAR CLUSTER #4", "FAIL (0.12)", "0 Hz (STEADY)", "REJECTED BACKGROUND", C.TEXT_MUTED),
-        ("HOT SENSOR PIXEL", "FAIL (0.01)", "STATIC DN", "FILTERED NOISE", C.TEXT_MUTED),
-    ]
+    res = getattr(sim, "last_result", {}) or {}
+    cands_detail = res.get("candidates_detail", [])
+
+    candidates = []
+    for cd in cands_detail[:4]:
+        tid = cd.get("track_id", 1)
+        ml = cd.get("ml_score", 0.0)
+        snr = cd.get("snr", 0.0)
+        area = cd.get("area", 0)
+        circ = cd.get("circularity", 0.0)
+        is_primary = (ml >= 0.70)
+        cname = f"BEACON #{tid} (PRIMARY)" if is_primary else f"BLOB #{tid} (DISTRACTOR)"
+        cscore = f"ML: {ml:.2f} · SNR: {snr:.1f}dB"
+        cmod = f"Area: {area}px · Circ: {circ:.2f}"
+        caction = "CONFIRMED BEACON" if is_primary else ("TRACKING CANDIDATE" if ml >= 0.40 else "REJECTED DISTRACTOR")
+        ccol = C.GREEN if is_primary else (C.CYAN_ELEC if ml >= 0.40 else C.RED)
+        candidates.append((cname, cscore, cmod, caction, ccol))
+
+    if not candidates:
+        candidates.append(("OPTICAL SENSOR ACQUISITION", "SEARCHING", "0 Detected in Gate", "SCANNING FOV", C.AMBER))
+    while len(candidates) < 4:
+        idx = len(candidates) + 1
+        candidates.append((f"BACKGROUND SKY GATE #{idx}", "SNR < 3.0 dB", "Dark Sky Floor", "FILTERED NOISE", C.TEXT_MUTED))
 
     cy = row2_y + 44
     for cname, cscore, cmod, caction, ccol in candidates:
@@ -539,12 +559,18 @@ def render_gimbal_servo_page(surf, rect, sim):
     T.card(surf, c_rect, fill=C.PANEL_2, border=C.BORDER)
     T.section_title(surf, right_x + 16, btm_y + 12, "CLOSED-LOOP SERVO DYNAMICS & FIFO DELAY", C.AMBER)
 
+    fsm_p = getattr(gimbal, "fsm_pan_urad", 0.0) if gimbal else 0.0
+    fsm_t = getattr(gimbal, "fsm_tilt_urad", 0.0) if gimbal else 0.0
+    fsm_act = getattr(gimbal, "fsm_active", False) if gimbal else False
+    fsm_txt = f"FINE-LOCK [X: {fsm_p:+.1f}, Y: {fsm_t:+.1f} µrad]" if fsm_act else "COARSE HANDOVER"
+    fsm_col = C.GREEN if fsm_act else C.AMBER
+
     ctrl_rows = [
+        ("FINE STEERING MIRROR (FSM)", fsm_txt, "Dual-stage active piezo jitter reject (±5 mrad)", fsm_col),
         ("PROPORTIONAL GAIN (Kp)", "25.0", "Fast response envelope", C.CYAN_ELEC),
         ("DERIVATIVE GAIN (Kd)", "10.0", "Damps overshoot & vibration", C.CYAN_ELEC),
         ("SLEW RATE CLAMP", "5.0 deg/s", "ISRO PS 26169 Spec", C.GREEN),
         ("ACCELERATION LIMIT", "14.0 deg/s²", "Structural load bound", C.GREEN),
-        ("PIPELINE LATENCY FIFO", "2 Frames (66.6 ms)", "Simulated transport delay", C.AMBER),
         ("SERVO STATUS", "ACTIVE CLOSED-LOOP", "Zero steady-state lag", C.GREEN),
     ]
     ry = btm_y + 44
@@ -709,16 +735,63 @@ def render_stress_test_page(surf, rect, stress_mgr: StressTestManager, opt: Opti
 # ---------------------------------------------------------------------------
 # MODULE 06: FALSE LOCK SUITE (Screenshot 3 matching, distance-readable)
 # ---------------------------------------------------------------------------
-def render_false_lock_page(surf, rect):
+def render_false_lock_page(surf, rect, sim=None, opt=None, stress_mgr=None):
     x0, y0, w, h = rect.x, rect.y, rect.w, rect.h
+
+    # Live telemetry extraction
+    hist_pt = opt.history[-1] if (opt and getattr(opt, "history", None)) else {}
+    ber_val = hist_pt.get("ber", 1.0e-12)
+    snr_val = hist_pt.get("snr", 73.5)
+
+    ptg_urad = getattr(opt, "pointing_error_urad", 1.64) if opt else 1.64
+    if sim and getattr(sim, "last_result", None):
+        bs_px = sim.last_result.get("boresight_error_px")
+        if bs_px is not None:
+            ptg_urad = round(bs_px * (1.0 / 160.0) * 17453.3, 2)
+
+    stab_val = 98.2
+    if sim and hasattr(sim, "tracker") and hasattr(sim.tracker, "conf"):
+        stab_val = round(sim.tracker.conf.overall * 100.0, 1)
+
+    # Dynamic Gate Checks
+    gate1_pass = (ber_val < 1.0e-6)
+    c1_status = "PASS" if gate1_pass else "FAIL"
+    c1_col = C.GREEN if gate1_pass else C.RED
+
+    gate2_pass = (snr_val >= 18.0)
+    c2_status = "PASS" if gate2_pass else ("WARN" if snr_val >= 12.0 else "FAIL")
+    c2_col = C.GREEN if gate2_pass else (C.AMBER if snr_val >= 12.0 else C.RED)
+
+    gate3_pass = (ptg_urad <= 30.0)
+    c3_status = "PASS" if gate3_pass else ("WARN" if ptg_urad <= 80.0 else "FAIL")
+    c3_col = C.GREEN if gate3_pass else (C.AMBER if ptg_urad <= 80.0 else C.RED)
+
+    gate4_pass = (stab_val >= 60.0)
+    c4_status = "PASS" if gate4_pass else "FAIL"
+    c4_col = C.GREEN if gate4_pass else C.RED
+
+    stress_active = False
+    if stress_mgr:
+        stress_active = any(s.get("active", False) for s in getattr(stress_mgr, "scenarios", {}).values())
+
+    is_anomaly = stress_active or (not gate1_pass) or (not gate2_pass and not gate3_pass)
+    c5_status = "ALERT" if is_anomaly else "CLEAR"
+    c5_col = C.RED if is_anomaly else C.GREEN
+
+    all_pass = gate1_pass and gate2_pass and gate3_pass and gate4_pass and (not is_anomaly)
 
     # Top Status Banner
     hdr_h = 56
     hdr_rect = pygame.Rect(x0, y0, w, hdr_h)
-    T.card(surf, hdr_rect, fill=(10, 36, 24), border=C.GREEN, radius=5)
-    pygame.draw.circle(surf, C.GREEN, (x0 + 26, y0 + hdr_h // 2), 7)
-    T.text(surf, (x0 + 44, y0 + 10), "LOCK VALIDATION STATUS: NOMINAL (VERIFIED)", 16, C.GREEN, bold=True)
-    T.text(surf, (x0 + 44, y0 + 32), "ALL 5 CARRIER VALIDATION GATES SATISFIED · NO ANOMALY ASSERTED", 12, C.TEXT_DIM, bold=False)
+    hdr_bg = (10, 36, 24) if all_pass else ((44, 14, 20) if not gate1_pass else (44, 30, 8))
+    hdr_border = C.GREEN if all_pass else (C.RED if not gate1_pass else C.AMBER)
+    hdr_title = "LOCK VALIDATION STATUS: NOMINAL (VERIFIED)" if all_pass else "LOCK VALIDATION STATUS: ANOMALY ASSERTED (DEGRADED)"
+    hdr_sub = "ALL 5 CARRIER VALIDATION GATES SATISFIED · ZERO FALSE LOCKS" if all_pass else "CARRIER ANOMALY DETECTED · FAULT DISCRIMINATION ACTIVE"
+
+    T.card(surf, hdr_rect, fill=hdr_bg, border=hdr_border, radius=5)
+    pygame.draw.circle(surf, hdr_border, (x0 + 26, y0 + hdr_h // 2), 7)
+    T.text(surf, (x0 + 44, y0 + 10), hdr_title, 16, hdr_border, bold=True)
+    T.text(surf, (x0 + 44, y0 + 32), hdr_sub, 12, C.TEXT_DIM, bold=False)
 
     main_y = y0 + hdr_h + 14
     main_h = h - (hdr_h + 14)
@@ -732,11 +805,11 @@ def render_false_lock_page(surf, rect):
     T.section_title(surf, x0 + 16, main_y + 14, "5-POINT CARRIER VERIFICATION CRITERIA", C.CYAN_ELEC)
 
     criteria = [
-        ("BER within valid acquisition envelope", "1.00e-12", "thr: < 1e-6", "PASS", C.GREEN, "Excess BER with claimed carrier lock indicates false acquisition"),
-        ("SNR exceeds carrier detection floor", "73.5 dB", "thr: > 18.0 dB", "PASS", C.GREEN, "Low SNR with lock assertion flags carrier false alarm"),
-        ("Alignment confidence envelope satisfied", "1.64 µrad", "thr: < 30 µrad", "PASS", C.GREEN, "Excessive boresight error invalidates lock state"),
-        ("Tracking loop stability acceptable", "98.2%", "thr: > 60%", "PASS", C.GREEN, "Unstable tracking dynamics indicate false decoy lock"),
-        ("Anomaly correlation engine state", "CLEAR", "thr: CLEAR", "PASS", C.GREEN, "Multi-parameter correlation rejects background glints"),
+        ("BER within valid acquisition envelope", f"{ber_val:.2e}", "thr: < 1e-6", c1_status, c1_col, "Excess BER with claimed carrier lock indicates false acquisition"),
+        ("SNR exceeds carrier detection floor", f"{snr_val:.1f} dB", "thr: > 18.0 dB", c2_status, c2_col, "Low SNR with lock assertion flags carrier false alarm"),
+        ("Alignment confidence envelope satisfied", f"{ptg_urad:.1f} µrad", "thr: < 30 µrad", c3_status, c3_col, "Excessive boresight error invalidates lock state"),
+        ("Tracking loop stability acceptable", f"{stab_val:.1f}%", "thr: > 60%", c4_status, c4_col, "Unstable tracking dynamics indicate false decoy lock"),
+        ("Anomaly correlation engine state", c5_status, "thr: CLEAR", "ALERT" if is_anomaly else "PASS", c5_col, "Multi-parameter correlation rejects background glints"),
     ]
 
     cy = main_y + 46

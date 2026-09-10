@@ -172,6 +172,8 @@ class App:
         self.hud_declutter = False
         self.target_count = getattr(getattr(self.sim, "scene", None), "num_targets", num_targets or 1)
         self.current_motion = motion_type or "straight_line"
+        self.primary_target_idx = 0
+        self.target_click_rects = {}
 
         # Initialize widget collections
         self.sliders = {
@@ -305,13 +307,14 @@ class App:
         # Group 4: Dynamic Target Controls (PS Item 8 Multi-Target & Randomize)
         tx = ax + group_gap
         self.target_lbl_rect = pygame.Rect(tx, chip_y, 56, chip_h)
-        self.btn_tgt_dec = pygame.Rect(self.target_lbl_rect.right + 2, chip_y, 20, chip_h)
-        self.tgt_cnt_rect = pygame.Rect(self.btn_tgt_dec.right + 2, chip_y, 22, chip_h)
-        self.btn_tgt_inc = pygame.Rect(self.tgt_cnt_rect.right + 2, chip_y, 20, chip_h)
+        self.btn_tgt_dec = pygame.Rect(self.target_lbl_rect.right + 2, chip_y, 18, chip_h)
+        self.tgt_cnt_rect = pygame.Rect(self.btn_tgt_dec.right + 2, chip_y, 20, chip_h)
+        self.btn_tgt_inc = pygame.Rect(self.tgt_cnt_rect.right + 2, chip_y, 18, chip_h)
+        self.btn_cycle_tgt = pygame.Rect(self.btn_tgt_inc.right + 4, chip_y, 64, chip_h)
 
-        self.btn_randomize = pygame.Rect(self.btn_tgt_inc.right + 10, chip_y, 76, chip_h)
-        self.btn_motion = pygame.Rect(self.btn_randomize.right + 6, chip_y, 82, chip_h)
-        self.btn_hud_toggle = pygame.Rect(self.btn_motion.right + 6, chip_y, 70, chip_h)
+        self.btn_randomize = pygame.Rect(self.btn_cycle_tgt.right + 6, chip_y, 74, chip_h)
+        self.btn_motion = pygame.Rect(self.btn_randomize.right + 6, chip_y, 80, chip_h)
+        self.btn_hud_toggle = pygame.Rect(self.btn_motion.right + 6, chip_y, 68, chip_h)
 
         # Right Panel Cards vertical rhythm (proportional & spacious, ZERO OVERFLOW on any resolution)
         pnl_avail = (h - self.FOOTER_H - 4) - (self.HDR_TOTAL_H + 4)
@@ -501,6 +504,8 @@ class App:
             self._randomize_scenario()
         elif pygame.K_m == key:
             self._cycle_motion()
+        elif pygame.K_t == key:
+            self._cycle_primary_target()
         elif key in (pygame.K_PLUS, pygame.K_EQUALS, getattr(pygame, "K_KP_PLUS", 270)):
             self._adjust_target_count(1)
         elif key in (pygame.K_MINUS, pygame.K_UNDERSCORE, getattr(pygame, "K_KP_MINUS", 269)):
@@ -648,6 +653,9 @@ class App:
                 if hasattr(self, "btn_tgt_inc") and self.btn_tgt_inc.collidepoint(pos):
                     self._adjust_target_count(1)
                     return
+                if hasattr(self, "btn_cycle_tgt") and self.btn_cycle_tgt.collidepoint(pos):
+                    self._cycle_primary_target()
+                    return
                 if hasattr(self, "btn_randomize") and self.btn_randomize.collidepoint(pos):
                     self._randomize_scenario()
                     return
@@ -657,6 +665,12 @@ class App:
                 if hasattr(self, "btn_hud_toggle") and self.btn_hud_toggle.collidepoint(pos):
                     self.hud_declutter = not getattr(self, "hud_declutter", False)
                     return
+                # Check viewport target clicks (click-to-designate primary target)
+                if hasattr(self, "target_click_rects"):
+                    for tidx, trect in self.target_click_rects.items():
+                        if trect.collidepoint(pos):
+                            self._designate_target(tidx)
+                            return
             for s in self.sliders.values():
                 if button == 1 and s.hit(pos):
                     s.dragging = True
@@ -676,12 +690,33 @@ class App:
         new_cnt = max(1, min(5, getattr(self, "target_count", 1) + delta))
         if new_cnt != getattr(self, "target_count", 1):
             self.target_count = new_cnt
+            if getattr(self, "primary_target_idx", 0) >= new_cnt:
+                self.primary_target_idx = 0
             if hasattr(self.sim, "scene"):
                 self.sim.scene.set_target_params(count=new_cnt)
             ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
             self.events_list.insert(0, (ts_str, "INFO", "SCENE", f"Target count adjusted to {new_cnt} (PS Item 8 Multi-Target Mode)"))
             if len(self.events_list) > 100:
                 self.events_list.pop()
+
+    def _cycle_primary_target(self):
+        cnt = getattr(self, "target_count", 1)
+        if cnt <= 1:
+            return
+        cur = getattr(self, "primary_target_idx", 0)
+        self._designate_target((cur + 1) % cnt)
+
+    def _designate_target(self, idx):
+        if not hasattr(self.sim, "set_primary_target"):
+            return
+        cnt = getattr(self, "target_count", 1)
+        idx = max(0, min(cnt - 1, int(idx)))
+        self.primary_target_idx = idx
+        sel_idx, tid = self.sim.set_primary_target(idx)
+        ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
+        self.events_list.insert(0, (ts_str, "INFO", "HANDOVER", f"Primary tracking designated to {tid} (Target #{idx+1})"))
+        if len(self.events_list) > 100:
+            self.events_list.pop()
 
     def _cycle_motion(self):
         motions = ["straight_line", "circular", "figure_eight", "random", "spiral"]
@@ -871,9 +906,9 @@ class App:
             page_rect = pygame.Rect(self.SIDEBAR_W + 16, self.HDR_TOTAL_H + 10, self.W - self.SIDEBAR_W - 32, self.H - self.HDR_TOTAL_H - 24)
             render_stress_test_page(s, page_rect, self.stress_mgr, self.opt_model)
         elif self.active_tab == 5:
-            # MODULE 06: FALSE LOCK SUITE (Lock Validation Banner, 5-Point Verification Matrix, Detection Algos)
+            # MODULE 06: FALSE LOCK SUITE (Live Dynamic 5-Point Verification Matrix & Telemetry)
             page_rect = pygame.Rect(self.SIDEBAR_W + 16, self.HDR_TOTAL_H + 10, self.W - self.SIDEBAR_W - 32, self.H - self.HDR_TOTAL_H - 24)
-            render_false_lock_page(s, page_rect)
+            render_false_lock_page(s, page_rect, self.sim, self.opt_model, self.stress_mgr)
         elif self.active_tab == 6:
             # MODULE 07: MISSION LOGS (4 Big Metric Cards, Severity Legend Banner, Event Table)
             page_rect = pygame.Rect(self.SIDEBAR_W + 16, self.HDR_TOTAL_H + 10, self.W - self.SIDEBAR_W - 32, self.H - self.HDR_TOTAL_H - 24)
@@ -1106,6 +1141,14 @@ class App:
                 pygame.draw.rect(surf, (20, 36, 62) if hov_inc else (12, 20, 36), self.btn_tgt_inc, border_radius=3)
                 pygame.draw.rect(surf, T.C.CYAN_ELEC if hov_inc else (24, 44, 72), self.btn_tgt_inc, 1, border_radius=3)
                 T.text(surf, (self.btn_tgt_inc.centerx, self.btn_tgt_inc.centery), "+", 12, T.C.CYAN_ELEC if hov_inc else T.C.TEXT, bold=True, anchor="cc")
+
+                # [TARGET DESIGNATE] button
+                if hasattr(self, "btn_cycle_tgt") and self.btn_cycle_tgt.right < self.W - 10:
+                    hov_tgt = self.btn_cycle_tgt.collidepoint(mouse_pos)
+                    pri_num = getattr(self, "primary_target_idx", 0) + 1
+                    pygame.draw.rect(surf, (24, 44, 72) if hov_tgt else (14, 24, 42), self.btn_cycle_tgt, border_radius=3)
+                    pygame.draw.rect(surf, T.C.GREEN if hov_tgt else (30, 60, 90), self.btn_cycle_tgt, 1, border_radius=3)
+                    T.text(surf, (self.btn_cycle_tgt.centerx, self.btn_cycle_tgt.centery), f"TRG#{pri_num} [T]", 10, T.C.GREEN if hov_tgt else T.C.CYAN_ELEC, bold=True, anchor="cc")
 
                 # [RANDOMIZE] button
                 if hasattr(self, "btn_randomize") and self.btn_randomize.right < self.W - 10:
@@ -1363,6 +1406,14 @@ class App:
             axis_lbl = "BORESIGHT [CO-ALIGNED]" if is_optically_locked else "OPTICAL AXIS (0,0)"
             T.text(surf, (bx, by + ret_r + 5), axis_lbl, 9.5, rc, bold=True, anchor="tc")
 
+            # Dual-Stage FSM Telemetry (Sub-µrad active piezo stabilization)
+            fsm_p = res.get("fsm_pan_urad", 0.0)
+            fsm_t = res.get("fsm_tilt_urad", 0.0)
+            fsm_active = res.get("fsm_active", False)
+            if fsm_active and not getattr(self, "hud_declutter", False):
+                fsm_txt = f"FSM: [{fsm_p:+.1f}, {fsm_t:+.1f}] µrad"
+                T.text(surf, (bx, by + ret_r + 17), fsm_txt, 9.0, (0, 230, 255), bold=True, anchor="tc")
+
         # ── 2b. Azimuth Heading Tape (Top of camera view) ──
         tape_y = dest.top + 7
         tape_w = min(320, dest.w - 380)
@@ -1385,7 +1436,27 @@ class App:
         pygame.draw.polygon(surf, T.C.AMBER, [(tape_cx - 4, tape_rect.bottom + 3), (tape_cx + 4, tape_rect.bottom + 3), (tape_cx, tape_rect.bottom)])
         T.text(surf, (tape_rect.right + 8, tape_rect.centery), f"PAN {cur_pan:+.2f}°", 10.5, T.C.CYAN_ELEC, bold=True, anchor="lc")
 
+        # ── 2c. Actuator Slew Rate Saturation Alert (5.0 deg/s ISRO limit) ──
+        pan_sat = res.get("gimbal_sat_pan", 0.0)
+        tilt_sat = res.get("gimbal_sat_tilt", 0.0)
+        if pan_sat >= 0.95 or tilt_sat >= 0.95:
+            sat_w = min(460, dest.w - 120)
+            sat_h = 24
+            sat_rect = pygame.Rect(dest.centerx - sat_w // 2, dest.top + 34, sat_w, sat_h)
+            s_bg = pygame.Surface((sat_w, sat_h), pygame.SRCALPHA)
+            s_bg.fill((64, 18, 12, 220))
+            surf.blit(s_bg, sat_rect.topleft)
+            pygame.draw.rect(surf, T.C.AMBER, sat_rect, 1, border_radius=3)
+            p_blink = (int(time.time() * 4.0) % 2 == 0)
+            dot_c = T.C.RED if p_blink else T.C.AMBER
+            pygame.draw.circle(surf, dot_c, (sat_rect.x + 12, sat_rect.centery), 4)
+            T.text(surf, (sat_rect.x + 22, sat_rect.centery),
+                   "[!] ACTUATOR SLEW LIMIT SATURATED (5.00°/s MAX RATE CAP REACHED)", 10.0, T.C.AMBER, bold=True, anchor="lc")
+
         # ── 3. Target Beacon Reticle & Clean Aerospace HUD Tag ──
+        pri_idx = getattr(self, "primary_target_idx", 0)
+        pri_id_str = f"TRG-{pri_idx+1:02d}"
+
         if b_u is not None and 0 <= b_u < 640 and 0 <= b_v < 480:
             tx, ty = to_screen(b_u, b_v)
             degraded = (st == "DEGRADED_LOCK")
@@ -1407,11 +1478,14 @@ class App:
             if is_optically_locked:
                 pygame.draw.circle(surf, T.C.GREEN, (tx, ty), target_r + int(6 * p), 1)
 
+            # Register click rect for primary target
+            self.target_click_rects[pri_idx] = pygame.Rect(tx - target_r - 4, ty - target_r - 4, (target_r + 4) * 2, (target_r + 4) * 2)
+
             # Compact, non-occluding aerospace HUD label right below reticle
             if not getattr(self, "hud_declutter", False):
                 dist_val = dist_px if dist_px is not None else 0.0
                 tag_st = "LOCKED" if is_optically_locked else ("ALIGN" if not getattr(self, "video_mode", False) else "TRACK")
-                tag_txt = f"TRG-01 [{tag_st}] {dist_val:.1f}px"
+                tag_txt = f"{pri_id_str} [{tag_st}] {dist_val:.1f}px"
                 tw, th = T.font(10, bold=True).size(tag_txt)
                 lbl_y = ty + target_r + 6 if ty + target_r + 20 < dest.bottom - 36 else ty - target_r - th - 6
                 lbl_rect = pygame.Rect(tx - tw // 2 - 5, lbl_y, tw + 10, th + 3)
@@ -1425,7 +1499,10 @@ class App:
         scene = getattr(self.sim, "scene", None)
         if scene is not None and hasattr(self.sim, "sensor"):
             cam_canvas = self.sim.sensor._canvas_xy(self.sim.gimbal.pan, self.sim.gimbal.tilt)
-            for extra_b in getattr(scene, "beacons", [])[1:]:
+            cur_pri = getattr(self, "primary_target_idx", 0)
+            for b_idx, extra_b in enumerate(getattr(scene, "beacons", [])):
+                if b_idx == cur_pri:
+                    continue
                 eu, ev = self.sim.sensor._viewport_px(extra_b.az_deg, extra_b.el_deg, cam_canvas)
                 if 0 <= eu < 640 and 0 <= ev < 480:
                     ex_s, ey_s = to_screen(eu, ev)
@@ -1437,9 +1514,11 @@ class App:
                         cpy = ey_s + sy * sec_r
                         pygame.draw.line(surf, sec_col, (cpx, cpy), (cpx - sx * sec_arm, cpy), 1)
                         pygame.draw.line(surf, sec_col, (cpx, cpy), (cpx, cpy - sy * sec_arm), 1)
+                    # Register clickable target area for instant handover
+                    self.target_click_rects[b_idx] = pygame.Rect(ex_s - sec_r - 4, ey_s - sec_r - 4, (sec_r + 4) * 2, (sec_r + 4) * 2)
                     if not getattr(self, "hud_declutter", False):
-                        stxt = f"{extra_b.target_id} [SEC]"
-                        T.text(surf, (ex_s, ey_s + sec_r + 3), stxt, 9, sec_col, bold=True, anchor="tc")
+                        stxt = f"{extra_b.target_id} [SEC - CLICK]"
+                        T.text(surf, (ex_s, ey_s + sec_r + 3), stxt, 8.5, sec_col, bold=True, anchor="tc")
 
         # ── 4. Distractor Decoys (AI Discrimination Showcase) ──
         if hasattr(self.sim, "sensor"):

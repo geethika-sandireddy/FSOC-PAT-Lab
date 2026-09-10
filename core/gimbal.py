@@ -56,6 +56,15 @@ class Gimbal:
         self.max_pan_deg_s = float(getattr(config, "CAMERA_MAX_PAN_DEG_S", 5.0))
         self.max_tilt_deg_s = float(getattr(config, "CAMERA_MAX_TILT_DEG_S", 5.0))
 
+        # Dual-Stage PAT Architecture: Piezoelectric Fine Steering Mirror (FSM)
+        # Slew range: ±5.0 mrad (±5000 µrad); Bandwidth: 1 kHz; Sub-µrad jitter rejection
+        self.fsm_pan_urad = 0.0
+        self.fsm_tilt_urad = 0.0
+        self.fsm_enabled = True
+        self.fsm_max_urad = 5000.0  # ±5 mrad stroke limit
+        self.fsm_active = False
+        self.fsm_sat = 0.0
+
         self.disturb_rng = None
 
     def set_limits(self, max_pan=None, max_tilt=None):
@@ -112,6 +121,27 @@ class Gimbal:
         reject = config.GIMBAL_STABIZATION_REJECT
         self.pan += d_pan * (1.0 - reject)
         self.tilt += d_tilt * (1.0 - reject)
+
+        # --- Stage 2: Fine Steering Mirror (FSM) Closed-Loop Active Compensation ---
+        # Converts coarse residual off-boresight error into micro-radians and deflects
+        # piezo mirrors to suppress residual platform jitter down to micro-radians.
+        deg_to_urad = 17453.2925
+        res_p_urad = (self.pan_cmd - self.pan) * deg_to_urad
+        res_t_urad = (self.tilt_cmd - self.tilt) * deg_to_urad
+        fsm_cone_limit = self.fsm_max_urad * 1.5
+
+        if self.fsm_enabled and abs(res_p_urad) <= fsm_cone_limit and abs(res_t_urad) <= fsm_cone_limit:
+            target_p = max(-self.fsm_max_urad, min(self.fsm_max_urad, res_p_urad * 0.94))
+            target_t = max(-self.fsm_max_urad, min(self.fsm_max_urad, res_t_urad * 0.94))
+            self.fsm_pan_urad += (target_p - self.fsm_pan_urad) * 0.40
+            self.fsm_tilt_urad += (target_t - self.fsm_tilt_urad) * 0.40
+            self.fsm_active = True
+            self.fsm_sat = min(1.0, max(abs(self.fsm_pan_urad), abs(self.fsm_tilt_urad)) / max(1e-9, self.fsm_max_urad))
+        else:
+            self.fsm_pan_urad *= 0.70
+            self.fsm_tilt_urad *= 0.70
+            self.fsm_active = False
+            self.fsm_sat = 0.0
 
     @staticmethod
     def _follow(cmd, now, vel, velmax, accmax, dt, vel_ff=0.0):

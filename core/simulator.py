@@ -203,6 +203,15 @@ class Simulator:
             if b is not None:
                 b.suppressed = True
 
+    def set_primary_target(self, target_idx):
+        """Designate which target is primary (PS Item 8 Multi-Target Handover)."""
+        if hasattr(self, "scene"):
+            idx, tid = self.scene.set_primary_target(target_idx)
+            paz, pel = self.scene.beacon.orbit.relative_los_az_el(self.t)
+            self.tracker.reset(paz, pel)
+            return idx, tid
+        return 0, "TARGET-01"
+
     # ------------------------------------------------------------------
     def step(self):
         """Advance one simulation frame.  Returns a dict of measurements the
@@ -324,6 +333,11 @@ class Simulator:
             gimbal_v_tilt=self.gimbal.v_tilt,
             gimbal_sat_pan=self.gimbal.pan_sat,
             gimbal_sat_tilt=self.gimbal.tilt_sat,
+            fsm_pan_urad=getattr(self.gimbal, "fsm_pan_urad", 0.0),
+            fsm_tilt_urad=getattr(self.gimbal, "fsm_tilt_urad", 0.0),
+            fsm_active=getattr(self.gimbal, "fsm_active", False),
+            fsm_sat=getattr(self.gimbal, "fsm_sat", 0.0),
+            primary_target_id=getattr(self.scene.beacon, "target_id", "TARGET-01"),
         )
         return self.last_result
 
