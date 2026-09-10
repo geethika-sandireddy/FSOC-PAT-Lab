@@ -131,9 +131,32 @@ class PointingController:
             # Minimal predictive lead: command the short-horizon predicted LOS
             pred_az, pred_el, horizon = self._predict_los(self.tracker.est_az, self.tracker.est_el, dt)
 
-            # Respect hard pan/tilt sanity clamps after prediction (gimbal enforces physics)
-            self.pan = pred_az
-            self.tilt = pred_el
+            # Respect reachability: prefer commanded predicted LOS only if the
+            # gimbal can physically get there within one frame's max slew. If
+            # not reachable, command a feasible intermediate setpoint toward the
+            # predicted LOS that respects the gimbal's slew limits. When the
+            # predicted LOS is very close to the mechanical FOV limit prefer a
+            # slightly more conservative inward bias to keep the beacon farther
+            # inside the FOV when possible.
+            feasible_pan, feasible_tilt, reachable = self._rar_reachability_check(pred_az, pred_el, dt)
+            if reachable:
+                self.pan = pred_az
+                self.tilt = pred_el
+            else:
+                # Use the feasible step the reachability helper computed. This
+                # is rate-limited and physically achievable by the gimbal.
+                self.pan = feasible_pan
+                self.tilt = feasible_tilt
+                # nudge slightly toward boresight if the predicted LOS is near
+                # the sanity clamp boundary so we keep the beacon more inside
+                # the FOV when approaching a hard limit.
+                clamp_deg = 30.0
+                inward_thresh = 0.9 * clamp_deg
+                if abs(pred_az) > inward_thresh:
+                    # move a small fraction toward center (0.98 * feasible)
+                    self.pan = 0.98 * self.pan
+                if abs(pred_el) > inward_thresh:
+                    self.tilt = 0.98 * self.tilt
         else:
             # blind expanding-spiral search
             az, el = self.tracker.search_point(t, dt)
