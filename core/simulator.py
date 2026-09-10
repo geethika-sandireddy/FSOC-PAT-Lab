@@ -474,8 +474,43 @@ class VideoInputSimulator:
         self.t += self.dt
         frame = np.ascontiguousarray(frame)
 
-        basis = self.gimbal.basis()  # identity basis: gimbal held at (0, 0)
-        candidates = self.detector.detect(frame, basis, self.focal_px,
+        # --- Create a virtual-camera viewport from the MP4 frame using the
+        #     current realized gimbal attitude so that pan/tilt actually
+        #     translate the visible pixels the detector consumes.
+        #
+        # The MP4 is treated as a fixed-angular canvas with horizontal
+        # angular span `self.video_fov_deg`.  Shifting the realized gimbal
+        # attitude recenters the visible window inside that canvas by an
+        # integer-pixel translation.  Regions that fall outside the source
+        # frame are zero-padded (black). This keeps the change minimal and
+        # reuses the existing detection/tracker/controller/gimbal stack.
+        basis = self.gimbal.basis()  # encoder basis for pixel->world mapping
+
+        # Compute integer pixel translation so that a point at
+        # (cx,cy) = (self.cu + pan*px/deg, self.cv - tilt*px/deg) moves to
+        # the frame centre (self.cu, self.cv). Positive pan moves content
+        # left (beacon appears more right in image), so translate by
+        # tx = round(self.cu - cx) = round(-pan * px_per_deg)
+        px_per_deg = self.pixels_per_deg
+        cx = self.cu + (self.gimbal.pan * px_per_deg)
+        cy = self.cv - (self.gimbal.tilt * px_per_deg)
+        tx = int(round(self.cu - cx))
+        ty = int(round(self.cv - cy))
+
+        # Shift the MP4 frame by (ty, tx). Use np.roll then zero-pad the
+        # regions that wrapped around to avoid artifactual tiling.
+        shifted = np.roll(frame, shift=(ty, tx), axis=(0, 1))
+        h, w = frame.shape[:2]
+        if ty > 0:
+            shifted[:ty, :, :] = 0
+        elif ty < 0:
+            shifted[h + ty:, :, :] = 0
+        if tx > 0:
+            shifted[:, :tx, :] = 0
+        elif tx < 0:
+            shifted[:, w + tx:, :] = 0
+
+        candidates = self.detector.detect(shifted, basis, self.focal_px,
                                           cu=self.cu, cv=self.cv)
         state, est_az, est_el, confidence = self.tracker.update(
             candidates, self.t, self.dt)
@@ -605,6 +640,43 @@ class VideoInputSimulator:
             pointing_err_deg=true_centroid_err_deg if true_centroid_err_deg is not None else optical_offset_deg,
             in_fov=detected_cx is not None,
         )
+        # --- Closed-loop actuation: feed the tracker output into the
+        #     existing controller+gimbal, then advance the gimbal so the
+        #     next video frame will reflect the new encoder pose.
+        pan, tilt = self.controller.compute_setpoint(self.t, self.dt)
+        self.gimbal.step(self.dt, self.disturbance)
+
+        # --- Prevent the camera from panning/tilting beyond the angular
+        #     extent represented by the source MP4 (avoid infinite orbit).
+        # Compute available angular half-widths for centres so the virtual
+        # viewport (config.HFOV_DEG x config.VFOV_DEG) stays fully inside
+        # the MP4 angular canvas (self.video_fov_deg x video_vfov_deg).
+        video_hfov = self.video_fov_deg
+        video_vfov = (self.video_h / float(self.video_w)) * self.video_fov_deg
+        max_center_pan = max(0.0, (video_hfov - config.HFOV_DEG) / 2.0)
+        max_center_tilt = max(0.0, (video_vfov - config.VFOV_DEG) / 2.0)
+
+        # clamp realized attitude and commanded attitude to remain inside
+        # the representable region of the MP4 source.
+        if max_center_pan == 0.0:
+            self.gimbal.pan = 0.0
+            self.gimbal.pan_cmd = 0.0
+        else:
+            self.gimbal.pan = max(-max_center_pan, min(max_center_pan, self.gimbal.pan))
+            self.gimbal.pan_cmd = max(-max_center_pan, min(max_center_pan, self.gimbal.pan_cmd))
+        if max_center_tilt == 0.0:
+            self.gimbal.tilt = 0.0
+            self.gimbal.tilt_cmd = 0.0
+        else:
+            self.gimbal.tilt = max(-max_center_tilt, min(max_center_tilt, self.gimbal.tilt))
+            self.gimbal.tilt_cmd = max(-max_center_tilt, min(max_center_tilt, self.gimbal.tilt_cmd))
+
+        # Update telemetry with the applied setpoint/realized attitude
+        self.last_result.update(dict(cmd_pan=pan, cmd_tilt=tilt,
+                                     gimbal_pan=self.gimbal.pan,
+                                     gimbal_tilt=self.gimbal.tilt,
+                                     gimbal_v_pan=self.gimbal.v_pan,
+                                     gimbal_v_tilt=self.gimbal.v_tilt))
         return self.last_result
 
     def close(self):
