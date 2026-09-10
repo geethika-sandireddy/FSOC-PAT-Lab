@@ -50,7 +50,7 @@ from ui.mission_pages import (
 APP_W, APP_H = 1600, 900
 CAM_W, CAM_H = config.CAM_VIEW_W, config.CAM_VIEW_H
 DISPLAY_CAP = getattr(config, "FPS", 60)
-LOCKED_STATES = ("LOCKED",)
+LOCKED_STATES = ("LOCKED", "DEGRADED_LOCK")
 
 # Reference layout defaults (for class attributes and headless mode)
 SIDEBAR_W = 150
@@ -169,6 +169,9 @@ class App:
         self.ps_modal_rect = pygame.Rect(0, 0, 0, 0)
         self.ps_btn_rects = {}
         self._scanline_surf = None   # created lazily on first camera draw
+        self.hud_declutter = False
+        self.target_count = getattr(getattr(self.sim, "scene", None), "num_targets", num_targets or 1)
+        self.current_motion = motion_type or "straight_line"
 
         # Initialize widget collections
         self.sliders = {
@@ -298,6 +301,17 @@ class App:
             cw = atm_widths.get(atm, 50)
             self.atmos_chips[atm].rect = pygame.Rect(ax, chip_y, cw, chip_h)
             ax += cw + chip_gap
+
+        # Group 4: Dynamic Target Controls (PS Item 8 Multi-Target & Randomize)
+        tx = ax + group_gap
+        self.target_lbl_rect = pygame.Rect(tx, chip_y, 56, chip_h)
+        self.btn_tgt_dec = pygame.Rect(self.target_lbl_rect.right + 2, chip_y, 20, chip_h)
+        self.tgt_cnt_rect = pygame.Rect(self.btn_tgt_dec.right + 2, chip_y, 22, chip_h)
+        self.btn_tgt_inc = pygame.Rect(self.tgt_cnt_rect.right + 2, chip_y, 20, chip_h)
+
+        self.btn_randomize = pygame.Rect(self.btn_tgt_inc.right + 10, chip_y, 76, chip_h)
+        self.btn_motion = pygame.Rect(self.btn_randomize.right + 6, chip_y, 82, chip_h)
+        self.btn_hud_toggle = pygame.Rect(self.btn_motion.right + 6, chip_y, 70, chip_h)
 
         # Right Panel Cards vertical rhythm (proportional & spacious, ZERO OVERFLOW on any resolution)
         pnl_avail = (h - self.FOOTER_H - 4) - (self.HDR_TOTAL_H + 4)
@@ -481,6 +495,16 @@ class App:
             self.show_ephemeris = not getattr(self, "show_ephemeris", True)
         elif pygame.K_f == key:
             self._toggle_fullscreen()
+        elif pygame.K_h == key:
+            self.hud_declutter = not getattr(self, "hud_declutter", False)
+        elif pygame.K_n == key:
+            self._randomize_scenario()
+        elif pygame.K_m == key:
+            self._cycle_motion()
+        elif key in (pygame.K_PLUS, pygame.K_EQUALS, getattr(pygame, "K_KP_PLUS", 270)):
+            self._adjust_target_count(1)
+        elif key in (pygame.K_MINUS, pygame.K_UNDERSCORE, getattr(pygame, "K_KP_MINUS", 269)):
+            self._adjust_target_count(-1)
         elif self.active_tab == 0:
             if pygame.K_1 <= key <= pygame.K_6 and (key - pygame.K_1) < len(config.PRESET_ORDER):
                 name = config.PRESET_ORDER[key - pygame.K_1]
@@ -617,6 +641,22 @@ class App:
                     self.atmosphere = name
                     self._reset()
                     return
+            if button == 1:
+                if hasattr(self, "btn_tgt_dec") and self.btn_tgt_dec.collidepoint(pos):
+                    self._adjust_target_count(-1)
+                    return
+                if hasattr(self, "btn_tgt_inc") and self.btn_tgt_inc.collidepoint(pos):
+                    self._adjust_target_count(1)
+                    return
+                if hasattr(self, "btn_randomize") and self.btn_randomize.collidepoint(pos):
+                    self._randomize_scenario()
+                    return
+                if hasattr(self, "btn_motion") and self.btn_motion.collidepoint(pos):
+                    self._cycle_motion()
+                    return
+                if hasattr(self, "btn_hud_toggle") and self.btn_hud_toggle.collidepoint(pos):
+                    self.hud_declutter = not getattr(self, "hud_declutter", False)
+                    return
             for s in self.sliders.values():
                 if button == 1 and s.hit(pos):
                     s.dragging = True
@@ -632,7 +672,39 @@ class App:
                     s.drag_to(pos[0])
         
 
-    def _reset(self, name=None):
+    def _adjust_target_count(self, delta):
+        new_cnt = max(1, min(5, getattr(self, "target_count", 1) + delta))
+        if new_cnt != getattr(self, "target_count", 1):
+            self.target_count = new_cnt
+            if hasattr(self.sim, "scene"):
+                self.sim.scene.set_target_params(count=new_cnt)
+            ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
+            self.events_list.insert(0, (ts_str, "INFO", "SCENE", f"Target count adjusted to {new_cnt} (PS Item 8 Multi-Target Mode)"))
+            if len(self.events_list) > 100:
+                self.events_list.pop()
+
+    def _cycle_motion(self):
+        motions = ["straight_line", "circular", "figure_eight", "random", "spiral"]
+        cur = getattr(self, "current_motion", "straight_line")
+        idx = (motions.index(cur) + 1) % len(motions) if cur in motions else 0
+        self.current_motion = motions[idx]
+        if hasattr(self.sim, "scene"):
+            self.sim.scene.set_motion_type(self.current_motion)
+        ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
+        lbl = self.current_motion.replace("_", " ").upper()
+        self.events_list.insert(0, (ts_str, "INFO", "SCENE", f"Target motion trajectory set to {lbl}"))
+        if len(self.events_list) > 100:
+            self.events_list.pop()
+
+    def _randomize_scenario(self):
+        """Regenerate random initial position, heading, velocity and phase on demand."""
+        self._reset(self.preset, seed=None)
+        ts_str = time.strftime("%H:%M:%S UTC", time.gmtime())
+        self.events_list.insert(0, (ts_str, "INFO", "SCENE", "New randomized trajectory generated"))
+        if len(self.events_list) > 100:
+            self.events_list.pop()
+
+    def _reset(self, name=None, seed=None):
         if self.video_mode:
             from core.simulator import VideoInputSimulator
             truth = os.path.splitext(self.video_path)[0] + "_truth.csv"
@@ -647,19 +719,25 @@ class App:
             self.buttons["PAUSE"].label = "PAUSE"
             return
         self.sim = Simulator(
-            preset_name=name or self.preset, seed=None,
+            preset_name=name or self.preset, seed=seed,
             platform_mode=self.platform_mode,
             atmosphere=self.atmosphere,
-            motion_type=self.motion_override,
+            motion_type=getattr(self, "current_motion", self.motion_override),
             target_shape=self.shape_override,
             target_size=self.size_override,
-            num_targets=self.targets_override,
+            num_targets=getattr(self, "target_count", self.targets_override),
             target_initial=self.initial_override)
         self.perf = PerformanceTracker()
         self.error_spark.clear()
         self.sync_sliders()
         self.paused = False
         self.buttons["PAUSE"].label = "PAUSE"
+        try:
+            res = self.sim.step()
+            if res is not None:
+                self.perf.record_frame(self.sim)
+        except Exception:
+            pass
 
     def _screenshot(self):
         os.makedirs(config.LOG_DIR, exist_ok=True)
@@ -740,8 +818,14 @@ class App:
         s = self.canvas
         s.fill(T.C.BG)
 
-        # Update physical optical link model from live sim step
         res = self.sim.last_result
+        if res is None:
+            try:
+                res = self.sim.step()
+            except Exception:
+                res = None
+        if res is None:
+            res = {}
         fps = self.clock.get_fps()
         dt = 1.0 / max(1.0, fps)
         self.stress_mgr.update(dt, self.events_list)
@@ -1000,6 +1084,53 @@ class App:
                 enabled = (name == "CLEAR" or self._atmosphere_allowed())
                 c.draw(surf, selected=(name == self.atmosphere), enabled=enabled)
 
+            # Group 4: Dynamic Target Controls (PS Item 8 Multi-Target & Randomize)
+            mouse_pos = self._logical_mouse_pos(pygame.mouse.get_pos())
+            if hasattr(self, "target_lbl_rect") and self.target_lbl_rect.right < self.W - 30:
+                T.text(surf, (self.target_lbl_rect.x, self.target_lbl_rect.y + 5), "TARGETS:", 11, T.C.TEXT_DIM, bold=True)
+                
+                # [-] decrement button
+                hov_dec = self.btn_tgt_dec.collidepoint(mouse_pos)
+                pygame.draw.rect(surf, (20, 36, 62) if hov_dec else (12, 20, 36), self.btn_tgt_dec, border_radius=3)
+                pygame.draw.rect(surf, T.C.CYAN_ELEC if hov_dec else (24, 44, 72), self.btn_tgt_dec, 1, border_radius=3)
+                T.text(surf, (self.btn_tgt_dec.centerx, self.btn_tgt_dec.centery), "-", 12, T.C.CYAN_ELEC if hov_dec else T.C.TEXT, bold=True, anchor="cc")
+
+                # Count indicator
+                cnt_str = str(getattr(self, "target_count", 1))
+                pygame.draw.rect(surf, (8, 16, 30), self.tgt_cnt_rect, border_radius=2)
+                pygame.draw.rect(surf, (20, 40, 70), self.tgt_cnt_rect, 1, border_radius=2)
+                T.text(surf, (self.tgt_cnt_rect.centerx, self.tgt_cnt_rect.centery), cnt_str, 12, T.C.GREEN, bold=True, anchor="cc", mono=True)
+
+                # [+] increment button
+                hov_inc = self.btn_tgt_inc.collidepoint(mouse_pos)
+                pygame.draw.rect(surf, (20, 36, 62) if hov_inc else (12, 20, 36), self.btn_tgt_inc, border_radius=3)
+                pygame.draw.rect(surf, T.C.CYAN_ELEC if hov_inc else (24, 44, 72), self.btn_tgt_inc, 1, border_radius=3)
+                T.text(surf, (self.btn_tgt_inc.centerx, self.btn_tgt_inc.centery), "+", 12, T.C.CYAN_ELEC if hov_inc else T.C.TEXT, bold=True, anchor="cc")
+
+                # [RANDOMIZE] button
+                if hasattr(self, "btn_randomize") and self.btn_randomize.right < self.W - 10:
+                    hov_rand = self.btn_randomize.collidepoint(mouse_pos)
+                    pygame.draw.rect(surf, (24, 44, 72) if hov_rand else (14, 24, 42), self.btn_randomize, border_radius=3)
+                    pygame.draw.rect(surf, T.C.CYAN_ELEC if hov_rand else (30, 56, 90), self.btn_randomize, 1, border_radius=3)
+                    T.text(surf, (self.btn_randomize.centerx, self.btn_randomize.centery), "RANDOM [N]", 10, T.C.CYAN_ELEC if hov_rand else T.C.TEXT_DIM, bold=True, anchor="cc")
+
+                # [MOTION] button
+                if hasattr(self, "btn_motion") and self.btn_motion.right < self.W - 10:
+                    hov_mot = self.btn_motion.collidepoint(mouse_pos)
+                    mot_short = getattr(self, "current_motion", "straight").split("_")[0][:4].upper()
+                    pygame.draw.rect(surf, (24, 44, 72) if hov_mot else (14, 24, 42), self.btn_motion, border_radius=3)
+                    pygame.draw.rect(surf, T.C.AMBER if hov_mot else (40, 50, 70), self.btn_motion, 1, border_radius=3)
+                    T.text(surf, (self.btn_motion.centerx, self.btn_motion.centery), f"MOT:{mot_short} [M]", 10, T.C.AMBER if hov_mot else T.C.TEXT_DIM, bold=True, anchor="cc")
+
+                # [HUD: DECLUTTER] button
+                if hasattr(self, "btn_hud_toggle") and self.btn_hud_toggle.right < self.W - 10:
+                    hov_hud = self.btn_hud_toggle.collidepoint(mouse_pos)
+                    hud_mode_txt = "MIN HUD" if getattr(self, "hud_declutter", False) else "CLEAN HUD"
+                    hud_col = T.C.GREEN if getattr(self, "hud_declutter", False) else T.C.CYAN_ELEC
+                    pygame.draw.rect(surf, (20, 36, 56) if hov_hud else (12, 20, 36), self.btn_hud_toggle, border_radius=3)
+                    pygame.draw.rect(surf, hud_col if hov_hud else (24, 44, 70), self.btn_hud_toggle, 1, border_radius=3)
+                    T.text(surf, (self.btn_hud_toggle.centerx, self.btn_hud_toggle.centery), f"{hud_mode_txt} [H]", 9.5, hud_col if hov_hud else T.C.TEXT_DIM, bold=True, anchor="cc")
+
     # ---------------------------------------------------------------- background grid
     def _draw_bg_grid(self, surf):
         col = (8, 15, 27)
@@ -1010,7 +1141,7 @@ class App:
 
     def _draw_footer(self, surf):
         T.text(surf, (self.SIDEBAR_W + 12, self.H - 14),
-               "TAB cycle view  ·  1-6 preset  ·  SPACE pause  ·  R reset  ·  S screenshot  ·  V FOV grid  ·  E ephemeris  ·  F fullscreen",
+               "TAB view  ·  1-6 preset  ·  7-9 plat  ·  A atmos  ·  +/- targets  ·  N randomize  ·  M motion  ·  H HUD  ·  SPACE pause  ·  R reset  ·  S shot  ·  V grid  ·  F full  ·  P audit",
                8, T.C.TEXT_FAINT)
 
     # ---------------------------------------------------------------- camera
@@ -1254,14 +1385,14 @@ class App:
         pygame.draw.polygon(surf, T.C.AMBER, [(tape_cx - 4, tape_rect.bottom + 3), (tape_cx + 4, tape_rect.bottom + 3), (tape_cx, tape_rect.bottom)])
         T.text(surf, (tape_rect.right + 8, tape_rect.centery), f"PAN {cur_pan:+.2f}°", 10.5, T.C.CYAN_ELEC, bold=True, anchor="lc")
 
-        # ── 3. Target Beacon Reticle & Tactical Card ──
+        # ── 3. Target Beacon Reticle & Clean Aerospace HUD Tag ──
         if b_u is not None and 0 <= b_u < 640 and 0 <= b_v < 480:
             tx, ty = to_screen(b_u, b_v)
             degraded = (st == "DEGRADED_LOCK")
             target_col = T.C.AMBER if degraded else (T.C.GREEN if is_optically_locked else T.C.CYAN_ELEC)
             p = T.pulse(2.0)
-            target_r = int((22 + 3 * p) * sc)
-            arm = int(8 * sc)
+            target_r = int((20 + 2 * p) * sc)
+            arm = int(7 * sc)
 
             # 4 Corner L-Brackets around beacon
             for sx, sy in ((-1,-1), (-1,1), (1,-1), (1,1)):
@@ -1270,79 +1401,64 @@ class App:
                 pygame.draw.line(surf, target_col, (cpx, cpy), (cpx - sx * arm, cpy), 2)
                 pygame.draw.line(surf, target_col, (cpx, cpy), (cpx, cpy - sy * arm), 2)
 
-            # Outer guide ring
-            pygame.draw.circle(surf, tuple(c // 3 for c in target_col), (tx, ty), target_r + 6, 1)
+            # Subtle outer guide ring
+            pygame.draw.circle(surf, tuple(c // 4 for c in target_col), (tx, ty), target_r + 5, 1)
 
             if is_optically_locked:
-                pygame.draw.circle(surf, T.C.GREEN, (tx, ty), target_r + int(10 * p), 1)
+                pygame.draw.circle(surf, T.C.GREEN, (tx, ty), target_r + int(6 * p), 1)
 
-            # Leader Line to Tactical Target Card
-            card_w, card_h = 250, 54
-            if tx + target_r + card_w + 30 < dest.right:
-                lx1 = tx + target_r
-                ly1 = ty - target_r
-                lx2 = lx1 + 24
-                ly2 = ly1 - 18
-                lx3 = lx2 + 20
-                card_x = lx3 + 4
-                card_y = ly2 - card_h // 2
-            else:
-                lx1 = tx - target_r
-                ly1 = ty - target_r
-                lx2 = lx1 - 24
-                ly2 = ly1 - 18
-                lx3 = lx2 - 20
-                card_x = lx3 - card_w - 4
-                card_y = ly2 - card_h // 2
+            # Compact, non-occluding aerospace HUD label right below reticle
+            if not getattr(self, "hud_declutter", False):
+                dist_val = dist_px if dist_px is not None else 0.0
+                tag_st = "LOCKED" if is_optically_locked else ("ALIGN" if not getattr(self, "video_mode", False) else "TRACK")
+                tag_txt = f"TRG-01 [{tag_st}] {dist_val:.1f}px"
+                tw, th = T.font(10, bold=True).size(tag_txt)
+                lbl_y = ty + target_r + 6 if ty + target_r + 20 < dest.bottom - 36 else ty - target_r - th - 6
+                lbl_rect = pygame.Rect(tx - tw // 2 - 5, lbl_y, tw + 10, th + 3)
+                l_bg = pygame.Surface((lbl_rect.w, lbl_rect.h), pygame.SRCALPHA)
+                l_bg.fill((6, 14, 24, 180))
+                surf.blit(l_bg, lbl_rect.topleft)
+                pygame.draw.rect(surf, target_col, lbl_rect, 1, border_radius=3)
+                T.text(surf, (tx, lbl_y + 1), tag_txt, 10, target_col, bold=True, anchor="tc")
 
-            # Draw leader lines
-            pygame.draw.line(surf, target_col, (lx1, ly1), (lx2, ly2), 2)
-            pygame.draw.line(surf, target_col, (lx2, ly2), (lx3, ly2), 2)
-
-            # Tactical HUD Card
-            card_rect = pygame.Rect(card_x, card_y, card_w, card_h)
-            card_bg = (4, 18, 14, 235) if is_optically_locked else ((26, 18, 6, 235) if degraded else (6, 18, 28, 235))
-            bg_surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
-            bg_surf.fill(card_bg)
-            surf.blit(bg_surf, card_rect.topleft)
-            pygame.draw.rect(surf, target_col, card_rect, 1, border_radius=4)
-            pygame.draw.rect(surf, target_col, (card_x, card_y, 4, card_h), border_top_left_radius=4, border_bottom_left_radius=4)
-
-            # Card text
-            tag_title = "[TARGET BEACON] · LOCKED" if is_optically_locked else ("[TARGET BEACON] · ALIGNING" if not getattr(self, "video_mode", False) else "[TARGET BEACON] · VIDEO INPUT")
-            T.text(surf, (card_x + 10, card_y + 5), tag_title, 11, target_col, bold=True)
-            err_mdeg = res.get("pointing_err_deg", 0.0) * 1000.0
-            dist_val = dist_px if dist_px is not None else 0.0
-            err_str = f"RESIDUAL: {dist_val:.1f} px ({err_mdeg:.1f} mdeg)"
-            pass_str = "PASS < 10 px" if is_spec_pass else ("ALIGNING..." if not getattr(self, "video_mode", False) else f"OFFSET {dist_val:.1f} px")
-            T.text(surf, (card_x + 10, card_y + 21), err_str, 10.5, T.C.TEXT, bold=True, mono=True)
-            T.text(surf, (card_x + 10, card_y + 36), f"ISRO SPEC: {pass_str} · CONF: {int(res.get('confidence',0)*100)}%", 10, T.C.GREEN if is_spec_pass else T.C.AMBER, bold=True)
+        # ── 3b. Secondary Targets (Multi-Target Mode: PS Item 8) ──
+        scene = getattr(self.sim, "scene", None)
+        if scene is not None and hasattr(self.sim, "sensor"):
+            cam_canvas = self.sim.sensor._canvas_xy(self.sim.gimbal.pan, self.sim.gimbal.tilt)
+            for extra_b in getattr(scene, "beacons", [])[1:]:
+                eu, ev = self.sim.sensor._viewport_px(extra_b.az_deg, extra_b.el_deg, cam_canvas)
+                if 0 <= eu < 640 and 0 <= ev < 480:
+                    ex_s, ey_s = to_screen(eu, ev)
+                    sec_r = int(14 * sc)
+                    sec_arm = int(5 * sc)
+                    sec_col = (70, 160, 220)
+                    for sx, sy in ((-1,-1), (-1,1), (1,-1), (1,1)):
+                        cpx = ex_s + sx * sec_r
+                        cpy = ey_s + sy * sec_r
+                        pygame.draw.line(surf, sec_col, (cpx, cpy), (cpx - sx * sec_arm, cpy), 1)
+                        pygame.draw.line(surf, sec_col, (cpx, cpy), (cpx, cpy - sy * sec_arm), 1)
+                    if not getattr(self, "hud_declutter", False):
+                        stxt = f"{extra_b.target_id} [SEC]"
+                        T.text(surf, (ex_s, ey_s + sec_r + 3), stxt, 9, sec_col, bold=True, anchor="tc")
 
         # ── 4. Distractor Decoys (AI Discrimination Showcase) ──
         if hasattr(self.sim, "sensor"):
-          cam_canvas = self.sim.sensor._canvas_xy(
-        self.sim.gimbal.pan,
-        self.sim.gimbal.tilt
-          )
+            cam_canvas = self.sim.sensor._canvas_xy(
+                self.sim.gimbal.pan, self.sim.gimbal.tilt
+            )
         else:
             cam_canvas = (0, 0)
 
-        scene = getattr(self.sim, "scene", None)
         for d in getattr(scene, "distractors", []):
             du, dv = self.sim.sensor._viewport_px(d.az, d.el, cam_canvas)
             if 0 <= du < 640 and 0 <= dv < 480:
                 dx, dy = to_screen(du, dv)
-                dr = int(12 * sc)
+                dr = int(10 * sc)
                 diamond_pts = [(dx, dy - dr), (dx + dr, dy), (dx, dy + dr), (dx - dr, dy)]
-                pygame.draw.polygon(surf, T.C.AMBER, diamond_pts, 2)
-                decoy_txt = f"[DECOY] {d.mod_freq:.0f} Hz [AI REJECTED]"
-                tw, th = T.font(10, bold=True).size(decoy_txt)
-                dec_rect = pygame.Rect(dx - tw // 2 - 5, dy - dr - th - 6, tw + 10, th + 4)
-                d_bg = pygame.Surface((dec_rect.w, dec_rect.h), pygame.SRCALPHA)
-                d_bg.fill((32, 20, 6, 220))
-                surf.blit(d_bg, dec_rect.topleft)
-                pygame.draw.rect(surf, T.C.AMBER, dec_rect, 1, border_radius=3)
-                T.text(surf, (dx, dy - dr - 4), decoy_txt, 10, T.C.AMBER, bold=True, anchor="bc")
+                pygame.draw.polygon(surf, T.C.AMBER, diamond_pts, 1)
+                if not getattr(self, "hud_declutter", False):
+                    decoy_txt = f"DEC {d.mod_freq:.0f}Hz"
+                    T.text(surf, (dx, dy + dr + 2), decoy_txt, 9, T.C.AMBER, bold=True, anchor="tc")
 
         # ── 5. Orbital Ephemeris Prior (Predictive Coast Aid — Anti-Collision) ──
         if getattr(self, "show_ephemeris", True):
@@ -1351,27 +1467,17 @@ class App:
                 pp = self._est_pixel(paz, self.eph_pred_el)
                 if pp is not None:
                     ex, ey = to_screen(pp[0], pp[1])
-                    er = int(13 * sc)
+                    er = int(11 * sc)
                     eph_col = (220, 160, 50)
-                    for k in range(0, 360, 30):
-                        a1, a2 = math.radians(k), math.radians(k + 14)
+                    for k in range(0, 360, 45):
+                        a1, a2 = math.radians(k), math.radians(k + 22)
                         pygame.draw.line(surf, eph_col,
                                          (ex + er*math.cos(a1), ey + er*math.sin(a1)),
-                                         (ex + er*math.cos(a2), ey + er*math.sin(a2)), 2)
-                    
-                    # If locked or close to beacon, show minimal unobtrusive indicator to prevent clutter
-                    is_near_beacon = (b_u is not None and abs(pp[0] - b_u) < 45 and abs(pp[1] - b_v) < 45)
-                    if not (st in LOCKED_STATES and is_near_beacon):
-                        eph_txt = "[EPHEMERIS] COARSE PRIOR"
-                        tw, th = T.font(9.5, bold=True).size(eph_txt)
-                        tag_below = (b_v is not None and pp[1] < b_v)
-                        eph_y = ey + er + 3 if tag_below else ey - er - th - 5
-                        eph_rect = pygame.Rect(ex - tw // 2 - 5, eph_y, tw + 10, th + 4)
-                        e_bg = pygame.Surface((eph_rect.w, eph_rect.h), pygame.SRCALPHA)
-                        e_bg.fill((28, 18, 6, 220))
-                        surf.blit(e_bg, eph_rect.topleft)
-                        pygame.draw.rect(surf, eph_col, eph_rect, 1, border_radius=3)
-                        T.text(surf, (ex, eph_y + 2), eph_txt, 9.5, eph_col, bold=True, anchor="tc")
+                                         (ex + er*math.cos(a2), ey + er*math.sin(a2)), 1)
+                    if not getattr(self, "hud_declutter", False):
+                        is_near = (b_u is not None and abs(pp[0] - b_u) < 35 and abs(pp[1] - b_v) < 35)
+                        if not is_near:
+                            T.text(surf, (ex, ey + er + 2), "EPH", 9, eph_col, bold=True, anchor="tc")
 
         # ── 6. Candidate Detections ──
         for c in res.get("cand_list", []):
@@ -1387,80 +1493,81 @@ class App:
                 pygame.draw.line(surf, c_col, (cx_s+sx*cand_r, cy_s+sy*cand_r), (cx_s+sx*cand_r, cy_s+sy*(cand_r-cand_arm)), 1)
 
         # ── 7. Top Overlays: Adaptive Trust (Left), Symbology Legend (Center), ISRO Spec (Right) ──
-        # Left Trust Box
-        tr = self.sim.tracker
-        tm = getattr(tr, "trust", None)
-        t_box_w = 155
-        t_box_h = 50
-        t_x = dest.left + 10
-        t_y = dest.top + 8
-        t_right = t_x + t_box_w
-        if tm is not None:
-            t_surf = pygame.Surface((t_box_w, t_box_h), pygame.SRCALPHA)
-            t_surf.fill((6, 14, 26, 220))
-            surf.blit(t_surf, (t_x, t_y))
-            pygame.draw.rect(surf, (20, 36, 62), (t_x, t_y, t_box_w, t_box_h), 1, border_radius=4)
-            
-            W.hbar(surf, (t_x + 8, t_y + 10, 70, 6), tm.vision_trust, T.C.CYAN_ELEC)
-            T.text(surf, (t_x + 84, t_y + 6), f"VIS {tm.vision_trust:.2f}", 10, T.C.CYAN_ELEC, bold=True, mono=True)
-            
-            W.hbar(surf, (t_x + 8, t_y + 24, 70, 6), tm.model_trust, T.C.PURPLE)
-            T.text(surf, (t_x + 84, t_y + 20), f"MDL {tm.model_trust:.2f}", 10, T.C.PURPLE, bold=True, mono=True)
-            
-            sigma = getattr(getattr(tr, "unc", None), "display_sigma_px", None)
-            if sigma is not None:
-                T.text(surf, (t_x + 8, t_y + 35), f"UNCERTAINTY sigma: {sigma:.1f} px", 9.5, T.C.TEXT_DIM, bold=True)
-
-        # Right ISRO Spec Box
-        spec_w, spec_h = 175, 50
-        spec_x = dest.right - spec_w - 10
-        spec_y = dest.top + 8
-        
-        err_deg = res.get("pointing_err_deg", 999.0)
-        err_px = err_deg * (config.FOCAL_PX / (180.0 / math.pi))
-        is_spec_pass = (err_px < 10.0 and is_optically_locked)
-        pass_txt = "[ PASS ]" if is_spec_pass else ("[ ALIGNING ]" if not getattr(self, "video_mode", False) else "[ TRACKING ]")
-        pass_col = T.C.GREEN if is_spec_pass else T.C.AMBER
-
-        s_surf = pygame.Surface((spec_w, spec_h), pygame.SRCALPHA)
-        s_surf.fill((4, 18, 14, 225) if is_spec_pass else (20, 16, 6, 225))
-        surf.blit(s_surf, (spec_x, spec_y))
-        pygame.draw.rect(surf, pass_col, (spec_x, spec_y, spec_w, spec_h), 1, border_radius=4)
-        pygame.draw.rect(surf, pass_col, (spec_x, spec_y, 4, spec_h), border_top_left_radius=4, border_bottom_left_radius=4)
-        T.text(surf, (spec_x + 10, spec_y + 4), "ISRO PS 26169 SPEC", 10, T.C.TEXT_FAINT, bold=True)
-        T.text(surf, (spec_x + 10, spec_y + 18), "POINTING: < 10 px (0.06°)", 10.5, T.C.TEXT, bold=True)
-        T.text(surf, (spec_x + 10, spec_y + 32), f"STATUS: {pass_txt}", 10.5, pass_col, bold=True)
-
-        # Middle HUD Symbology Legend
-        avail_w = spec_x - t_right - 20
-        if avail_w > 320:
-            items = [
-                ("[TRG] BEACON 15Hz", T.C.GREEN),
-                ("[LOS] BORESIGHT", (80, 150, 220)),
-                ("[EPH] PRIOR", (220, 160, 50)),
-                ("[DEC] DECOY", T.C.AMBER),
-            ]
-            measured = []
-            fnt = T.font(10, bold=True)
-            for itxt, icol in items:
-                iw, _ = fnt.size(itxt)
-                measured.append((itxt, icol, iw))
-            total_content_w = sum(m[2] for m in measured)
-            item_gap = 16
-            leg_w = total_content_w + item_gap * (len(items) - 1) + 24
-            if leg_w <= avail_w:
-                leg_h = 24
-                leg_x = t_right + (spec_x - t_right - leg_w) // 2
-                leg_y = dest.bottom - 58
-                leg_surf = pygame.Surface((leg_w, leg_h), pygame.SRCALPHA)
-                leg_surf.fill((6, 12, 22, 215))
-                surf.blit(leg_surf, (leg_x, leg_y))
-                pygame.draw.rect(surf, (24, 44, 70), (leg_x, leg_y, leg_w, leg_h), 1, border_radius=4)
+        if not getattr(self, "hud_declutter", False):
+            # Left Trust Box
+            tr = self.sim.tracker
+            tm = getattr(tr, "trust", None)
+            t_box_w = 155
+            t_box_h = 50
+            t_x = dest.left + 10
+            t_y = dest.top + 8
+            t_right = t_x + t_box_w
+            if tm is not None:
+                t_surf = pygame.Surface((t_box_w, t_box_h), pygame.SRCALPHA)
+                t_surf.fill((6, 14, 26, 220))
+                surf.blit(t_surf, (t_x, t_y))
+                pygame.draw.rect(surf, (20, 36, 62), (t_x, t_y, t_box_w, t_box_h), 1, border_radius=4)
                 
-                cur_x = leg_x + 12
-                for itxt, icol, iw in measured:
-                    T.text(surf, (cur_x, leg_y + 4), itxt, 10, icol, bold=True)
-                    cur_x += iw + item_gap
+                W.hbar(surf, (t_x + 8, t_y + 10, 70, 6), tm.vision_trust, T.C.CYAN_ELEC)
+                T.text(surf, (t_x + 84, t_y + 6), f"VIS {tm.vision_trust:.2f}", 10, T.C.CYAN_ELEC, bold=True, mono=True)
+                
+                W.hbar(surf, (t_x + 8, t_y + 24, 70, 6), tm.model_trust, T.C.PURPLE)
+                T.text(surf, (t_x + 84, t_y + 20), f"MDL {tm.model_trust:.2f}", 10, T.C.PURPLE, bold=True, mono=True)
+                
+                sigma = getattr(getattr(tr, "unc", None), "display_sigma_px", None)
+                if sigma is not None:
+                    T.text(surf, (t_x + 8, t_y + 35), f"UNCERTAINTY sigma: {sigma:.1f} px", 9.5, T.C.TEXT_DIM, bold=True)
+
+            # Right ISRO Spec Box
+            spec_w, spec_h = 175, 50
+            spec_x = dest.right - spec_w - 10
+            spec_y = dest.top + 8
+            
+            err_deg = res.get("pointing_err_deg", 999.0)
+            err_px = err_deg * (config.FOCAL_PX / (180.0 / math.pi))
+            is_spec_pass = (err_px < 10.0 and is_optically_locked)
+            pass_txt = "[ PASS ]" if is_spec_pass else ("[ ALIGNING ]" if not getattr(self, "video_mode", False) else "[ TRACKING ]")
+            pass_col = T.C.GREEN if is_spec_pass else T.C.AMBER
+
+            s_surf = pygame.Surface((spec_w, spec_h), pygame.SRCALPHA)
+            s_surf.fill((4, 18, 14, 225) if is_spec_pass else (20, 16, 6, 225))
+            surf.blit(s_surf, (spec_x, spec_y))
+            pygame.draw.rect(surf, pass_col, (spec_x, spec_y, spec_w, spec_h), 1, border_radius=4)
+            pygame.draw.rect(surf, pass_col, (spec_x, spec_y, 4, spec_h), border_top_left_radius=4, border_bottom_left_radius=4)
+            T.text(surf, (spec_x + 10, spec_y + 4), "ISRO PS 26169 SPEC", 10, T.C.TEXT_FAINT, bold=True)
+            T.text(surf, (spec_x + 10, spec_y + 18), "POINTING: < 10 px (0.06°)", 10.5, T.C.TEXT, bold=True)
+            T.text(surf, (spec_x + 10, spec_y + 32), f"STATUS: {pass_txt}", 10.5, pass_col, bold=True)
+
+            # Middle HUD Symbology Legend
+            avail_w = spec_x - t_right - 20
+            if avail_w > 320:
+                items = [
+                    ("[TRG] BEACON 15Hz", T.C.GREEN),
+                    ("[LOS] BORESIGHT", (80, 150, 220)),
+                    ("[EPH] PRIOR", (220, 160, 50)),
+                    ("[DEC] DECOY", T.C.AMBER),
+                ]
+                measured = []
+                fnt = T.font(10, bold=True)
+                for itxt, icol in items:
+                    iw, _ = fnt.size(itxt)
+                    measured.append((itxt, icol, iw))
+                total_content_w = sum(m[2] for m in measured)
+                item_gap = 16
+                leg_w = total_content_w + item_gap * (len(items) - 1) + 24
+                if leg_w <= avail_w:
+                    leg_h = 24
+                    leg_x = t_right + (spec_x - t_right - leg_w) // 2
+                    leg_y = dest.bottom - 58
+                    leg_surf = pygame.Surface((leg_w, leg_h), pygame.SRCALPHA)
+                    leg_surf.fill((6, 12, 22, 215))
+                    surf.blit(leg_surf, (leg_x, leg_y))
+                    pygame.draw.rect(surf, (24, 44, 70), (leg_x, leg_y, leg_w, leg_h), 1, border_radius=4)
+                    
+                    cur_x = leg_x + 12
+                    for itxt, icol, iw in measured:
+                        T.text(surf, (cur_x, leg_y + 4), itxt, 10, icol, bold=True)
+                        cur_x += iw + item_gap
 
         # ── 8. Occluded Banner ──
         if not res.get("beacon_visible", True):

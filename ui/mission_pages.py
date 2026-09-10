@@ -41,6 +41,8 @@ class OpticalLinkModel:
 
     def update_from_sim(self, sim_result, stress_mgr=None):
         """Synchronize real-time simulator measurements and inject stress test faults."""
+        if not sim_result:
+            sim_result = {}
         t = sim_result.get("t", 0.0)
         ptg_deg = sim_result.get("pointing_err_deg", 0.001)
         live_ptg_urad = max(0.5, ptg_deg * 17453.3)

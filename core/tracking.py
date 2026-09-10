@@ -253,6 +253,8 @@ class Tracker:
         self._prev_bias_r_el = None
         self._prev_bias_az = None
         self._prev_bias_el = None
+        self._prev_los_az = None
+        self._prev_los_el = None
         # one-frame handover flag: holds the widened REACQ gate for the frame
         # immediately after a successful promotion from REACQUIRING -> LOCKED/
         # DEGRADED_LOCK so the just-associated candidate is not dropped by the
@@ -550,11 +552,12 @@ class Tracker:
             if len(self.mod.values) < need_samples:
                 # keep gathering evidence in ACQUIRING state
                 return self.state, self.est_az, self.est_el, self.confidence
-            elif can_lock and c.mod_score >= config.MOD_LOCK_THRESHOLD:
+            elif can_lock and (c.mod_score >= config.MOD_LOCK_THRESHOLD
+                               or (c.ml_score >= 0.85 and c.mod_score >= config.MOD_SUSPECT_FLOOR)):
                 self._commit(c.los_az, c.los_el, t)
                 return self.state, self.est_az, self.est_el, self.confidence
-            elif len(self.mod.values) >= need_samples and c.mod_score < config.MOD_LOCK_THRESHOLD:
-                # modulation fails -> not the real beacon, start over
+            elif len(self.mod.values) >= int(config.MOD_CORREL_WIN * 1.5) and c.mod_score < config.MOD_SUSPECT_FLOOR:
+                # modulation actively contradicts beacon signature (decoy frequency) -> start over
                 self._reset_tentative()
                 self.state = SEARCHING
                 self.phase = SEARCHING
@@ -656,11 +659,11 @@ class Tracker:
             if self.conf.overall >= config.LOCK_MIN_CONF:
                 self.state = LOCKED
                 self.phase = LOCKED
-            elif self.conf.overall >= config.LOCK_HOLD_MIN_CONF:
+            elif self.conf.overall >= config.LOCK_HOLD_MIN_CONF or c.ml_score >= 0.70:
                 self.state = DEGRADED_LOCK
                 self.phase = DEGRADED_LOCK
             else:
-                # Immediate lock drop when confidence collapses below lock hold floor
+                # Confidence collapsed and beacon lost -> drop to COASTING
                 self.state = COASTING
                 self.phase = COASTING
                 self._measurement_valid = False
@@ -841,12 +844,22 @@ class Tracker:
                      + 0.2 * min(1.0, resid_deg / 0.4)))
 
     def _centroid_jitter_px(self, c):
-        """EMA of per-frame centroid displacement in the camera pixel plane -
-        a direct measurement of how stable the blob centroid is."""
-        if self._pv_u is None:
+        """EMA of genuine sub-pixel centroid measurement jitter.
+        Uses inertial line-of-sight angles (los_az, los_el) so that gimbal slew
+        correcting toward boresight is NEVER falsely penalized as jitter noise."""
+        if not hasattr(self, "_prev_los_az") or self._prev_los_az is None:
+            self._prev_los_az = c.los_az
+            self._prev_los_el = c.los_el
             self._jit_px = 0.0
             return 0.0
-        d_px = math.hypot(c.u - self._pv_u, c.v - self._pv_v)
+        dt = getattr(self, "_dt", 1.0 / config.FPS) or (1.0 / config.FPS)
+        exp_daz = (getattr(self, "vel_az", 0.0) or 0.0) * dt
+        exp_del = (getattr(self, "vel_el", 0.0) or 0.0) * dt
+        d_ang_deg = math.hypot((c.los_az - self._prev_los_az) - exp_daz,
+                               (c.los_el - self._prev_los_el) - exp_del)
+        self._prev_los_az = c.los_az
+        self._prev_los_el = c.los_el
+        d_px = d_ang_deg * config.PIXELS_PER_DEG
         j = getattr(self, "_jit_px", d_px)
         self._jit_px = 0.6 * d_px + 0.4 * j
         return self._jit_px

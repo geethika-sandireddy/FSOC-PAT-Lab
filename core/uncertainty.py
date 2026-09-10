@@ -56,7 +56,7 @@ class UncertaintyEstimator:
         self.coast_time = 0.0
         sig = config.UNCERTAINTY_BASE_PX * (1.0 + self._snr_penalty(snr))
         sig = max(sig, centroid_residual_px * 0.75)
-        sig = max(sig, pred_residual_px * 0.50)
+        sig = max(sig, min(sig * 2.0, pred_residual_px * 0.20))
         # smooth (no chattering display/control input); the INTERNAL value is
         # kept without a cap - a violent manoeuvre or corrupt prior may push
         # it far past the HUD clamp and that is the truth the loop needs.

@@ -84,17 +84,23 @@ class RelativeOrbitModel:
 
         self._offset_az = 0.0
         self._offset_el = 0.0
+        self._phase_t = 0.0
         if self._user_pos is not None:
             r0_az, r0_el = self._compute_raw(0.0)
             self._offset_az = self._user_pos[0] - r0_az
             self._offset_el = self._user_pos[1] - r0_el
+        elif initial == "RANDOM":
+            self._phase_t = rnd.uniform(0.0, 50.0)
+            self._offset_az = rnd.uniform(-self.az_amp * 0.25, self.az_amp * 0.25)
+            self._offset_el = rnd.uniform(-self.el_amp * 0.25, self.el_amp * 0.25)
 
     def _compute_raw(self, t):
+        t_eff = t + getattr(self, "_phase_t", 0.0)
         if self._is_custom:
             if self._motion_fn is not None:
-                return self._motion_fn(t)
+                return self._motion_fn(t_eff)
             fn = MOTION_TYPES[self._motion_type]
-            return fn(t, speed=self.speed, amp_az=self.az_amp,
+            return fn(t_eff, speed=self.speed, amp_az=self.az_amp,
                       amp_el=self.el_amp)
         az = self.az_amp * math.sin(self.az_omega * t + self.az_phase)
         el = self.el_amp * math.sin(self.el_omega * t + self.el_phase)

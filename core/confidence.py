@@ -22,6 +22,7 @@ Nothing in this module touches the control loop -- it is pure estimation that
 the TrustManager (core/trust.py) consumes.
 """
 
+import math
 import config
 
 
@@ -90,9 +91,17 @@ class ConfidenceState:
         self.pointing = max(0.0, min(1.0,
                                      1.0 - point_err_deg / max(1e-6, point_err_scale_deg)))
 
-        # Overall: weakest-cue (geometric-mean) fusion of the tracking cues.
+        # Overall: adaptive fusion of Identity, Position, and Prediction.
+        # When the optical sensor clearly observes and confirms the beacon
+        # (identity >= 0.50 and position >= 0.45), visual evidence dominates
+        # so unmodeled maneuvers or ephemeris divergence cannot collapse lock.
         prod = self.identity * self.position * self.prediction
-        self.overall = prod ** (1.0 / 3.0) if prod > 0 else 0.0
+        geom_mean = prod ** (1.0 / 3.0) if prod > 0 else 0.0
+        if self.identity >= 0.50 and self.position >= 0.45:
+            vis_cue = math.sqrt(self.identity * self.position)
+            self.overall = max(geom_mean, vis_cue)
+        else:
+            self.overall = geom_mean
 
         return self
 
