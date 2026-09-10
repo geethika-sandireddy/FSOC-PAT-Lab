@@ -23,7 +23,7 @@ class OpticalLinkModel:
         self.rx_sensitivity_dbm = -50.0  # -70 .. -20 dBm
 
         # Optical system parameters
-        self.beam_divergence_mrad = 1.5  # 0.1 .. 5.0 mrad
+        self.beam_divergence_mrad = 0.15  # 0.1 .. 5.0 mrad
         self.pointing_error_urad = 1.64  # 0 .. 100 µrad
 
         # Atmospheric conditions
@@ -44,10 +44,10 @@ class OpticalLinkModel:
         if not sim_result:
             sim_result = {}
         t = sim_result.get("t", 0.0)
-        ptg_deg = sim_result.get("pointing_err_deg", 0.001)
-        live_ptg_urad = max(0.5, ptg_deg * 17453.3)
-        self.pointing_error_urad = round(0.85 * self.pointing_error_urad + 0.15 * live_ptg_urad, 2)
-
+        ptg_deg = sim_result.get("pointing_err_deg", 0.0)
+        live_ptg_urad = max(0.0, abs(ptg_deg) * 17453.3)
+        self.pointing_error_urad = round(live_ptg_urad, 2)
+        
         conf = sim_result.get("confidence", 0.95)
         state = sim_result.get("state", "SEARCHING")
 
@@ -70,7 +70,8 @@ class OpticalLinkModel:
         # Pointing loss
         div_rad = max(1e-6, self.beam_divergence_mrad * 1e-3)
         err_rad = self.pointing_error_urad * 1e-6
-        ptg_loss = round(min(45.0, 4.34 * ((2.0 * err_rad / div_rad) ** 2)), 2)
+        ptg_loss = round(4.34 * ((2.0 * err_rad / div_rad) ** 2), 2)
+        
 
         total_loss = round(atm_loss + geo_loss + ptg_loss, 2)
         rx_power = round(max(-65.0, min(40.0, self.tx_power_dbm - total_loss)), 2)
@@ -284,7 +285,7 @@ def render_telemetry_page(surf, rect, opt: OpticalLinkModel):
         ("RX OPTICAL POWER", f"{hist_pt['rx_power']:.1f}", "dBm", "Sensitivity: -50 dBm", C.CYAN_ELEC, False),
         ("CARRIER SNR", f"{hist_pt['snr']:.1f}", "dB", "Lock Floor: 18.0 dB", C.GREEN, False),
         ("LINK MARGIN", f"{hist_pt['margin']:.1f}", "dB", "Fade Reserve", C.CYAN_ELEC, False),
-        ("POINTING ERROR", f"{hist_pt['pointing_error_urad']:.2f}", "µrad", "Beam Div: 1500 µrad", C.AMBER, False),
+        ("POINTING ERROR", f"{hist_pt['pointing_error_urad']:.2f}", "µrad", "Beam Div: 150 µrad", C.AMBER, False),
     ]
 
     for i, (lbl, val, unit, sub, col, warn) in enumerate(kpis):
@@ -334,7 +335,7 @@ def render_telemetry_page(surf, rect, opt: OpticalLinkModel):
     T.card(surf, c2_rect, fill=C.PANEL_2, border=C.BORDER)
     T.section_title(surf, x0 + chart_w + 30, btm_y + 12, "BEAM POINTING ERROR JITTER (µrad)", C.AMBER)
     _draw_telemetry_wave(surf, pygame.Rect(x0 + chart_w + 30, btm_y + 44, chart_w - 32, btm_h - 58),
-                         [pt["pointing_error_urad"] for pt in opt.history], 0.0, 30.0, C.AMBER, "µrad")
+                         [pt["pointing_error_urad"] for pt in opt.history], 0.0, 1000.0, C.AMBER, "µrad")
 
 
 def _draw_telemetry_wave(surf, rect, values, min_val, max_val, color, unit_str):

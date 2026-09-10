@@ -463,10 +463,30 @@ class App:
                 if step_now:
                     res = self.sim.step()
                     if res is None:
-                        self.video_done = True
-                        self.paused = True
+                        print("VIDEO ENDED - returning to normal application", flush=True)
+                        self.video_mode = False
+                        self.video_done = False
+                        self.preset = getattr(self, "normal_preset", "EASY")
+                        self.sim = Simulator(
+                            preset_name=self.preset, seed=None,
+                            platform_mode=self.platform_mode,
+                            atmosphere=self.atmosphere,
+                            motion_type=getattr(self, "current_motion", self.motion_override),
+                            target_shape=self.shape_override,
+                            target_size=self.size_override,
+                            num_targets=getattr(self, "target_count", self.targets_override),
+                            target_initial=self.initial_override)
+                        self.perf = PerformanceTracker()
+                        self.error_spark.clear()
+                        self.sync_sliders()
+                        self.video_path = None
+                    
+
+
+                        
                         if "PAUSE" in self.buttons:
-                            self.buttons["PAUSE"].label = "REPLAY"
+                            self.buttons["PAUSE"].label = "PAUSE"
+                            continue
                         if not getattr(self, "_video_report_saved", False):
                             self._final_report()
                             self._video_report_saved = True
@@ -1133,7 +1153,11 @@ class App:
         _h_val(mx, "RX POWER", f"{hist_pt.get('rx_power', -11.4):.1f}", "dBm", T.C.CYAN_ELEC)
         _h_val(mx + m_spacing, "SNR", f"{hist_pt.get('snr', 73.6):.1f}", "dB", T.C.GREEN)
         _h_val(mx + m_spacing * 2, "MARGIN", f"{hist_pt.get('link_margin', 38.6):.1f}", "dB", T.C.GREEN)
-        _h_val(mx + m_spacing * 3, "TRACKING", f"{int(round(hist_pt.get('stability', 96)))}", "%", T.C.CYAN_ELEC)
+        # Real-time tracking percentage
+        _h_val(mx + m_spacing * 3, "TRACKING", f"{int(round(res.get('confidence', 0.0) * 100))}", "%", T.C.CYAN_ELEC)
+        
+       
+        
 
         # UTC Clock
         utc_str = time.strftime("%Y-%m-%d  %H:%M:%S", time.gmtime())
@@ -2023,12 +2047,24 @@ class App:
         # SAT-B Target Satellite (with solar wings)
         pygame.draw.line(surf, (60, 110, 160), (sat_b_x - 11, sat_b_y), (sat_b_x + 11, sat_b_y), 3)
         pygame.draw.circle(surf, col, (sat_b_x, sat_b_y), 4)
-        T.text(surf, (sat_b_x, sat_b_y - 10), "SAT-B", 10, col, bold=True, anchor="bc")
+        if self.platform_mode == "UAV_SATELLITE":
+            target_label = "SAT-B"
+        elif self.platform_mode == "UAV_UAV":
+            target_label = "UAV-B"
+        else:
+            target_label = "SAT-B"
+        T.text(surf, (sat_b_x, sat_b_y - 10), target_label, 10, col, bold=True, anchor="bc")
 
         # SAT-A Ground / Mobile Terminal
         pygame.draw.rect(surf, (16, 42, 70), (sat_a_x - 14, sat_a_y - 5, 28, 12), border_radius=2)
         pygame.draw.rect(surf, T.C.CYAN, (sat_a_x - 14, sat_a_y - 5, 28, 12), 1, border_radius=2)
-        T.text(surf, (sat_a_x, sat_a_y + 9), "SAT-A", 10, T.C.CYAN, bold=True, anchor="tc")
+        if self.platform_mode == "UAV_SATELLITE":
+             source_label = "UAV-A"
+        elif self.platform_mode == "UAV_UAV":
+           source_label = "UAV-A"
+        else:
+            source_label = "SAT-A"
+        T.text(surf, (sat_a_x, sat_a_y + 9), source_label, 10, T.C.CYAN, bold=True, anchor="tc")
 
     # ================================================================ RIGHT PANEL
     def _draw_panel(self, surf):
