@@ -601,7 +601,11 @@ class Tracker:
 
         # continuous modulation verification: a locked object that STOPPED
         # matching the beacon signature is a false lock -> drop to COASTING
-        if self.use_modulation and c.mod_score < config.MOD_SUSPECT_FLOOR:
+        # When appearance score is very high (>= 0.85), allow a lower floor (0.50)
+        # to tolerate scintillation and sliding-window transition jitter.
+        suspect_floor = (0.50 if getattr(c, "ml_score", 0.0) >= 0.85
+                         else config.MOD_SUSPECT_FLOOR)
+        if self.use_modulation and c.mod_score < suspect_floor:
             self._suspect += 1
             if self._suspect >= config.MOD_SUSPECT_DROP_FRAMES:
                 self._suspect = 0
