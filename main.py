@@ -450,10 +450,13 @@ class App:
             if not self.paused and not self.video_done:
                 res = self.sim.step()
                 if res is None:
-                    self.video_done = True
-                    self._draw()
-                    pygame.display.flip()
-                    break
+                      print("VIDEO ENDED - returning to normal application", flush=True)
+                      self.video_mode = False
+                      self.video_done = False
+                      self.preset = getattr(self, "normal_preset", "EASY")
+                      self._reset(self.preset)
+                      
+                      continue
                 self.perf.record_frame(self.sim)
                 # Always record pointing error so the acquisition curve is live
                 self.error_spark.append(res["pointing_err_deg"])
@@ -801,6 +804,7 @@ class App:
             return
         if not path:
             return
+        self.normal_preset = self.preset
         self.video_path = path
         from core.simulator import VideoInputSimulator
         truth = os.path.splitext(path)[0] + "_truth.csv"

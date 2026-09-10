@@ -561,7 +561,7 @@ class Tracker:
                 self.phase = SEARCHING
                 return self.state, self.est_az, self.est_el, self.confidence
         elif self.video_mode:
-            if can_lock or (self._consecutive_valid_frames >= config.LOCK_CONFIRM_FRAMES and c.ml_score >= 0.50):
+            if can_lock:
                 self._commit(c.los_az, c.los_el, t)
                 return self.state, self.est_az, self.est_el, self.confidence
         else:
